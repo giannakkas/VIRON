@@ -81,6 +81,28 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .wb-step .sm{font-size:24px;color:#1a5276;font-family:'Courier New',monospace;background:rgba(0,0,0,0.03);padding:12px 16px;border-radius:8px;border-left:4px solid #2980b9;margin:8px 0}
 .wb-step .st{font-size:18px;color:#222;line-height:1.6}
 .wb-step .sr{font-size:28px;color:#27ae60;font-weight:700;text-align:center;padding:16px;background:rgba(39,174,96,0.08);border-radius:12px;border:2px solid rgba(39,174,96,0.2)}
+/* File Upload */
+.file-btn{position:fixed;bottom:30px;left:20px;width:44px;height:44px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:60;transition:all 0.2s;color:rgba(255,255,255,0.5)}
+.file-btn:hover{background:rgba(255,255,255,0.12);color:rgba(0,200,255,0.8)}
+.file-btn svg{width:20px;height:20px;fill:currentColor}
+.file-modal{position:fixed;inset:0;z-index:85;display:none;align-items:center;justify-content:center}
+.file-modal.open{display:flex}
+.file-modal-bg{position:absolute;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px)}
+.file-modal-box{position:relative;width:min(90vw,420px);max-height:80vh;background:rgba(8,12,22,0.97);border:1px solid rgba(0,200,255,0.15);border-radius:16px;padding:24px;overflow-y:auto;z-index:1}
+.file-modal-box h2{font-size:16px;color:#e0f0ff;margin-bottom:16px}
+.file-drop{border:2px dashed rgba(0,200,255,0.25);border-radius:12px;padding:30px 20px;text-align:center;color:rgba(255,255,255,0.4);font-size:13px;cursor:pointer;transition:all 0.2s;margin-bottom:16px}
+.file-drop:hover,.file-drop.dragover{border-color:rgba(0,200,255,0.6);background:rgba(0,200,255,0.05);color:rgba(0,200,255,0.7)}
+.file-drop-icon{font-size:28px;margin-bottom:8px;display:block}
+.file-list{list-style:none}
+.file-list li{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:8px;margin-bottom:4px;font-size:12px;color:#c0d8e8}
+.file-list li .fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px}
+.file-list li .fsize{color:rgba(255,255,255,0.3);margin-right:8px;white-space:nowrap}
+.file-list li .factions{display:flex;gap:4px}
+.file-list li button{background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.5);cursor:pointer;padding:2px 8px;font-size:11px;transition:all 0.2s}
+.file-list li button:hover{background:rgba(255,255,255,0.08);color:#fff}
+.file-list li button.del:hover{border-color:rgba(255,80,80,0.4);color:rgba(255,100,100,0.8)}
+.file-active{background:rgba(0,200,255,0.08)!important;border:1px solid rgba(0,200,255,0.2)}
+.file-badge{position:absolute;top:-4px;right:-4px;width:16px;height:16px;background:rgba(0,200,255,0.8);border-radius:50%;font-size:9px;display:flex;align-items:center;justify-content:center;color:#000;font-weight:700}
 </style>
 </head>
 <body>
@@ -106,6 +128,23 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <span class="listen-text" id="listenText">Say "Hey VIRON"</span>
 </div>
 <div class="subtitle" id="subtitle"></div>
+<button class="file-btn" id="fileBtn" onclick="toggleFileModal()" style="position:relative" title="Load Files"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11zm-3-7v4H9v-4H7l5-5 5 5h-2z"/></svg><span class="file-badge" id="fileBadge" style="display:none">0</span></button>
+<div class="file-modal" id="fileModal">
+  <div class="file-modal-bg" onclick="toggleFileModal()"></div>
+  <div class="file-modal-box">
+    <h2>Load Files</h2>
+    <div class="file-drop" id="fileDrop" onclick="document.getElementById('fileInput').click()">
+      <span class="file-drop-icon">+</span>
+      Drop files here or tap to browse<br>
+      <span style="font-size:11px;color:rgba(255,255,255,0.25)">TXT, PDF, PNG, JPG, CSV, JSON, MD (max 10MB)</span>
+    </div>
+    <input type="file" id="fileInput" multiple accept=".txt,.pdf,.png,.jpg,.jpeg,.gif,.md,.csv,.json" style="display:none">
+    <ul class="file-list" id="fileList"></ul>
+    <div style="margin-top:12px;text-align:center">
+      <button class="sbtn" onclick="toggleFileModal()" style="width:auto;padding:8px 24px">Done</button>
+    </div>
+  </div>
+</div>
 <svg id="face" viewBox="0 0 800 500"></svg>
 
 <script>
@@ -354,6 +393,7 @@ async function sendMessage(text){
   if(loading)return;msgs.push({role:"user",content:text});loading=true;
   const eList=Object.keys(E).join(", ");
   const sState=sEmo.face_detected?`\n[STUDENT: emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
+  const fileCtx=getActiveFileContext();
   try{
     const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,
     system:`You are VIRON — a true companion, best friend, tutor, and everything to the student. You live on a robot with an animated face. Voice-only conversation — no text.
@@ -375,7 +415,7 @@ STEP: label
 MATH: equation
 RESULT: answer
 [/WHITEBOARD]
-
+${fileCtx?"\nThe student has loaded files for you to help with. Use the content below to answer questions, tutor, and explain. Reference specific parts of the files when relevant."+fileCtx:""}
 Be real. Be warm. Be their friend. Keep it conversational — this is spoken aloud.`,
     messages:msgs.map(m=>({role:m.role,content:m.content}))})});
     if(!r.ok)throw new Error(r.status);
@@ -412,6 +452,106 @@ setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
 wbT=setTimeout(()=>{if(wbO)closeWB()},600+s.length*800+5000)}
 function closeWB(){wbO=false;clearTimeout(wbT);document.getElementById("wb").classList.remove("active");setTimeout(()=>{document.getElementById("face").style.opacity="1";cE("happy")},400)}
 function parseWB(t){const m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);if(!m)return null;const s=[];m[2].trim().split("\n").filter(l=>l.trim()).forEach(l=>{const x=l.trim();if(x.startsWith("STEP:"))s.push({label:x.slice(5).trim()});else if(x.startsWith("MATH:"))s.push({math:x.slice(5).trim()});else if(x.startsWith("RESULT:"))s.push({result:x.slice(7).trim()});else if(x.startsWith("TEXT:"))s.push({text:x.slice(5).trim()});else s.push({text:x})});return{t:m[1].trim(),s}}
+
+// ===== FILE LOADING =====
+let loadedFiles=[];  // {filename, type, content, active}
+let fileModalOpen=false;
+
+function toggleFileModal(){
+  fileModalOpen=!fileModalOpen;
+  document.getElementById("fileModal").classList.toggle("open",fileModalOpen);
+  if(fileModalOpen)refreshFileList();
+}
+
+function refreshFileList(){
+  fetch('/api/files').then(r=>r.json()).then(d=>{
+    const ul=document.getElementById("fileList");
+    ul.innerHTML="";
+    d.files.forEach(f=>{
+      const li=document.createElement("li");
+      const isActive=loadedFiles.some(lf=>lf.filename===f.filename&&lf.active);
+      if(isActive)li.classList.add("file-active");
+      const sz=f.size<1024?f.size+"B":f.size<1048576?(f.size/1024).toFixed(1)+"KB":(f.size/1048576).toFixed(1)+"MB";
+      const isImg=/^image\//.test(f.type);
+      const icon=isImg?"img":"txt";
+      li.innerHTML=`<span class="fname" title="${f.filename}">${f.filename}</span><span class="fsize">${sz}</span><div class="factions"><button onclick="loadFileForAI('${f.filename}')" title="Load into AI context">${isActive?"Loaded":"Load"}</button><button class="del" onclick="deleteFile('${f.filename}')" title="Delete">x</button></div>`;
+      ul.appendChild(li);
+    });
+    updateFileBadge();
+  }).catch(()=>{});
+}
+
+function uploadFiles(files){
+  Array.from(files).forEach(file=>{
+    const form=new FormData();
+    form.append('file',file);
+    fetch('/api/files/upload',{method:'POST',body:form}).then(r=>r.json()).then(d=>{
+      if(d.success){
+        // Auto-load text files into AI context
+        if(d.content!==null&&d.content!==undefined){
+          loadedFiles.push({filename:d.filename,type:d.type,content:d.content,active:true});
+        }
+        refreshFileList();
+      }else{
+        console.warn("Upload failed:",d.error);
+      }
+    }).catch(e=>console.error("Upload error:",e));
+  });
+}
+
+function loadFileForAI(filename){
+  // Check if already loaded
+  const idx=loadedFiles.findIndex(f=>f.filename===filename);
+  if(idx>=0){
+    loadedFiles[idx].active=!loadedFiles[idx].active;
+    refreshFileList();
+    return;
+  }
+  fetch(`/api/files/${encodeURIComponent(filename)}/content`).then(r=>r.json()).then(d=>{
+    if(d.content){
+      loadedFiles.push({filename,type:'text',content:d.content,active:true});
+    }else if(d.image){
+      loadedFiles.push({filename,type:'image',content:d.image,active:true});
+    }else if(d.error){
+      console.warn("Cannot load:",d.error);
+    }
+    refreshFileList();
+  }).catch(e=>console.error("Load error:",e));
+}
+
+function deleteFile(filename){
+  fetch(`/api/files/${encodeURIComponent(filename)}`,{method:'DELETE'}).then(r=>r.json()).then(d=>{
+    if(d.success){
+      loadedFiles=loadedFiles.filter(f=>f.filename!==filename);
+      refreshFileList();
+    }
+  }).catch(()=>{});
+}
+
+function updateFileBadge(){
+  const cnt=loadedFiles.filter(f=>f.active).length;
+  const badge=document.getElementById("fileBadge");
+  if(cnt>0){badge.textContent=cnt;badge.style.display="flex"}
+  else{badge.style.display="none"}
+}
+
+function getActiveFileContext(){
+  const active=loadedFiles.filter(f=>f.active&&f.type==='text'&&f.content);
+  if(active.length===0)return "";
+  let ctx="\n\n[LOADED FILES]\n";
+  active.forEach(f=>{
+    const preview=f.content.length>3000?f.content.substring(0,3000)+"...(truncated)":f.content;
+    ctx+=`--- ${f.filename} ---\n${preview}\n\n`;
+  });
+  return ctx;
+}
+
+// Drag & drop
+const dropZone=document.getElementById("fileDrop");
+dropZone.addEventListener("dragover",e=>{e.preventDefault();dropZone.classList.add("dragover")});
+dropZone.addEventListener("dragleave",()=>dropZone.classList.remove("dragover"));
+dropZone.addEventListener("drop",e=>{e.preventDefault();dropZone.classList.remove("dragover");if(e.dataTransfer.files.length)uploadFiles(e.dataTransfer.files)});
+document.getElementById("fileInput").addEventListener("change",e=>{if(e.target.files.length)uploadFiles(e.target.files);e.target.value=""});
 
 // ===== SETTINGS =====
 let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO)}

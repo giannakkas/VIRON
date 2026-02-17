@@ -6,7 +6,8 @@ Real-time student emotion detection + hardware APIs + WebSocket
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import subprocess, json, os, re, time, threading, sys
+from werkzeug.utils import secure_filename
+import subprocess, json, os, re, time, threading, sys, base64, mimetypes
 
 # Optional: WebSocket for real-time emotion push
 try:
@@ -27,6 +28,18 @@ except ImportError:
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
+
+# ============================================
+# FILE UPLOAD CONFIG
+# ============================================
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'md', 'csv', 'json'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 if HAS_SOCKETIO:
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -434,6 +447,97 @@ def restart():
 @app.route('/api/ping', methods=['GET'])
 def ping():
     return jsonify({'status':'ok','device':'VIRON','emotion_detection':HAS_CV2,'websocket':HAS_SOCKETIO})
+
+# ============================================
+# FILE UPLOAD / LOADING
+# ============================================
+@app.route('/api/files/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    f = request.files['file']
+    if f.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    if not allowed_file(f.filename):
+        return jsonify({'error': f'File type not allowed. Allowed: {", ".join(sorted(ALLOWED_EXTENSIONS))}'}), 400
+    filename = secure_filename(f.filename)
+    # Avoid overwriting: append timestamp if file exists
+    base, ext = os.path.splitext(filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if os.path.exists(filepath):
+        filename = f"{base}_{int(time.time())}{ext}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+    f.save(filepath)
+    # Read text content for text-based files
+    content = None
+    ext_lower = ext.lower()
+    if ext_lower in ('.txt', '.md', '.csv', '.json'):
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as tf:
+                content = tf.read(50000)  # Cap at 50k chars
+        except Exception:
+            pass
+    return jsonify({
+        'success': True,
+        'filename': filename,
+        'size': os.path.getsize(filepath),
+        'type': mimetypes.guess_type(filename)[0] or 'application/octet-stream',
+        'content': content
+    })
+
+@app.route('/api/files', methods=['GET'])
+def list_files():
+    files = []
+    for fname in sorted(os.listdir(UPLOAD_FOLDER)):
+        fpath = os.path.join(UPLOAD_FOLDER, fname)
+        if os.path.isfile(fpath):
+            files.append({
+                'filename': fname,
+                'size': os.path.getsize(fpath),
+                'type': mimetypes.guess_type(fname)[0] or 'application/octet-stream',
+                'modified': os.path.getmtime(fpath)
+            })
+    return jsonify({'files': files})
+
+@app.route('/api/files/<filename>', methods=['GET'])
+def get_file(filename):
+    filename = secure_filename(filename)
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+@app.route('/api/files/<filename>', methods=['DELETE'])
+def delete_file(filename):
+    filename = secure_filename(filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+        return jsonify({'success': True})
+    return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/files/<filename>/content', methods=['GET'])
+def get_file_content(filename):
+    """Return text content of a file for AI context"""
+    filename = secure_filename(filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'File not found'}), 404
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ('.txt', '.md', '.csv', '.json'):
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read(50000)
+            return jsonify({'filename': filename, 'content': content})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    elif ext in ('.png', '.jpg', '.jpeg', '.gif'):
+        # Return base64 for images
+        try:
+            with open(filepath, 'rb') as f:
+                data = base64.b64encode(f.read()).decode('utf-8')
+            mime = mimetypes.guess_type(filename)[0] or 'image/png'
+            return jsonify({'filename': filename, 'image': f'data:{mime};base64,{data}'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    return jsonify({'error': 'Cannot read content of this file type'}), 400
 
 # Serve HTML
 @app.route('/')
