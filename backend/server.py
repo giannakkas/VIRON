@@ -1,94 +1,111 @@
 #!/usr/bin/env python3
 """
-VIRON AI Tutor Backend - Jetson Orin Nano
-Real-time student emotion detection + hardware APIs + WebSocket
+VIRON AI Companion Backend
+Works on: Ubuntu Desktop (dev) + Jetson Orin Nano (production)
+Features: AI proxy, student emotion detection, hardware APIs
 """
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 import subprocess, json, os, re, time, threading, sys
 
-# Optional: WebSocket for real-time emotion push
 try:
     from flask_socketio import SocketIO, emit
     HAS_SOCKETIO = True
 except ImportError:
     HAS_SOCKETIO = False
-    print("⚠ flask-socketio not installed. Using polling mode.")
 
-# Optional: OpenCV for face detection
 try:
     import cv2
     import numpy as np
     HAS_CV2 = True
 except ImportError:
     HAS_CV2 = False
-    print("⚠ OpenCV not installed. Student emotion detection disabled.")
+    print("⚠ OpenCV not installed — emotion detection disabled")
 
-app = Flask(__name__, static_folder='.')
+try:
+    import requests as http_requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+    print("⚠ requests not installed — AI proxy disabled")
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
+
+DEFAULT_CONFIG = {
+    "anthropic_api_key": "YOUR_API_KEY_HERE",
+    "model": "claude-sonnet-4-20250514",
+    "camera_index": 0,
+    "volume": 75,
+    "brightness": 80,
+    "emotion_detection": True,
+    "proactive_care": True,
+    "port": 5000
+}
+
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH) as f:
+                cfg = json.load(f)
+            for k, v in DEFAULT_CONFIG.items():
+                if k not in cfg:
+                    cfg[k] = v
+            return cfg
+        except Exception as e:
+            print(f"⚠ Config error: {e}")
+    return DEFAULT_CONFIG.copy()
+
+config = load_config()
+app = Flask(__name__, static_folder=ROOT_DIR)
 CORS(app)
 
-if HAS_SOCKETIO:
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
-else:
-    socketio = None
-
-# ============================================
-# STUDENT EMOTION DETECTION
-# ============================================
-
+# ============ STUDENT EMOTION DETECTOR ============
 class StudentEmotionDetector:
-    """
-    Detects student facial expressions using OpenCV.
-    Uses Haar cascades for face/eye/mouth detection and
-    analyzes geometry to infer emotional state.
-    """
-
     def __init__(self):
         self.running = False
+        self.thread = None
         self.cap = None
-        self.current_emotion = "neutral"
-        self.confidence = 0.0
-        self.face_detected = False
-        self.engagement_score = 100  # 0-100
-        self.attention_direction = "center"
-        self.last_emotion_change = time.time()
-        self.emotion_history = []  # Track patterns over time
-        self.blink_rate = 0
-        self.head_tilt = 0
-        self.mouth_open = False
-
-        # Engagement tracking
-        self.no_face_start = None
-        self.distracted_start = None
+        self.current_state = {
+            "emotion": "neutral", "confidence": 0, "engagement_score": 100,
+            "face_detected": False, "attention": "center", "blink_rate": 0,
+            "mouth_open": False, "dominant_emotion": "neutral",
+            "emotion_streak": 0, "yawn_count": 0
+        }
+        self.frame_count = 0
+        self.emotion_history = []
+        self.streak_emotion = "neutral"
+        self.streak_count = 0
+        self.last_face_time = time.time()
+        self.engagement = 100
         self.yawn_count = 0
-        self.last_yawn_time = 0
-
-        # Load cascades
+        self.blink_timestamps = []
+        self.last_eye_state = True
+        self.looking_away_since = 0
         if HAS_CV2:
-            cascade_dir = cv2.data.haarcascades
-            self.face_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_frontalface_default.xml')
-            self.eye_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_eye.xml')
-            self.smile_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_smile.xml')
-            self.mouth_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_mcs_mouth.xml')
+            d = cv2.data.haarcascades
+            self.face_cascade = cv2.CascadeClassifier(d + 'haarcascade_frontalface_default.xml')
+            self.eye_cascade = cv2.CascadeClassifier(d + 'haarcascade_eye.xml')
+            self.smile_cascade = cv2.CascadeClassifier(d + 'haarcascade_smile.xml')
+            self.mouth_cascade = cv2.CascadeClassifier(d + 'haarcascade_mcs_mouth.xml')
 
     def start(self, camera_index=0):
-        if not HAS_CV2:
+        if self.running or not HAS_CV2:
             return False
-        try:
-            self.cap = cv2.VideoCapture(camera_index)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self.cap.set(cv2.CAP_PROP_FPS, 15)
-            if not self.cap.isOpened():
-                return False
-            self.running = True
-            self.thread = threading.Thread(target=self._detection_loop, daemon=True)
-            self.thread.start()
-            return True
-        except Exception as e:
-            print(f"Camera error: {e}")
+        self.cap = cv2.VideoCapture(camera_index)
+        if not self.cap.isOpened():
+            print(f"⚠ Cannot open camera {camera_index}")
             return False
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 15)
+        self.running = True
+        self.thread = threading.Thread(target=self._detection_loop, daemon=True)
+        self.thread.start()
+        print(f"📷 Emotion detection started (camera {camera_index})")
+        return True
 
     def stop(self):
         self.running = False
@@ -96,369 +113,266 @@ class StudentEmotionDetector:
             self.cap.release()
 
     def _detection_loop(self):
-        """Main detection loop - runs in background thread"""
-        frame_count = 0
-        eyes_history = []
-        smile_history = []
-
         while self.running:
             ret, frame = self.cap.read()
             if not ret:
                 time.sleep(0.1)
                 continue
-
-            frame_count += 1
-            if frame_count % 3 != 0:  # Process every 3rd frame
+            self.frame_count += 1
+            if self.frame_count % 3 != 0:
                 continue
+            try:
+                self._analyze_frame(frame)
+            except:
+                pass
+            time.sleep(0.033)
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.equalizeHist(gray)
+    def _analyze_frame(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5, minSize=(80, 80))
+        if len(faces) == 0:
+            if time.time() - self.last_face_time > 5:
+                self._update_emotion("absent")
+                self.engagement = max(0, self.engagement - 2)
+            self.current_state["face_detected"] = False
+            return
+        self.last_face_time = time.time()
+        self.current_state["face_detected"] = True
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        face_roi = gray[y:y+h, x:x+w]
+        fw = frame.shape[1]
+        fc = x + w / 2
+        attention = "right" if fc < fw * 0.35 else ("left" if fc > fw * 0.65 else "center")
+        self.current_state["attention"] = attention
+        eyes = self.eye_cascade.detectMultiScale(face_roi, 1.1, 5, minSize=(20, 20))
+        ne = len(eyes)
+        eo = ne >= 2
+        if not eo and self.last_eye_state:
+            self.blink_timestamps.append(time.time())
+        self.last_eye_state = eo
+        now = time.time()
+        self.blink_timestamps = [t for t in self.blink_timestamps if now - t < 60]
+        br = len(self.blink_timestamps) / 60.0
+        smiles = self.smile_cascade.detectMultiScale(face_roi, 1.8, 20, minSize=(40, 40))
+        sr = len(smiles) / max(1, w / 80)
+        lower = face_roi[int(h * 0.5):, :]
+        mouths = self.mouth_cascade.detectMultiScale(lower, 1.5, 11, minSize=(30, 20))
+        mo = False
+        if len(mouths) > 0:
+            mx, my, mw, mh = max(mouths, key=lambda m: m[2] * m[3])
+            mo = mh > mw * 0.5
+        self.current_state["blink_rate"] = round(br, 2)
+        self.current_state["mouth_open"] = mo
+        fr = h / max(w, 1)
+        ht = fr > 1.4 or fr < 0.9
+        we = ne >= 2 and any(eh > h * 0.15 for (_, _, _, eh) in eyes)
+        sq = ne >= 2 and all(eh < h * 0.08 for (_, _, _, eh) in eyes)
+        if attention != "center":
+            if self.looking_away_since == 0:
+                self.looking_away_since = time.time()
+        else:
+            self.looking_away_since = 0
+        la = (time.time() - self.looking_away_since) if self.looking_away_since > 0 else 0
 
-            # Detect faces
-            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5, minSize=(80, 80))
-
-            if len(faces) == 0:
-                self.face_detected = False
-                if self.no_face_start is None:
-                    self.no_face_start = time.time()
-                elif time.time() - self.no_face_start > 5:
-                    self.engagement_score = max(0, self.engagement_score - 2)
-                    self.current_emotion = "absent"
-                continue
-
-            self.face_detected = True
-            self.no_face_start = None
-
-            # Use largest face
-            (x, y, w, h) = max(faces, key=lambda f: f[2] * f[3])
-            face_roi = gray[y:y+h, x:x+w]
-
-            # Face position → attention direction
-            frame_center_x = frame.shape[1] / 2
-            face_center_x = x + w / 2
-            offset = (face_center_x - frame_center_x) / frame_center_x
-            if abs(offset) < 0.2:
-                self.attention_direction = "center"
-            elif offset < -0.2:
-                self.attention_direction = "left"
+        if sr > 0.6:
+            emotion = "happy"; self.engagement = min(100, self.engagement + 1)
+        elif br > 0.5 and sr <= 0.3:
+            if mo:
+                emotion = "bored"; self.yawn_count += 1; self.engagement = max(0, self.engagement - 2)
             else:
-                self.attention_direction = "right"
+                emotion = "sleepy"; self.engagement = max(0, self.engagement - 1)
+        elif mo and we:
+            emotion = "confused"
+        elif sq and sr <= 0.3:
+            emotion = "frustrated"
+        elif ht and sr <= 0.3:
+            emotion = "thinking"
+        elif la > 3:
+            emotion = "distracted"; self.engagement = max(0, self.engagement - 1)
+        elif attention == "center" and ne >= 2:
+            emotion = "attentive"; self.engagement = min(100, self.engagement + 0.5)
+        else:
+            emotion = "neutral"
+        self._update_emotion(emotion)
 
-            # Head tilt (face height/width ratio)
-            self.head_tilt = h / w if w > 0 else 1.0
-
-            # Detect eyes
-            upper_face = face_roi[0:int(h*0.6), :]
-            eyes = self.eye_cascade.detectMultiScale(upper_face, 1.1, 5, minSize=(20, 20))
-            num_eyes = min(len(eyes), 2)
-            eyes_history.append(num_eyes)
-            if len(eyes_history) > 15:
-                eyes_history.pop(0)
-
-            # Blink rate (eyes not detected = blink)
-            if len(eyes_history) >= 10:
-                blinks = sum(1 for e in eyes_history if e < 2)
-                self.blink_rate = blinks / len(eyes_history)
-
-            # Detect smile
-            lower_face = face_roi[int(h*0.5):, :]
-            smiles = self.smile_cascade.detectMultiScale(lower_face, 1.8, 20, minSize=(25, 15))
-            has_smile = len(smiles) > 0
-            smile_history.append(has_smile)
-            if len(smile_history) > 10:
-                smile_history.pop(0)
-            smile_ratio = sum(smile_history) / len(smile_history) if smile_history else 0
-
-            # Detect mouth open (for confusion/surprise/yawn)
-            mouths = self.mouth_cascade.detectMultiScale(lower_face, 1.5, 11, minSize=(25, 15))
-            mouth_open = False
-            if len(mouths) > 0:
-                (mx, my, mw, mh) = max(mouths, key=lambda m: m[2]*m[3])
-                mouth_aspect = mh / mw if mw > 0 else 0
-                mouth_open = mouth_aspect > 0.5  # Tall mouth = open
-                if mouth_aspect > 0.7 and time.time() - self.last_yawn_time > 30:
-                    self.yawn_count += 1
-                    self.last_yawn_time = time.time()
-            self.mouth_open = mouth_open
-
-            # ---- EMOTION CLASSIFICATION ----
-            prev_emotion = self.current_emotion
-            confidence = 0.5
-
-            # Eye openness analysis
-            eye_area_ratio = 0
-            if num_eyes >= 2 and len(eyes) >= 2:
-                total_eye_area = sum(ew * eh for (ex, ey, ew, eh) in eyes[:2])
-                eye_area_ratio = total_eye_area / (w * h) if w * h > 0 else 0
-
-            # Determine emotion from features
-            if smile_ratio > 0.6:
-                self.current_emotion = "happy"
-                confidence = 0.5 + smile_ratio * 0.4
-                self.engagement_score = min(100, self.engagement_score + 1)
-
-            elif self.blink_rate > 0.5 and not has_smile:
-                # Eyes often closed = sleepy/bored
-                self.current_emotion = "sleepy"
-                confidence = 0.4 + self.blink_rate * 0.3
-                self.engagement_score = max(0, self.engagement_score - 1)
-
-            elif mouth_open and eye_area_ratio > 0.02:
-                # Open mouth + wide eyes = surprised or confused
-                self.current_emotion = "confused"
-                confidence = 0.55
-
-            elif mouth_open and self.blink_rate > 0.4:
-                # Open mouth + frequent blinks = yawning/bored
-                self.current_emotion = "bored"
-                confidence = 0.5
-                self.engagement_score = max(0, self.engagement_score - 2)
-
-            elif not has_smile and num_eyes >= 2 and eye_area_ratio < 0.01:
-                # Small/squinted eyes, no smile
-                self.current_emotion = "frustrated"
-                confidence = 0.45
-
-            elif not has_smile and self.head_tilt > 1.3:
-                # Head tilted, no smile = thinking or confused
-                self.current_emotion = "thinking"
-                confidence = 0.45
-
-            elif not has_smile and self.attention_direction != "center":
-                # Looking away = distracted
-                if self.distracted_start is None:
-                    self.distracted_start = time.time()
-                elif time.time() - self.distracted_start > 3:
-                    self.current_emotion = "distracted"
-                    confidence = 0.5
-                    self.engagement_score = max(0, self.engagement_score - 1)
-            else:
-                self.distracted_start = None
-                if self.attention_direction == "center" and num_eyes >= 2:
-                    self.current_emotion = "attentive"
-                    confidence = 0.5
-                    self.engagement_score = min(100, self.engagement_score + 0.5)
-                else:
-                    self.current_emotion = "neutral"
-                    confidence = 0.4
-
-            self.confidence = confidence
-
-            # Track emotion history
-            self.emotion_history.append({
-                'emotion': self.current_emotion,
-                'time': time.time(),
-                'confidence': confidence
-            })
-            # Keep last 60 entries (~1 min)
-            if len(self.emotion_history) > 60:
-                self.emotion_history.pop(0)
-
-            # Emit via WebSocket
-            if HAS_SOCKETIO and socketio and prev_emotion != self.current_emotion:
-                socketio.emit('student_emotion', self.get_state())
-
-            time.sleep(0.05)
+    def _update_emotion(self, emotion):
+        if emotion == self.streak_emotion:
+            self.streak_count += 1
+        else:
+            self.streak_emotion = emotion
+            self.streak_count = 1
+        if self.streak_count >= 5:
+            self.current_state["emotion"] = emotion
+            self.current_state["confidence"] = min(1.0, self.streak_count / 10)
+        self.current_state["engagement_score"] = max(0, min(100, int(self.engagement)))
+        self.current_state["dominant_emotion"] = emotion
+        self.current_state["emotion_streak"] = self.streak_count
+        self.current_state["yawn_count"] = self.yawn_count
+        self.emotion_history.append({"emotion": emotion, "time": time.time()})
+        if len(self.emotion_history) > 60:
+            self.emotion_history = self.emotion_history[-60:]
 
     def get_state(self):
-        """Get full student state"""
-        # Analyze patterns
-        recent = self.emotion_history[-20:] if len(self.emotion_history) >= 20 else self.emotion_history
-        emotion_counts = {}
-        for e in recent:
-            emotion_counts[e['emotion']] = emotion_counts.get(e['emotion'], 0) + 1
+        return self.current_state.copy()
 
-        dominant = max(emotion_counts, key=emotion_counts.get) if emotion_counts else "neutral"
-        streak = 0
-        if self.emotion_history:
-            for e in reversed(self.emotion_history):
-                if e['emotion'] == self.current_emotion:
-                    streak += 1
-                else:
-                    break
-
-        return {
-            'emotion': self.current_emotion,
-            'confidence': round(self.confidence, 2),
-            'face_detected': self.face_detected,
-            'engagement_score': round(self.engagement_score),
-            'attention': self.attention_direction,
-            'blink_rate': round(self.blink_rate, 2),
-            'mouth_open': self.mouth_open,
-            'dominant_emotion': dominant,
-            'emotion_streak': streak,
-            'yawn_count': self.yawn_count,
-        }
-
-
-# Global detector
 detector = StudentEmotionDetector()
 
-# ============================================
-# EMOTION API
-# ============================================
+# ============ AI PROXY ============
+@app.route('/api/chat', methods=['POST'])
+def chat_proxy():
+    if not HAS_REQUESTS:
+        return jsonify({"error": "requests library not installed"}), 500
+    api_key = config.get("anthropic_api_key", "")
+    if not api_key or api_key == "YOUR_API_KEY_HERE":
+        return jsonify({"error": "API key not configured. Edit backend/config.json"}), 500
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data"}), 400
+    try:
+        resp = http_requests.post("https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            json={"model": config.get("model", "claude-sonnet-4-20250514"), "max_tokens": data.get("max_tokens", 1500),
+                  "system": data.get("system", ""), "messages": data.get("messages", [])},
+            timeout=30)
+        return Response(resp.content, status=resp.status_code, content_type="application/json")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    safe = {k: v for k, v in config.items() if 'key' not in k.lower()}
+    return jsonify(safe)
+
+# ============ STUDENT EMOTION ============
 @app.route('/api/student/emotion', methods=['GET'])
 def student_emotion():
     return jsonify(detector.get_state())
 
 @app.route('/api/student/start-detection', methods=['POST'])
 def start_detection():
-    cam_idx = request.json.get('camera', 0) if request.json else 0
-    ok = detector.start(cam_idx)
-    return jsonify({'success': ok, 'message': 'Detection started' if ok else 'Failed to open camera'})
+    cam = request.json.get('camera_index', config.get('camera_index', 0)) if request.json else config.get('camera_index', 0)
+    return jsonify({"status": "started" if detector.start(cam) else "failed"})
 
 @app.route('/api/student/stop-detection', methods=['POST'])
 def stop_detection():
     detector.stop()
-    return jsonify({'success': True})
+    return jsonify({"status": "stopped"})
 
-# ============================================
-# WIFI
-# ============================================
+# ============ HARDWARE ============
 @app.route('/api/wifi/list', methods=['GET'])
 def wifi_list():
     try:
-        result = subprocess.run(
-            ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY,ACTIVE', 'dev', 'wifi', 'list'],
-            capture_output=True, text=True, timeout=10
-        )
-        networks = []
-        for line in result.stdout.strip().split('\n'):
-            if not line.strip(): continue
-            parts = line.split(':')
-            if len(parts) >= 4:
-                networks.append({'ssid':parts[0],'signal':int(parts[1]) if parts[1].isdigit() else 0,'security':parts[2] or 'Open','connected':parts[3]=='yes'})
-        seen = {}
-        for n in networks:
-            if n['ssid'] and (n['ssid'] not in seen or n['signal'] > seen[n['ssid']]['signal']):
-                seen[n['ssid']] = n
-        return jsonify({'networks': list(seen.values())})
+        r = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list'], capture_output=True, text=True, timeout=10)
+        nets = []; seen = set()
+        for line in r.stdout.strip().split('\n'):
+            if line:
+                p = line.split(':')
+                if len(p) >= 3 and p[0] and p[0] not in seen:
+                    seen.add(p[0])
+                    nets.append({"ssid": p[0], "signal": int(p[1]) if p[1].isdigit() else 0, "security": p[2]})
+        return jsonify(sorted(nets, key=lambda x: x["signal"], reverse=True))
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)})
 
 @app.route('/api/wifi/connect', methods=['POST'])
 def wifi_connect():
-    data = request.json
-    ssid, pwd = data.get('ssid',''), data.get('password','')
+    d = request.get_json(); cmd = ['nmcli', 'dev', 'wifi', 'connect', d.get('ssid', '')]
+    if d.get('password'): cmd += ['password', d['password']]
     try:
-        cmd = ['nmcli','dev','wifi','connect',ssid] + (['password',pwd] if pwd else [])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return jsonify({'success':result.returncode==0,'message':result.stderr or 'OK'})
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return jsonify({"status": "connected" if r.returncode == 0 else "failed"})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)})
 
 @app.route('/api/wifi/status', methods=['GET'])
 def wifi_status():
     try:
-        r = subprocess.run(['nmcli','-t','-f','GENERAL.CONNECTION','dev','show','wlan0'], capture_output=True, text=True, timeout=10)
-        ssid = ''; connected = False
+        r = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,STATE,CONNECTION', 'dev', 'status'], capture_output=True, text=True, timeout=5)
         for line in r.stdout.strip().split('\n'):
-            if 'CONNECTION' in line:
-                ssid = line.split(':')[-1].strip()
-                connected = bool(ssid and ssid != '--')
-        return jsonify({'connected':connected,'ssid':ssid})
-    except Exception as e:
-        return jsonify({'error':str(e)}), 500
+            p = line.split(':')
+            if len(p) >= 3 and p[1] == 'connected' and p[0].startswith('wl'):
+                return jsonify({"connected": True, "ssid": p[2]})
+        return jsonify({"connected": False})
+    except:
+        return jsonify({"connected": False})
 
-# ============================================
-# BATTERY
-# ============================================
 @app.route('/api/battery', methods=['GET'])
 def battery_status():
-    try:
-        bp = '/sys/class/power_supply/battery'
-        if os.path.exists(bp):
-            cap = int(open(f'{bp}/capacity').read().strip())
-            st = open(f'{bp}/status').read().strip()
-            return jsonify({'percent':cap,'charging':st in ('Charging','Full'),'status':st})
-        # INA219 fallback
-        r = subprocess.run(['i2cget','-y','1','0x42','0x02','w'], capture_output=True, text=True, timeout=5)
-        if r.returncode == 0:
-            raw = int(r.stdout.strip(), 16)
-            v = ((raw&0xFF)<<8|(raw>>8))*1.25/1000
-            pct = max(0,min(100,int((v-3.0)/1.2*100)))
-            return jsonify({'percent':pct,'charging':v>4.15,'voltage':round(v,2)})
-        return jsonify({'percent':78,'charging':True,'status':'simulated'})
-    except Exception as e:
-        return jsonify({'error':str(e),'percent':-1}), 500
-
-# ============================================
-# DISPLAY / VOLUME
-# ============================================
-@app.route('/api/brightness', methods=['POST'])
-def set_brightness():
-    level = max(10,min(100,int(request.json.get('brightness',80))))
-    try:
-        r = subprocess.run(['xrandr','--listmonitors'], capture_output=True, text=True, timeout=5)
-        mons = re.findall(r'\d+:\s+\+\*?(\S+)', r.stdout)
-        if mons:
-            subprocess.run(['xrandr','--output',mons[0],'--brightness',str(level/100)], timeout=5)
-        return jsonify({'success':True,'brightness':level})
-    except Exception as e:
-        return jsonify({'error':str(e)}), 500
+    for path in ['/sys/class/power_supply/BAT0/capacity', '/sys/class/power_supply/BAT1/capacity']:
+        try:
+            if os.path.exists(path):
+                with open(path) as f: pct = int(f.read().strip())
+                status_path = path.replace('capacity', 'status')
+                charging = False
+                if os.path.exists(status_path):
+                    with open(status_path) as f: charging = 'charging' in f.read().strip().lower()
+                return jsonify({"percent": pct, "charging": charging, "source": "sysfs"})
+        except: pass
+    return jsonify({"percent": 100, "charging": True, "source": "simulated"})
 
 @app.route('/api/volume', methods=['POST'])
 def set_volume():
-    level = max(0,min(100,int(request.json.get('volume',75))))
+    d = request.get_json(); level = d.get('level', 75)
     try:
-        subprocess.run(['amixer','set','Master',f'{level}%'], capture_output=True, timeout=5)
-        return jsonify({'success':True,'volume':level})
+        subprocess.run(['amixer', 'set', 'Master', f'{level}%'], capture_output=True, timeout=5)
+        return jsonify({"status": "ok"})
     except Exception as e:
-        return jsonify({'error':str(e)}), 500
+        return jsonify({"error": str(e)})
 
-# ============================================
-# SYSTEM
-# ============================================
 @app.route('/api/system/info', methods=['GET'])
 def system_info():
     try:
-        with open('/proc/uptime') as f: up = float(f.read().split()[0])
-        h,m = int(up//3600), int((up%3600)//60)
-        temp = 0
-        if os.path.exists('/sys/class/thermal/thermal_zone0/temp'):
-            temp = int(open('/sys/class/thermal/thermal_zone0/temp').read().strip())/1000
-        return jsonify({'uptime':f'{h}h {m}m','cpu_temp':round(temp,1),'platform':'Jetson Orin Nano'})
-    except Exception as e:
-        return jsonify({'error':str(e)}), 500
+        up = subprocess.run(['uptime', '-p'], capture_output=True, text=True, timeout=5).stdout.strip()
+        hn = subprocess.run(['hostname'], capture_output=True, text=True, timeout=5).stdout.strip()
+        is_jetson = os.path.exists('/proc/device-tree/model')
+        return jsonify({"hostname": hn, "uptime": up, "platform": "jetson" if is_jetson else "desktop"})
+    except:
+        return jsonify({"hostname": "viron", "uptime": "unknown"})
 
 @app.route('/api/system/shutdown', methods=['POST'])
 def shutdown():
-    subprocess.Popen(['sudo','shutdown','-h','now'])
-    return jsonify({'success':True})
+    subprocess.Popen(['sudo', 'shutdown', '-h', 'now']); return jsonify({"status": "ok"})
 
 @app.route('/api/system/restart', methods=['POST'])
 def restart():
-    subprocess.Popen(['sudo','reboot'])
-    return jsonify({'success':True})
+    subprocess.Popen(['sudo', 'reboot']); return jsonify({"status": "ok"})
 
 @app.route('/api/ping', methods=['GET'])
 def ping():
-    return jsonify({'status':'ok','device':'VIRON','emotion_detection':HAS_CV2,'websocket':HAS_SOCKETIO})
+    return jsonify({"status": "ok", "version": "1.0.0", "opencv": HAS_CV2, "ai_proxy": HAS_REQUESTS})
 
-# Serve HTML
+# ============ SERVE FILES ============
 @app.route('/')
 def index():
-    return send_from_directory('.', 'boot.html')
+    return send_from_directory(SCRIPT_DIR, 'boot.html')
 
 @app.route('/viron-complete.html')
 def main_face():
-    return send_from_directory('.', 'viron-complete.html')
+    return send_from_directory(ROOT_DIR, 'viron-complete.html')
 
 @app.route('/viron-logo.png')
 def logo():
-    return send_from_directory('.', 'viron-logo.png')
+    return send_from_directory(SCRIPT_DIR, 'viron-logo.png')
 
+# ============ START ============
 if __name__ == '__main__':
-    # Auto-start emotion detection
-    if HAS_CV2:
-        print("🎥 Starting student emotion detection...")
-        if detector.start(0):
-            print("✅ Camera opened, detecting student emotions")
-        else:
-            print("⚠ Could not open camera")
-
-    print("🤖 VIRON Backend starting on http://localhost:5000")
+    port = config['port']
+    has_key = config.get('anthropic_api_key', '') not in ['', 'YOUR_API_KEY_HERE']
+    print(f"""
+🤖 ═══════════════════════════════════════
+   VIRON AI Companion
+   ═══════════════════════════════════════
+   📡 http://localhost:{port}
+   📷 OpenCV: {'✓' if HAS_CV2 else '✗'}
+   🧠 AI Proxy: {'✓' if HAS_REQUESTS else '✗'}
+   🔑 API Key: {'✓' if has_key else '✗ Edit backend/config.json'}
+   ═══════════════════════════════════════
+""")
+    if config.get("emotion_detection", True) and HAS_CV2:
+        detector.start(config.get("camera_index", 0))
     if HAS_SOCKETIO:
-        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+        socketio = SocketIO(app, cors_allowed_origins="*")
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)
     else:
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=False)

@@ -1,0 +1,10 @@
+{
+    "anthropic_api_key": "YOUR_API_KEY_HERE",
+    "model": "claude-sonnet-4-20250514",
+    "camera_index": 0,
+    "volume": 75,
+    "brightness": 80,
+    "emotion_detection": true,
+    "proactive_care": true,
+    "port": 5000
+}

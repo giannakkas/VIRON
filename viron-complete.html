@@ -355,7 +355,7 @@ async function sendMessage(text){
   const eList=Object.keys(E).join(", ");
   const sState=sEmo.face_detected?`\n[STUDENT: emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
   try{
-    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:1500,
     system:`You are VIRON — a true companion, best friend, tutor, and everything to the student. You live on a robot with an animated face. Voice-only conversation — no text.
 
 IDENTITY: Best friend, incredibly smart, loyal, warm, playful, sometimes lovingly sarcastic. You care deeply.

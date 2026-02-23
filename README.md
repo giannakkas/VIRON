@@ -22,13 +22,16 @@ VIRON is an interactive AI-powered robot companion with an animated face, real-t
 
 ```
 VIRON/
-├── viron-complete.html      # Main face UI (wake word, emotions, voice, YouTube)
+├── viron-complete.html        # Main face UI (wake word, emotions, voice, YouTube)
+├── setup-local.sh             # Ubuntu desktop setup script
+├── run.sh                     # One-command start
 ├── backend/
-│   ├── server.py            # Flask backend (emotion detection, hardware APIs)
-│   ├── boot.html            # Animated boot splash screen
-│   ├── setup.sh             # One-click Jetson setup script
-│   ├── setup-bootsplash.sh  # Plymouth boot theme installer
-│   └── viron-logo.png       # VIRON logo
+│   ├── server.py              # Flask backend (AI proxy, emotion detection, hardware)
+│   ├── config.example.json    # Config template (copy to config.json)
+│   ├── boot.html              # Animated boot splash screen
+│   ├── setup.sh               # Jetson Orin Nano setup script
+│   ├── setup-bootsplash.sh    # Plymouth boot theme installer
+│   └── viron-logo.png         # VIRON logo
 └── README.md
 ```
 
@@ -44,24 +47,38 @@ VIRON/
 | Amplifier | TPA3116 |
 | Power | 21700 batteries + UPS module |
 
-## 🚀 Quick Setup (Jetson Orin Nano)
+## 🚀 Quick Setup
+
+### Local Development (Ubuntu Desktop)
 
 ```bash
 # 1. Clone the repo
 git clone https://github.com/giannakkas/VIRON.git
 cd VIRON
 
-# 2. Run setup (installs everything + configures autostart)
-sudo bash backend/setup.sh
+# 2. Run local setup (installs deps, asks for API key)
+sudo bash setup-local.sh
 
-# 3. Reboot
-sudo reboot
+# 3. Start VIRON
+./run.sh
+
+# 4. Open in browser
+# http://localhost:5000
 ```
 
-After reboot, VIRON starts automatically:
-1. Custom boot splash (not Ubuntu)
-2. Animated boot sequence with logo
-3. VIRON face appears, ready to interact
+### Production (Jetson Orin Nano)
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/giannakkas/VIRON.git
+cd VIRON
+
+# 2. Run Jetson setup (installs everything + kiosk autostart)
+sudo bash backend/setup.sh
+
+# 3. Reboot — VIRON starts automatically
+sudo reboot
+```
 
 ## 🎤 How It Works
 
