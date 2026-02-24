@@ -389,6 +389,35 @@ def restart():
 def ping():
     return jsonify({"status": "ok", "version": "1.0.0", "opencv": HAS_CV2, "ai_proxy": HAS_REQUESTS})
 
+# ============ TEXT-TO-SPEECH ============
+try:
+    from gtts import gTTS
+    HAS_GTTS = True
+except ImportError:
+    HAS_GTTS = False
+    print("⚠ gTTS not installed — server-side TTS disabled. Install: pip3 install gTTS")
+
+@app.route('/api/tts', methods=['POST'])
+def text_to_speech():
+    """Generate speech audio from text. Returns MP3."""
+    if not HAS_GTTS:
+        return jsonify({"error": "gTTS not installed"}), 500
+    data = request.get_json()
+    if not data or not data.get('text'):
+        return jsonify({"error": "No text"}), 400
+    text = data['text']
+    lang = data.get('lang', 'el')  # default Greek
+    try:
+        import io
+        tts = gTTS(text=text, lang=lang, slow=False)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return Response(buf.read(), mimetype='audio/mpeg',
+                       headers={'Content-Disposition': 'inline'})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ============ SERVE FILES ============
 @app.route('/')
 def index():
