@@ -16,13 +16,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 
 # ─── Cloud Models ──────────────────────────────────
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")  # Haiku for speed
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")  # Haiku for speed
 CHATGPT_MODEL = os.getenv("CHATGPT_MODEL", "gpt-4o-mini")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # ─── Routing ───────────────────────────────────────
 CLOUD_STRATEGY = os.getenv("CLOUD_STRATEGY", "priority")  # priority, round_robin, claude, gemini, chatgpt
-CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "15"))  # 15s for cloud API
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "25"))  # 25s for Sonnet
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "1"))
 
 # ─── Confidence Gate ───────────────────────────────
