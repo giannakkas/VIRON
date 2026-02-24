@@ -340,18 +340,20 @@ function startMicCapture(){
   navigator.mediaDevices.getUserMedia({audio:{
     echoCancellation:true,
     noiseSuppression:true,
-    channelCount:1,
-    sampleRate:16000
+    channelCount:1
   }}).then(stream=>{
     D('  ✅ Mic stream obtained');
     micStream=stream;
-    audioContext=new(window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
-    D('  AudioContext sampleRate='+audioContext.sampleRate);
+    // Use DEFAULT sample rate (browser's native rate, usually 48000)
+    // Do NOT force 16000 — it causes AudioNode mismatch errors
+    audioContext=new(window.AudioContext||window.webkitAudioContext)();
+    const nativeSR=audioContext.sampleRate;
+    D('  AudioContext sampleRate='+nativeSR);
     const source=audioContext.createMediaStreamSource(stream);
     
     if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
-      wakeWs.send(JSON.stringify({sample_rate:audioContext.sampleRate}));
-      D('  Sent sample rate to wake server');
+      wakeWs.send(JSON.stringify({sample_rate:nativeSR}));
+      D('  Sent sample rate '+nativeSR+' to wake server');
     }
     
     audioProcessor=audioContext.createScriptProcessor(4096,1,1);
@@ -359,6 +361,7 @@ function startMicCapture(){
     audioProcessor.onaudioprocess=(e)=>{
       if(wakeWs&&wakeWs.readyState===WebSocket.OPEN&&voiceState===VOICE_IDLE){
         const float32=e.inputBuffer.getChannelData(0);
+        // Convert float32 to int16
         const int16=new Int16Array(float32.length);
         for(let i=0;i<float32.length;i++){
           int16[i]=Math.max(-32768,Math.min(32767,Math.round(float32[i]*32767)));
@@ -372,7 +375,7 @@ function startMicCapture(){
     source.connect(audioProcessor);
     audioProcessor.connect(audioContext.destination);
     
-    D('  ✅ Mic capture started ('+audioContext.sampleRate+'Hz), streaming to wake server');
+    D('  ✅ Mic capture started ('+nativeSR+'Hz), streaming to wake server');
     document.getElementById("listenText").textContent='Say "Hey Jarvis"';
   }).catch(e=>{
     D('  ❌ Mic access DENIED: '+e.name+': '+e.message);
