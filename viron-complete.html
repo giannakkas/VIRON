@@ -191,7 +191,7 @@ function startWakeListener(){
   updateListenUI();
 
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR)return;
+  if(!SR){console.warn("SpeechRecognition not available");return;}
 
   wakeRec=new SR();
   wakeRec.continuous=true;
@@ -419,7 +419,7 @@ setInterval(()=>{fetch('/api/battery').then(r=>r.json()).then(d=>{if(d.percent>=
 const ST=Date.now();setInterval(()=>{const d=Date.now()-ST;document.getElementById("ut").textContent=`${Math.floor(d/3600000)}h ${Math.floor((d%3600000)/60000)}m`},30000);
 
 // ===== INIT =====
-fetch('/api/student/start-detection',{method:'POST'}).catch(()=>{});
+fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
 // Greet then start listening
 setTimeout(()=>{
   cE("excited");
@@ -427,14 +427,21 @@ setTimeout(()=>{
 },2500);
 
 // Request mic permission on first load, then start wake listener
-navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{
-  s.getTracks().forEach(t=>t.stop());
-  // Start wake word listener after greeting finishes
-  setTimeout(startWakeListener,6000);
-}).catch(()=>{
+if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+  navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{
+    s.getTracks().forEach(t=>t.stop());
+    // Start wake word listener after greeting finishes
+    setTimeout(startWakeListener,6000);
+  }).catch(()=>{
+    document.getElementById("listenText").textContent="Tap face to talk";
+    document.getElementById("face").style.cursor="pointer";
+  });
+}else{
+  // HTTP or no mic support — tap mode only
   document.getElementById("listenText").textContent="Tap face to talk";
   document.getElementById("face").style.cursor="pointer";
-});
+  console.warn("getUserMedia not available (requires HTTPS). Using tap mode.");
+}
 
 // ===== SVG RENDER =====
 const svg=document.getElementById("face");
