@@ -253,19 +253,23 @@ def chat_proxy():
         return jsonify({"error": "No data"}), 400
 
     user_msg = data.get("messages", [{}])[-1].get("content", "")
+    print(f"\n💬 CHAT REQUEST: '{user_msg}'")
 
     # Try AI Router first (port 8000)
     try:
+        print(f"  → Trying AI Router (localhost:8000)...")
         resp = http_requests.post("http://localhost:8000/chat",
             json={
                 "message": user_msg,
                 "age_mode": data.get("age_mode", config.get("age_mode", "kids")),
                 "conversation_id": data.get("conversation_id", "default"),
             }, timeout=35)
+        print(f"  → AI Router status: {resp.status_code}")
         if resp.status_code == 200:
             router_data = resp.json()
             reply = router_data.get("reply", "")
             provider = router_data.get("provider", "unknown")
+            print(f"  → AI Router reply ({provider}): '{reply[:100]}'")
             # Check if the reply is just an echo or error
             is_echo = reply.lower().startswith("received:") or reply == user_msg
             is_error = provider == "error" or not reply or len(reply) < 3
@@ -277,9 +281,11 @@ def chat_proxy():
                     "emotion": router_data.get("emotion", "neutral"),
                 })
             else:
-                print(f"⚠ AI Router returned echo/error (provider={provider}), falling back")
+                print(f"  ⚠ AI Router returned echo/error (provider={provider}), falling back")
+        else:
+            print(f"  ⚠ AI Router non-200: {resp.text[:200]}")
     except Exception as e:
-        print(f"⚠ AI Router unavailable ({e}), falling back to direct API")
+        print(f"  ⚠ AI Router unavailable ({e}), falling back to direct API")
 
     # Fallback: direct to Anthropic
     api_key = config.get("anthropic_api_key", "")
@@ -288,24 +294,69 @@ def chat_proxy():
         import os
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
+        print("  ❌ No API key available!")
         return jsonify({
             "content": [{"type": "text", "text": "[confused] I can't think right now. My AI brain isn't connected. Please check the API keys!"}],
             "provider": "none",
         })
     try:
+        print(f"  → Trying direct Anthropic API...")
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
             json={"model": config.get("model", "claude-sonnet-4-20250514"), "max_tokens": data.get("max_tokens", 1500),
                   "system": data.get("system", ""), "messages": data.get("messages", [])},
             timeout=30)
+        print(f"  → Anthropic API status: {resp.status_code}")
+        if resp.status_code != 200:
+            print(f"  ❌ Anthropic error: {resp.text[:300]}")
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
+        print(f"  ❌ Anthropic API error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
     safe = {k: v for k, v in config.items() if 'key' not in k.lower()}
     return jsonify(safe)
+
+@app.route('/test/tts', methods=['GET'])
+def test_tts():
+    """Quick test: GET /test/tts to hear a male Greek voice"""
+    try:
+        import edge_tts, asyncio, io
+        async def gen():
+            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="-8%", pitch="-4st")
+            buf = io.BytesIO()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            buf.seek(0)
+            return buf
+        loop = asyncio.new_event_loop()
+        buf = loop.run_until_complete(gen())
+        loop.close()
+        return Response(buf.read(), mimetype='audio/mpeg')
+    except Exception as e:
+        return f"edge-tts error: {e}", 500
+
+@app.route('/test/chat', methods=['GET'])
+def test_chat():
+    """Quick test: GET /test/chat to test AI response"""
+    try:
+        api_key = config.get("anthropic_api_key", "")
+        if not api_key:
+            import os
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return "No API key configured", 500
+        resp = http_requests.post("https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            json={"model": config.get("model", "claude-sonnet-4-20250514"), "max_tokens": 100,
+                  "messages": [{"role": "user", "content": "Say hello in 5 words"}]},
+            timeout=15)
+        return f"Status: {resp.status_code}\n{resp.text[:500]}", resp.status_code
+    except Exception as e:
+        return f"Error: {e}", 500
 
 # ============ STUDENT EMOTION ============
 @app.route('/api/student/emotion', methods=['GET'])
