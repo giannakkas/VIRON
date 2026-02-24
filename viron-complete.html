@@ -211,6 +211,8 @@ function extractAfterWake(text){
 
 function startWakeListener(){
   if(voiceState===VOICE_ACTIVATED||loading)return;
+  // Don't start while still speaking
+  if(synth&&synth.speaking){setTimeout(startWakeListener,500);return}
   stopAllRecognition();
   voiceState=VOICE_IDLE;
   updateListenUI();
@@ -251,20 +253,21 @@ function startWakeListener(){
       document.getElementById("face").onclick=()=>{if(!loading&&voiceState!==VOICE_ACTIVATED)onWakeWordDetected(null)};
       return;
     }
-    // Restart after brief delay
+    // Restart after delay (longer for aborted to prevent loop)
     clearTimeout(wakeRetryTimeout);
-    wakeRetryTimeout=setTimeout(startWakeListener,1000);
+    const delay=e.error==="aborted"?2000:1000;
+    wakeRetryTimeout=setTimeout(startWakeListener,delay);
   };
 
   wakeRec.onend=()=>{
     // Restart if still in idle mode (continuous listening)
     if(voiceState===VOICE_IDLE&&!loading){
       clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startWakeListener,300);
+      wakeRetryTimeout=setTimeout(startWakeListener,500);
     }
   };
 
-  try{wakeRec.start()}catch(e){
+  try{wakeRec.start();console.log("🎤 Wake listener started")}catch(e){
     clearTimeout(wakeRetryTimeout);
     wakeRetryTimeout=setTimeout(startWakeListener,2000);
   }
