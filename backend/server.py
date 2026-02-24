@@ -36,7 +36,7 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 
 DEFAULT_CONFIG = {
     "anthropic_api_key": "YOUR_API_KEY_HERE",
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "camera_index": 0,
     "volume": 75,
     "brightness": 80,
@@ -263,7 +263,7 @@ def chat_proxy():
                 "message": user_msg,
                 "age_mode": data.get("age_mode", config.get("age_mode", "kids")),
                 "conversation_id": data.get("conversation_id", "default"),
-            }, timeout=35)
+            }, timeout=12)  # 12s max for AI Router
         print(f"  → AI Router status: {resp.status_code}")
         if resp.status_code == 200:
             router_data = resp.json()
@@ -303,9 +303,9 @@ def chat_proxy():
         print(f"  → Trying direct Anthropic API...")
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            json={"model": config.get("model", "claude-sonnet-4-20250514"), "max_tokens": data.get("max_tokens", 1500),
+            json={"model": config.get("model", "claude-haiku-4-5-20251001"), "max_tokens": data.get("max_tokens", 1500),
                   "system": data.get("system", ""), "messages": data.get("messages", [])},
-            timeout=30)
+            timeout=15)  # 15s max for direct Anthropic
         print(f"  → Anthropic API status: {resp.status_code}")
         if resp.status_code != 200:
             print(f"  ❌ Anthropic error: {resp.text[:300]}")
@@ -325,7 +325,7 @@ def test_tts():
     try:
         import edge_tts, asyncio, io
         async def gen():
-            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="-8%", pitch="-4st")
+            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+10%", pitch="-2st")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -351,7 +351,7 @@ def test_chat():
             return "No API key configured", 500
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            json={"model": config.get("model", "claude-sonnet-4-20250514"), "max_tokens": 100,
+            json={"model": config.get("model", "claude-haiku-4-5-20251001"), "max_tokens": 100,
                   "messages": [{"role": "user", "content": "Say hello in 5 words"}]},
             timeout=15)
         return f"Status: {resp.status_code}\n{resp.text[:500]}", resp.status_code
@@ -481,7 +481,7 @@ def text_to_speech():
         print(f"🎙️ edge-tts: voice={voice}, text='{text[:50]}'")
         
         async def gen():
-            communicate = edge_tts.Communicate(text, voice, rate="-8%", pitch="-4st")
+            communicate = edge_tts.Communicate(text, voice, rate="+10%", pitch="-2st")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":

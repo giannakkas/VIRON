@@ -711,7 +711,7 @@ function startCommandListening(){
 // Conversation ends after silence timeout.
 let inConversation=false;
 let conversationTimer=null;
-const CONVERSATION_TIMEOUT=30000; // 30s silence → end conversation
+const CONVERSATION_TIMEOUT=45000; // 45s silence → end conversation
 let silenceCount=0; // track consecutive silences
 
 function startConversation(){
@@ -776,6 +776,7 @@ function processStudentSpeech(text){
   voiceState=VOICE_PROCESSING;
   updateListenUI();
   cE("thinking");
+  clearTimeout(conversationTimer); // Pause conversation timer during API call
   sendMessage(text);
 }
 
@@ -799,7 +800,7 @@ async function sendMessage(text){
   const eList=Object.keys(E).join(", ");
   const sState=sEmo.face_detected?`\n[STUDENT: emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
   try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:1500,
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:500,
     system:`You are VIRON — a male AI companion robot for students. Voice-only — your response is spoken aloud through a speaker.
 
 PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart. Loyal, articulate, sometimes lovingly sarcastic.

@@ -8,7 +8,7 @@ load_dotenv(Path(__file__).parent / ".env")
 # ─── Local LLM ─────────────────────────────────────
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 LOCAL_MODEL = os.getenv("LOCAL_MODEL", "phi3")
-LOCAL_TIMEOUT = int(os.getenv("LOCAL_TIMEOUT", "30"))
+LOCAL_TIMEOUT = int(os.getenv("LOCAL_TIMEOUT", "5"))  # 5s for local Ollama
 
 # ─── Cloud API Keys ────────────────────────────────
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -16,13 +16,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 
 # ─── Cloud Models ──────────────────────────────────
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")  # Haiku for speed
 CHATGPT_MODEL = os.getenv("CHATGPT_MODEL", "gpt-4o-mini")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # ─── Routing ───────────────────────────────────────
 CLOUD_STRATEGY = os.getenv("CLOUD_STRATEGY", "priority")  # priority, round_robin, claude, gemini, chatgpt
-CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "60"))
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "15"))  # 15s for cloud API
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "1"))
 
 # ─── Confidence Gate ───────────────────────────────
