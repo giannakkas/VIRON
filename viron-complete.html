@@ -150,7 +150,30 @@ const synth=window.speechSynthesis;let gkV=null,enV=null;
 function loadV(){const v=synth.getVoices();console.log("Available voices:",v.length,v.filter(x=>x.lang.startsWith("el")).map(x=>x.name+" ("+x.lang+")"));gkV=v.find(x=>x.lang.startsWith("el")&&x.name.includes("Google"))||v.find(x=>x.lang.startsWith("el")&&!x.name.includes("Compact"))||v.find(x=>x.lang.startsWith("el"))||null;enV=v.find(x=>x.name.includes("Natural")&&x.lang.startsWith("en"))||v.find(x=>/Samantha|Daniel|Google UK/.test(x.name))||v.find(x=>x.lang.startsWith("en-")&&!x.name.includes("Compact"))||null;console.log("Greek voice:",gkV?.name||"NONE (will use lang=el-GR)");console.log("English voice:",enV?.name||"NONE")}
 if(synth){synth.onvoiceschanged=loadV;loadV()}
 const isGr=t=>/[\u0370-\u03FF\u1F00-\u1FFF]/.test(t);
-function say(text){if(!synth)return;synth.cancel();showSub(text);const ss=text.match(/[^.!;·?]+[.!;·?]?/g)||[text];let d=0;ss.forEach((s,i)=>{const x=s.trim();if(!x)return;setTimeout(()=>{const u=new SpeechSynthesisUtterance(x);u.volume=(document.getElementById("volSlider")?.value||75)/100;if(isGr(x)){u.lang="el-GR";if(gkV)u.voice=gkV;u.rate=0.88;u.pitch=1.0}else{u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.0}if(i===0)u.onstart=()=>startT();if(i===ss.length-1){u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()}}synth.speak(u)},d);d+=50})}
+function say(text){if(!synth)return;synth.cancel();showSub(text);
+  // If text is Greek but no Greek voice, use audio fallback
+  if(isGr(text)&&!gkV){sayGoogleTTS(text);return}
+  const ss=text.match(/[^.!;·?]+[.!;·?]?/g)||[text];let d=0;ss.forEach((s,i)=>{const x=s.trim();if(!x)return;setTimeout(()=>{const u=new SpeechSynthesisUtterance(x);u.volume=(document.getElementById("volSlider")?.value||75)/100;if(isGr(x)){u.lang="el-GR";if(gkV)u.voice=gkV;u.rate=0.88;u.pitch=1.0}else{u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.0}if(i===0)u.onstart=()=>startT();if(i===ss.length-1){u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()}}synth.speak(u)},d);d+=50})}
+
+// Google Translate TTS fallback for Greek
+function sayGoogleTTS(text){
+  startT();
+  const chunks=text.match(/.{1,200}/g)||[text];
+  let i=0;
+  function playNext(){
+    if(i>=chunks.length){stopT();startWakeListener();return}
+    const url=`https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunks[i])}&tl=el&client=tw-ob`;
+    const a=new Audio(url);
+    a.volume=(document.getElementById("volSlider")?.value||75)/100;
+    a.onended=()=>{i++;playNext()};
+    a.onerror=()=>{console.warn("Google TTS failed, trying English");stopT();
+      // Fallback: speak in English
+      const u=new SpeechSynthesisUtterance(text);u.lang="en-US";if(enV)u.voice=enV;
+      u.onend=()=>{stopT();startWakeListener()};synth.speak(u)};
+    a.play().catch(()=>{stopT();startWakeListener()})
+  }
+  playNext()
+}
 
 // ========================================
 // WAKE WORD SYSTEM - "Hey VIRON"
