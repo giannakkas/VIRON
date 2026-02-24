@@ -192,7 +192,10 @@ function showSub(text){const el=document.getElementById("subtitle");el.textConte
 function updateListenUI(){
   const ind=document.getElementById("listenInd");
   const txt=document.getElementById("listenText");
-  if(voiceState===VOICE_IDLE){ind.className="listen-indicator wake";txt.textContent='Say "Hey VIRON"'}
+  if(voiceState===VOICE_IDLE){
+    ind.className="listen-indicator wake";
+    txt.textContent=inConversation?'Listening...':'Say "Hey VIRON"';
+  }
   else if(voiceState===VOICE_ACTIVATED){ind.className="listen-indicator active";txt.textContent="Listening..."}
   else{ind.className="listen-indicator";ind.style.opacity="0";txt.textContent=""}
 }
@@ -470,6 +473,7 @@ function startAlwaysListening(){
       
       // Extract what comes after wake word
       const afterWake=extractAfterWake(display);
+      startConversation(); // Enter conversation mode
       if(afterWake&&afterWake.length>3){
         D('  → Direct command: "'+afterWake+'"');
         cE("hopeful");
@@ -478,17 +482,16 @@ function startAlwaysListening(){
         processStudentSpeech(afterWake);
       }else{
         // Just "Hey VIRON" — ack and listen for command
-        D('  → Acknowledged, listening for command');
+        D('  → Acknowledged, entering conversation');
         cE("hopeful");
         voiceState=VOICE_ACTIVATED;
         updateListenUI();
         document.getElementById("listenText").textContent='Listening...';
         
-        // Quick ack
-        const ackText=isGreekMode()?"Ναι;":"Yes?";
-        // Play ack then start command listening (DON'T use sayServerTTS — it restarts wake listener)
+        // Quick ack — "Mhm?" (works in any language)
+        const ackText="Mhm?";
         D('  Playing ack: "'+ackText+'"');
-        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
+        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:'en'})})
         .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
         .then(blob=>{
           const url=URL.createObjectURL(blob);
@@ -552,9 +555,12 @@ function startAlwaysListening(){
 
 // After wake word detected, listen for the actual command
 function startCommandListening(){
-  D('>>> startCommandListening');
+  D('>>> startCommandListening (inConversation='+inConversation+')');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR)return;
+  
+  voiceState=VOICE_ACTIVATED;
+  updateListenUI();
   
   let cmdRec=new SR();
   cmdRec.continuous=false;
@@ -563,14 +569,30 @@ function startCommandListening(){
   cmdRec.maxAlternatives=3;
   
   let gotResult=false;
+  let handled=false; // prevent double-handling from timeout+onend race
+  const timeout=inConversation?12000:8000;
   let cmdTimeout=setTimeout(()=>{
-    if(!gotResult){
+    if(!gotResult&&!handled){
+      handled=true;
       D('  ⏰ Command timeout');
-      cmdRec.stop();
-      cE("confused");
-      say(isGreekMode()?"Δεν σε άκουσα!":"I didn't catch that!");
+      try{cmdRec.stop()}catch{}
+      if(inConversation){
+        silenceCount++;
+        if(silenceCount>=2){
+          cE("happy");
+          say(isGreekMode()?"Εδώ είμαι αν με χρειαστείς!":"I'm here if you need me!");
+          inConversation=false;
+          clearTimeout(conversationTimer);
+        }else{
+          D('  🗣️ Silence in conversation, still listening...');
+          setTimeout(startCommandListening,300);
+        }
+      }else{
+        cE("confused");
+        say(isGreekMode()?"Δεν σε άκουσα!":"I didn't catch that!");
+      }
     }
-  },8000);
+  },timeout);
   
   cmdRec.onresult=(e)=>{
     let finalText="";
@@ -585,41 +607,113 @@ function startCommandListening(){
     if(finalText&&finalText.trim().length>1){
       gotResult=true;
       clearTimeout(cmdTimeout);
-      D('  ✅ Command: "'+finalText.trim()+'"');
+      silenceCount=0; // reset silence counter
+      if(inConversation)resetConversationTimer();
+      
+      // In conversation mode, strip accidental wake words from speech
+      let speech=finalText.trim();
+      if(inConversation&&matchesWakeWord(speech.toLowerCase())){
+        const after=extractAfterWake(speech);
+        if(after&&after.length>2){
+          speech=after;
+          D('  ✅ Stripped wake word, command: "'+speech+'"');
+        }else{
+          // Just said "hey viron" again with nothing after — ignore, keep listening
+          D('  (wake word only in conversation, ignoring)');
+          startCommandListening();
+          return;
+        }
+      }
+      
+      D('  ✅ Command: "'+speech+'"');
       cE("thinking");
       voiceState=VOICE_PROCESSING;
       updateListenUI();
-      processStudentSpeech(finalText.trim());
+      processStudentSpeech(speech);
     }
   };
   
   cmdRec.onerror=(e)=>{
     clearTimeout(cmdTimeout);
     D('  ⚠️ cmd error: '+e.error);
-    if(!gotResult){
-      voiceState=VOICE_IDLE;
-      startAlwaysListening();
+    if(!gotResult&&!handled){
+      handled=true;
+      if(inConversation&&(e.error==='no-speech'||e.error==='aborted')){
+        setTimeout(startCommandListening,300);
+      }else if(inConversation){
+        setTimeout(startCommandListening,500);
+      }else{
+        voiceState=VOICE_IDLE;
+        startAlwaysListening();
+      }
     }
   };
   
   cmdRec.onend=()=>{
     clearTimeout(cmdTimeout);
-    if(!gotResult){
-      voiceState=VOICE_IDLE;
-      startAlwaysListening();
+    if(!gotResult&&!handled){
+      handled=true;
+      if(inConversation){
+        setTimeout(startCommandListening,300);
+      }else{
+        voiceState=VOICE_IDLE;
+        startAlwaysListening();
+      }
     }
   };
   
   try{cmdRec.start()}catch(e){
     D('  ❌ cmd start error: '+e.message);
     voiceState=VOICE_IDLE;
-    startAlwaysListening();
+    if(inConversation){setTimeout(startCommandListening,500)}
+    else{startAlwaysListening()}
   }
 }
 
 // Alias for compatibility
-function startWakeListener(){
+// ===== CONVERSATION MODE =====
+// When student says "Hey VIRON", we enter conversation mode.
+// VIRON keeps listening after each response — no need to say "Hey VIRON" again.
+// Conversation ends after silence timeout.
+let inConversation=false;
+let conversationTimer=null;
+const CONVERSATION_TIMEOUT=30000; // 30s silence → end conversation
+let silenceCount=0; // track consecutive silences
+
+function startConversation(){
+  D('🗣️ CONVERSATION STARTED');
+  inConversation=true;
+  silenceCount=0;
+  resetConversationTimer();
+}
+
+function resetConversationTimer(){
+  clearTimeout(conversationTimer);
+  conversationTimer=setTimeout(()=>{
+    D('🗣️ CONVERSATION TIMEOUT — ending');
+    endConversation();
+  },CONVERSATION_TIMEOUT);
+}
+
+function endConversation(){
+  D('🗣️ CONVERSATION ENDED');
+  inConversation=false;
+  silenceCount=0;
+  clearTimeout(conversationTimer);
+  voiceState=VOICE_IDLE;
   startAlwaysListening();
+}
+
+function startWakeListener(){
+  // After VIRON finishes speaking, decide what to do
+  if(inConversation){
+    D('  🗣️ Still in conversation — listening for next message');
+    resetConversationTimer();
+    document.getElementById("listenText").textContent='Listening...';
+    startCommandListening();
+  }else{
+    startAlwaysListening();
+  }
 }
 
 function stopAllRecognition(){
@@ -653,11 +747,15 @@ function processStudentSpeech(text){
 
 // Face tap activation - always works as backup
 document.getElementById("face").addEventListener("click",()=>{
-  D('>>> Face tapped, loading='+loading+', voiceState='+voiceState);
+  D('>>> Face tapped, loading='+loading+', voiceState='+voiceState+', inConversation='+inConversation);
   if(loading)return;
-  console.log("👆 Face tapped — restarting listener");
-  stopAllRecognition();
-  startAlwaysListening();
+  if(inConversation){
+    D('  Ending conversation via face tap');
+    endConversation();
+  }else{
+    stopAllRecognition();
+    startAlwaysListening();
+  }
 });
 
 // ===== AI CHAT =====
