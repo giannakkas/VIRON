@@ -329,10 +329,14 @@ function matchesWakeWord(text){
     "hayviron","hay viron","hayvironment","hay vironment",
     "hey environment","hey environ","hey virum","hey vironn",
     "hey fire on","hey tyron","hey myron","hey virus",
-    "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον"];
+    "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον",
+    "χέι βίρον","χει βιρον","έι βίρον","ει βιρον","χεϊ βιρον",
+    "χέι βάιρον","χει βαιρον","έι βαιρον","ε βιρον","εϊ βιρον"];
   for(const m of misrecognitions)if(lower.includes(m))return true;
   // Fuzzy regex: (hey/hi/hay/heavy/a/have) + (vir/byr/bir/fir/ron/iron)
   if(/(hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)/i.test(lower))return true;
+  // Greek fuzzy: χέι/έι/ε/γεια + βιρ/βαιρ/βύρ
+  if(/(χέι|χει|έι|ει|γεια|για|ε)\s*(βιρ|βαιρ|βύρ|βίρ|μπαιρ)/i.test(lower))return true;
   // Fuzzy: word starting with hey/hay + word containing r+on/un/oad
   if(/(hey|hay|hi|heavy)\s/.test(lower)&&/(vir|byr|bir|ron|run|road|iro)/i.test(lower))return true;
   return false;
@@ -357,7 +361,9 @@ function extractAfterWake(text){
     "hayviron","hay viron","hayvironment","hay vironment",
     "hey environment","hey environ","hey virum","hey vironn",
     "hey fire on","hey tyron","hey myron","hey virus",
-    "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον"];
+    "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον",
+    "χέι βίρον","χει βιρον","έι βίρον","ει βιρον","χεϊ βιρον",
+    "χέι βάιρον","χει βαιρον","έι βαιρον","ε βιρον","εϊ βιρον"];
   for(const m of misrecs){
     const idx=lower.indexOf(m);
     if(idx>=0){
@@ -368,7 +374,8 @@ function extractAfterWake(text){
   // Fuzzy regex extraction: find where wake pattern ends
   const fuzzyPatterns=[
     /((?:hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(?:vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)\w*)/i,
-    /((?:hey|hay|hi|heavy)\s+\S*(?:vir|byr|bir|ron|run|road|iro)\S*)/i
+    /((?:hey|hay|hi|heavy)\s+\S*(?:vir|byr|bir|ron|run|road|iro)\S*)/i,
+    /((?:χέι|χει|έι|ει|γεια|για|ε)\s*(?:βιρ|βαιρ|βύρ|βίρ|μπαιρ)\S*)/i
   ];
   for(const pat of fuzzyPatterns){
     const match=lower.match(pat);
@@ -392,7 +399,7 @@ let alwaysListening=false;
 let lastWakeTime=0; // Prevent double triggers
 
 function startAlwaysListening(){
-  D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', lang='+getSRLang());
+  D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', wakeLang=en-US, cmdLang='+getSRLang());
   if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(alwaysListening){D('  already listening');return}
@@ -408,7 +415,7 @@ function startAlwaysListening(){
   alwaysRec=new SR();
   alwaysRec.continuous=false;
   alwaysRec.interimResults=true;
-  alwaysRec.lang=getSRLang();
+  alwaysRec.lang='en-US'; // ALWAYS English for wake word — Chrome can't hear "Hey VIRON" in Greek mode
   alwaysRec.maxAlternatives=5;
   
   let wakeDetectedInSession=false;
