@@ -211,20 +211,23 @@ function loadV(){
       v.find(x=>x.lang.startsWith("el"))||null;
   
   // ENGLISH: soft educated MALE voice
-  const femaleNames=/Female|Zira|Samantha|Sara|Jenny|Aria|Hazel|Susan|Linda|Libby|Emily|Amy|Woman/i;
+  const femaleNames=/Female|Zira|Samantha|Sara|Jenny|Aria|Hazel|Susan|Linda|Libby|Emily|Amy|Woman|Sonia|Neerja|Heera/i;
   const malePrefs=[
     x=>/Google UK English Male/i.test(x.name),
     x=>x.name.includes("Microsoft David"),
-    x=>x.name.includes("Daniel")&&x.lang.startsWith("en"),
-    x=>/Google US English/i.test(x.name)&&!/Female/i.test(x.name),
-    x=>/Mark|James|George|Thomas|Richard|Paul|Ryan/i.test(x.name)&&x.lang.startsWith("en"),
+    x=>x.name.includes("Microsoft Mark"),
+    x=>x.name.includes("Microsoft Guy"),
+    x=>x.name.includes("Microsoft Ryan"),
+    x=>/Daniel/i.test(x.name)&&x.lang.startsWith("en")&&!femaleNames.test(x.name),
     x=>/Male/i.test(x.name)&&x.lang.startsWith("en"),
-    x=>x.lang.startsWith("en")&&!x.name.includes("Compact")&&!femaleNames.test(x.name),
+    x=>/James|George|Thomas|Richard|Paul|Guy|Ryan|Andrew/i.test(x.name)&&x.lang.startsWith("en"),
+    // Last resort: any English voice NOT known-female AND NOT "Google US English" (which is female)
+    x=>x.lang.startsWith("en")&&!x.name.includes("Compact")&&!femaleNames.test(x.name)&&!/Google US English$/i.test(x.name)&&!/Google/i.test(x.name),
   ];
   enV=null;
   for(const pref of malePrefs){
     enV=enVoices.find(pref);
-    if(enV)break;
+    if(enV){D('  → Matched male voice: '+enV.name);break;}
   }
   
   D('Greek voice: '+(gkV?.name||'NONE (will use gTTS)'));
@@ -249,76 +252,55 @@ function say(text){
     .replace(/[\u{200D}\u{20E3}\u{FE0F}]/gu,'') // joiners
     .replace(/\s+/g,' ').trim();
   
-  D('  say: "'+clean.substring(0,80)+'..." greek='+isGr(clean)+' gkV='+(gkV?gkV.name:'NONE'));
+  D('  say: "'+clean.substring(0,80)+'..." greek='+isGr(clean));
   
   if(!clean){D('  say: empty after cleanup');stopT();startWakeListener();return}
   
-  // Greek text → always use server gTTS (most reliable)
-  if(isGr(clean)){
-    sayGoogleTTS(clean);
-    return;
-  }
-  // English text
-  const ss=clean.match(/[^.!;·?]+[.!;·?]?/g)||[clean];
-  let d=0;
-  ss.forEach((s,i)=>{
-    const x=s.trim();if(!x)return;
-    setTimeout(()=>{
-      const u=new SpeechSynthesisUtterance(x);
-      u.volume=(document.getElementById("volSlider")?.value||75)/100;
-      u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=0.95;
-      if(i===0)u.onstart=()=>startT();
-      if(i===ss.length-1){
-        u.onend=()=>{D('  TTS ended');stopT();startWakeListener()};
-        u.onerror=(e)=>{D('  TTS error: '+e.error);stopT();startWakeListener()};
-      }
-      synth.speak(u);
-    },d);d+=50;
-  });
+  // ALL speech → server edge-tts (male voice) with browser fallback
+  const lang=isGr(clean)?'el':'en';
+  sayServerTTS(clean,lang);
 }
 
-// Google Translate TTS fallback for Greek
+// Server TTS (edge-tts male voice) — works for ALL languages
 let audioUnlocked=false;
 function unlockAudio(){
   if(audioUnlocked)return;
-  // Play a silent audio to unlock Chrome's autoplay policy
   const s=new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
   s.volume=0.01;
   s.play().then(()=>{audioUnlocked=true;D('🔓 Audio unlocked')}).catch(()=>{});
-  // Also unlock speechSynthesis
   const u=new SpeechSynthesisUtterance('');u.volume=0;synth.speak(u);
 }
-// Unlock on ANY user interaction
 document.addEventListener('click',unlockAudio,{once:false});
 document.addEventListener('touchstart',unlockAudio,{once:false});
 document.addEventListener('keydown',unlockAudio,{once:false});
 
-function sayGoogleTTS(text){
-  D('  sayGoogleTTS: "'+text.substring(0,60)+'"');
+function sayServerTTS(text,lang){
+  D('  sayServerTTS('+lang+'): "'+text.substring(0,60)+'"');
   startT();
-  fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:'el'})})
+  fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:lang||'en'})})
   .then(r=>{
-    D('  gTTS response: '+r.status);
+    D('  TTS response: '+r.status);
     if(!r.ok)throw new Error('HTTP '+r.status);
     return r.blob();
   })
   .then(blob=>{
-    D('  gTTS blob: '+blob.size+' bytes');
+    D('  TTS blob: '+blob.size+' bytes');
     const url=URL.createObjectURL(blob);
     const a=new Audio(url);
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{D('  gTTS playback ended');URL.revokeObjectURL(url);stopT();startWakeListener()};
-    a.onerror=(e)=>{D('  gTTS playback ERROR: '+e.type);URL.revokeObjectURL(url);stopT();startWakeListener()};
-    a.play().catch(e=>{D('  gTTS play() ERROR: '+e.message);stopT();startWakeListener()})
+    a.onended=()=>{D('  TTS playback ended');URL.revokeObjectURL(url);stopT();startWakeListener()};
+    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);URL.revokeObjectURL(url);stopT();startWakeListener()};
+    a.play().catch(e=>{D('  TTS play() ERROR: '+e.message);stopT();startWakeListener()})
   })
   .catch(e=>{
-    D('  gTTS FAILED: '+e.message+' — using female English voice');
+    D('  Server TTS FAILED: '+e.message+' — falling back to browser voice');
     stopT();
-    // Fallback: use English female voice (never risk a male Greek voice)
+    // Fallback: browser SpeechSynthesis (male voice)
     const u=new SpeechSynthesisUtterance(text);
-    u.lang="en-US";
-    if(enV)u.voice=enV;
-    u.rate=0.9;u.pitch=0.95;
+    u.lang=lang==='el'?'el-GR':'en-US';
+    if(lang!=='el'&&enV)u.voice=enV;
+    if(lang==='el'&&gkV)u.voice=gkV;
+    u.rate=0.9;u.pitch=0.85;
     u.onend=()=>{stopT();startWakeListener()};
     u.onerror=()=>{stopT();startWakeListener()};
     synth.speak(u);
@@ -358,11 +340,41 @@ function matchesWakeWord(text){
 
 function extractAfterWake(text){
   const lower=text.toLowerCase();
-  // Try to extract what comes after the wake word
+  // Try exact WAKE_WORDS first
   for(const w of WAKE_WORDS){
     const idx=lower.indexOf(w);
     if(idx>=0){
       const after=text.substring(idx+w.length).trim();
+      if(after.length>2)return after;
+    }
+  }
+  // Try misrecognitions
+  const misrecs=["heavy road","heavy ron","heavy run","heavy iron","heavy roan",
+    "hey byron","hey veron","hey baron","hey bron","hey ron","hey run",
+    "hey iron","hey violin","hey viral","hey viren","hey vyron",
+    "have iran","have iron","hey iran","hey irene","hey brian","hey bryan",
+    "heavy wrong","heavy round","hey around","hey brown",
+    "hayviron","hay viron","hayvironment","hay vironment",
+    "hey environment","hey environ","hey virum","hey vironn",
+    "hey fire on","hey tyron","hey myron","hey virus",
+    "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον"];
+  for(const m of misrecs){
+    const idx=lower.indexOf(m);
+    if(idx>=0){
+      const after=text.substring(idx+m.length).trim();
+      if(after.length>2)return after;
+    }
+  }
+  // Fuzzy regex extraction: find where wake pattern ends
+  const fuzzyPatterns=[
+    /((?:hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(?:vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)\w*)/i,
+    /((?:hey|hay|hi|heavy)\s+\S*(?:vir|byr|bir|ron|run|road|iro)\S*)/i
+  ];
+  for(const pat of fuzzyPatterns){
+    const match=lower.match(pat);
+    if(match){
+      const endIdx=lower.indexOf(match[1])+match[1].length;
+      const after=text.substring(endIdx).trim();
       if(after.length>2)return after;
     }
   }
@@ -467,19 +479,9 @@ function startAlwaysListening(){
         
         // Quick ack
         const ackText=isGreekMode()?"Ναι;":"Yes?";
-        if(isGreekMode()){
-          // Always use gTTS for Greek — guarantees female voice
-          sayGoogleTTS(ackText);
-          setTimeout(startCommandListening,1000);
-        }else{
-          const ack=new SpeechSynthesisUtterance(ackText);
-          ack.lang="en-US";
-          if(enV)ack.voice=enV;
-          ack.volume=0.7;ack.rate=1.0;ack.pitch=0.95;
-          ack.onend=()=>startCommandListening();
-          ack.onerror=()=>startCommandListening();
-          synth.speak(ack);
-        }
+        // Use server TTS for consistent male voice
+        sayServerTTS(ackText,isGreekMode()?'el':'en');
+        setTimeout(startCommandListening,1200);
       }
       return;
     }

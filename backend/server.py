@@ -425,11 +425,11 @@ def text_to_speech():
     # Try edge-tts first (has male Greek voice)
     try:
         import edge_tts, asyncio, io
-        # Male voices: el-GR-NestorasNeural (Greek), en-US-GuyNeural (English)
-        voice = "el-GR-NestorasNeural" if lang == "el" else "en-US-GuyNeural"
+        # Male voices: el-GR-NestorasNeural (Greek), en-GB-RyanNeural (soft British male)
+        voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
         
         async def gen():
-            communicate = edge_tts.Communicate(text, voice, rate="-5%", pitch="-2st")
+            communicate = edge_tts.Communicate(text, voice, rate="-8%", pitch="-4st")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
