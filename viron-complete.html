@@ -222,29 +222,83 @@ function loadV(){
 }
 if(synth){synth.onvoiceschanged=loadV;loadV()}
 const isGr=t=>/[\u0370-\u03FF\u1F00-\u1FFF]/.test(t);
-function say(text){if(!synth)return;synth.cancel();showSub(text);
-  const ttsText=text.replace(/VIRON/gi,'Βίρον');
-  if(isGr(ttsText)&&!gkV){sayGoogleTTS(ttsText);return}
-  const ss=text.match(/[^.!;·?]+[.!;·?]?/g)||[text];let d=0;ss.forEach((s,i)=>{const x=s.trim();if(!x)return;setTimeout(()=>{const u=new SpeechSynthesisUtterance(x);u.volume=(document.getElementById("volSlider")?.value||75)/100;if(isGr(x)){u.lang="el-GR";if(gkV)u.voice=gkV;u.rate=0.88;u.pitch=1.1}else{u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.1}if(i===0)u.onstart=()=>startT();if(i===ss.length-1){u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()}}synth.speak(u)},d);d+=50})}
+function say(text){
+  if(!synth){D('  say: no synth!');return}
+  synth.cancel();
+  showSub(text);
+  // Strip emojis and special chars that break TTS
+  let clean=text.replace(/VIRON/gi,'Βίρον')
+    .replace(/[\u{1F600}-\u{1F64F}]/gu,'')  // emoticons
+    .replace(/[\u{1F300}-\u{1F5FF}]/gu,'')  // symbols
+    .replace(/[\u{1F680}-\u{1F6FF}]/gu,'')  // transport
+    .replace(/[\u{1F1E0}-\u{1F1FF}]/gu,'')  // flags
+    .replace(/[\u{2600}-\u{26FF}]/gu,'')     // misc symbols
+    .replace(/[\u{2700}-\u{27BF}]/gu,'')     // dingbats
+    .replace(/[\u{FE00}-\u{FEFF}]/gu,'')     // variation selectors
+    .replace(/[\u{1F900}-\u{1F9FF}]/gu,'')   // supplemental
+    .replace(/[\u{200D}\u{20E3}\u{FE0F}]/gu,'') // joiners
+    .replace(/\s+/g,' ').trim();
+  
+  D('  say: "'+clean.substring(0,80)+'..." greek='+isGr(clean)+' gkV='+(gkV?gkV.name:'NONE'));
+  
+  if(!clean){D('  say: empty after cleanup');stopT();startWakeListener();return}
+  
+  // Greek text → always use server gTTS (most reliable)
+  if(isGr(clean)){
+    sayGoogleTTS(clean);
+    return;
+  }
+  // English text
+  const ss=clean.match(/[^.!;·?]+[.!;·?]?/g)||[clean];
+  let d=0;
+  ss.forEach((s,i)=>{
+    const x=s.trim();if(!x)return;
+    setTimeout(()=>{
+      const u=new SpeechSynthesisUtterance(x);
+      u.volume=(document.getElementById("volSlider")?.value||75)/100;
+      u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.1;
+      if(i===0)u.onstart=()=>startT();
+      if(i===ss.length-1){
+        u.onend=()=>{D('  TTS ended');stopT();startWakeListener()};
+        u.onerror=(e)=>{D('  TTS error: '+e.error);stopT();startWakeListener()};
+      }
+      synth.speak(u);
+    },d);d+=50;
+  });
+}
 
 // Google Translate TTS fallback for Greek
 function sayGoogleTTS(text){
+  D('  sayGoogleTTS: "'+text.substring(0,60)+'"');
   startT();
-  // Use server-side gTTS
   fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:'el'})})
-  .then(r=>{if(!r.ok)throw new Error(r.status);return r.blob()})
+  .then(r=>{
+    D('  gTTS response: '+r.status);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.blob();
+  })
   .then(blob=>{
+    D('  gTTS blob: '+blob.size+' bytes');
     const url=URL.createObjectURL(blob);
     const a=new Audio(url);
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{URL.revokeObjectURL(url);stopT();startWakeListener()};
-    a.onerror=()=>{URL.revokeObjectURL(url);stopT();startWakeListener()};
-    a.play().catch(()=>{stopT();startWakeListener()})
+    a.onended=()=>{D('  gTTS playback ended');URL.revokeObjectURL(url);stopT();startWakeListener()};
+    a.onerror=(e)=>{D('  gTTS playback ERROR: '+e.type);URL.revokeObjectURL(url);stopT();startWakeListener()};
+    a.play().catch(e=>{D('  gTTS play() ERROR: '+e.message);stopT();startWakeListener()})
   })
-  .catch(e=>{console.warn("Server TTS failed:",e);stopT();
-    // Last resort: speak in English with native voice
-    const u=new SpeechSynthesisUtterance(text);u.lang="en-US";if(enV)u.voice=enV;
-    u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()};synth.speak(u)})
+  .catch(e=>{
+    D('  gTTS FAILED: '+e.message+' — trying browser TTS');
+    stopT();
+    // Fallback: try browser speech synthesis
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang="el-GR";
+    if(gkV)u.voice=gkV;
+    else{u.lang="en-US";if(enV)u.voice=enV;}
+    u.rate=0.9;u.pitch=1.1;
+    u.onend=()=>{stopT();startWakeListener()};
+    u.onerror=()=>{stopT();startWakeListener()};
+    synth.speak(u);
+  })
 }
 
 // ========================================
