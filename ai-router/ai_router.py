@@ -268,4 +268,3 @@ class AIRouter:
             except Exception as e:
                 pass
         return "I'm having trouble thinking right now. Try again in a moment!", "error"
-            return "All my brain cells are busy! Try again soon.", "error"
