@@ -70,7 +70,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 /* Whiteboard */
 .wb-overlay{position:fixed;inset:0;z-index:80;pointer-events:none;opacity:0;transition:opacity 0.8s}
 /* Boot splash */
-.boot-splash{position:fixed;inset:0;z-index:200;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 1s}
+.boot-splash{position:fixed;inset:0;z-index:200;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 1s;cursor:pointer}
 .boot-splash.hidden{opacity:0;pointer-events:none}
 .boot-splash img{width:min(60vw,400px);animation:bootPulse 2s ease-in-out infinite}
 .boot-splash .boot-text{color:rgba(0,200,255,0.6);font-size:14px;margin-top:24px;letter-spacing:3px;animation:bootFade 1.5s ease-in-out infinite alternate}
@@ -93,7 +93,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <body>
 <div class="boot-splash" id="bootSplash">
   <img src="/static/viron-logo.png" alt="VIRON">
-  <div class="boot-text">INITIALIZING...</div>
+  <div class="boot-text">TAP TO START</div>
 </div>
 <div class="engagement-bar" id="engBar"><div class="eng-dot" id="engDot"></div><span class="eng-label" id="engLabel"></span></div>
 <button class="hamburger" id="hb" onclick="toggleSettings()"><span></span><span></span><span></span></button>
@@ -268,6 +268,21 @@ function say(text){
 }
 
 // Google Translate TTS fallback for Greek
+let audioUnlocked=false;
+function unlockAudio(){
+  if(audioUnlocked)return;
+  // Play a silent audio to unlock Chrome's autoplay policy
+  const s=new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+  s.volume=0.01;
+  s.play().then(()=>{audioUnlocked=true;D('🔓 Audio unlocked')}).catch(()=>{});
+  // Also unlock speechSynthesis
+  const u=new SpeechSynthesisUtterance('');u.volume=0;synth.speak(u);
+}
+// Unlock on ANY user interaction
+document.addEventListener('click',unlockAudio,{once:false});
+document.addEventListener('touchstart',unlockAudio,{once:false});
+document.addEventListener('keydown',unlockAudio,{once:false});
+
 function sayGoogleTTS(text){
   D('  sayGoogleTTS: "'+text.substring(0,60)+'"');
   startT();
@@ -695,20 +710,29 @@ document.getElementById('langSelect').value=vironLang;
 
 fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
 
-// Boot splash → fade out after 3 seconds
-setTimeout(()=>{
-  const splash=document.getElementById('bootSplash');
-  if(splash)splash.classList.add('hidden');
-  setTimeout(()=>{if(splash)splash.style.display='none'},1000);
+// Boot splash → require tap to unlock audio, then start
+const splash=document.getElementById('bootSplash');
+splash.addEventListener('click',function startViron(){
+  splash.classList.add('hidden');
+  setTimeout(()=>{splash.style.display='none'},1000);
+  unlockAudio();
   
-  // Greet in selected language
-  cE("excited");
-  if(isGreekMode()){
-    say("Γεια! Είμαι η VIRON! Πες Hey VIRON για να μου μιλήσεις!");
-  }else{
-    say("Hi! I'm VIRON! Say Hey VIRON to talk to me!");
-  }
-},3000);
+  // Greet in selected language (audio now unlocked)
+  setTimeout(()=>{
+    cE("excited");
+    if(isGreekMode()){
+      say("Γεια! Είμαι η VIRON!");
+    }else{
+      say("Hi! I'm VIRON! Say Hey VIRON to talk to me!");
+    }
+  },500);
+  
+  // Start listening after greeting
+  setTimeout(()=>{
+    D('Starting always-on listening');
+    startAlwaysListening();
+  },4000);
+},{once:true});
 
 // Keepalive: ensure always-on listening stays alive
 setInterval(()=>{
@@ -717,13 +741,6 @@ setInterval(()=>{
     startAlwaysListening();
   }
 },5000);
-
-// Start always-on listening after greeting finishes
-D('Will start listening in 7 seconds...');
-setTimeout(()=>{
-  D('Starting always-on listening');
-  startAlwaysListening();
-},7000);
 
 // ===== SVG RENDER =====
 const svg=document.getElementById("face");
