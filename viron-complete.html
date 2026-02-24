@@ -69,6 +69,13 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .yt-close{background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px}
 /* Whiteboard */
 .wb-overlay{position:fixed;inset:0;z-index:80;pointer-events:none;opacity:0;transition:opacity 0.8s}
+/* Boot splash */
+.boot-splash{position:fixed;inset:0;z-index:200;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 1s}
+.boot-splash.hidden{opacity:0;pointer-events:none}
+.boot-splash img{width:min(60vw,400px);animation:bootPulse 2s ease-in-out infinite}
+.boot-splash .boot-text{color:rgba(0,200,255,0.6);font-size:14px;margin-top:24px;letter-spacing:3px;animation:bootFade 1.5s ease-in-out infinite alternate}
+@keyframes bootPulse{0%,100%{transform:scale(1);opacity:0.9}50%{transform:scale(1.03);opacity:1}}
+@keyframes bootFade{0%{opacity:0.3}100%{opacity:0.8}}
 .wb-overlay.active{opacity:1;pointer-events:all}
 .wb-bg{position:absolute;inset:0;background:#f5f5f0}
 .wb-hdr{position:absolute;top:12px;left:16px;right:16px;display:flex;justify-content:space-between;align-items:center;z-index:2}
@@ -84,6 +91,10 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 </style>
 </head>
 <body>
+<div class="boot-splash" id="bootSplash">
+  <img src="/static/viron-logo.png" alt="VIRON">
+  <div class="boot-text">INITIALIZING...</div>
+</div>
 <div class="engagement-bar" id="engBar"><div class="eng-dot" id="engDot"></div><span class="eng-label" id="engLabel"></span></div>
 <button class="hamburger" id="hb" onclick="toggleSettings()"><span></span><span></span><span></span></button>
 <div class="settings-overlay" id="so" onclick="toggleSettings()"></div>
@@ -91,6 +102,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <h2>⚙️ Settings</h2>
   <div class="setting-group"><h3>📶 Wi-Fi</h3><div class="setting-item"><label>📶 Wi-Fi</label><button class="toggle on" onclick="this.classList.toggle('on')"></button></div><div><div class="wifi-item connected"><span>🔒 HomeNetwork</span><span style="color:rgba(255,255,255,0.4)">Connected</span></div></div></div>
   <div class="setting-group"><h3>🔆 Display</h3><div class="setting-item"><label>🔆 Brightness</label><input type="range" min="10" max="100" value="80" oninput="document.body.style.filter='brightness('+this.value/100+')'"></div><div class="setting-item"><label>🌙 Night Mode</label><button class="toggle" onclick="this.classList.toggle('on');document.body.style.background=this.classList.contains('on')?'#0a0508':'#000'"></button></div></div>
+  <div class="setting-group"><h3>🗣️ Language</h3><div class="setting-item"><label>🌍 VIRON Language</label><select id="langSelect" onchange="setVironLang(this.value)" style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px"><option value="en">🇬🇧 English</option><option value="el">🇬🇷 Ελληνικά</option></select></div></div>
   <div class="setting-group"><h3>🔊 Sound</h3><div class="setting-item"><label>🔊 Volume</label><input type="range" id="volSlider" min="0" max="100" value="75"></div></div>
   <div class="setting-group"><h3>🔋 Battery</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:8px"><div style="display:flex;justify-content:space-between"><label>🔋</label><span style="color:rgba(0,200,255,0.8)" id="bp">78%</span></div><div class="battery-bar"><div class="battery-fill" id="bf" style="width:78%;background:linear-gradient(90deg,#00e0ff,#00ff88)"></div><span class="battery-text" id="bt">78%</span></div></div></div>
   <div class="setting-group"><h3>🤖 AI</h3><div class="setting-item"><label>📷 Emotion Detection</label><button class="toggle on" onclick="this.classList.toggle('on');emotionDetectionOn=this.classList.contains('on')"></button></div><div class="setting-item"><label>🎭 Proactive Care</label><button class="toggle on" onclick="this.classList.toggle('on');proactiveEnabled=this.classList.contains('on')"></button></div></div>
@@ -146,10 +158,24 @@ let proactiveEnabled=true,emotionDetectionOn=true,lastPT=0;
 let subTimer=null;
 
 // Voice states
-const VOICE_IDLE="idle";       // Passive listening for wake word
-const VOICE_ACTIVATED="activated"; // Wake word heard, actively listening
+const VOICE_IDLE="idle";       // Listening always
+const VOICE_ACTIVATED="activated"; // Wake word heard, processing
 const VOICE_PROCESSING="processing"; // Sending to AI
 let voiceState=VOICE_IDLE;
+
+// ===== LANGUAGE SETTING =====
+// Stored in localStorage. 'el' = Greek, 'en' = English
+let vironLang=localStorage.getItem('viron-lang')||'en';
+function setVironLang(lang){
+  vironLang=lang;
+  localStorage.setItem('viron-lang',lang);
+  D('Language set to: '+lang);
+  // Restart listener with new language
+  stopAllRecognition();
+  setTimeout(startAlwaysListening,500);
+}
+function getSRLang(){return vironLang==='el'?'el-GR':'en-US';}
+function isGreekMode(){return vironLang==='el';}
 
 const lerp=(a,b,t)=>a+(b-a)*t;
 function lE(f,t,tt){const r={};for(const k in t)r[k]=typeof t[k]==="number"?lerp(f[k]??t[k],t[k],tt):(tt>.5?t[k]:f[k]);return r}
@@ -173,15 +199,33 @@ function updateListenUI(){
 
 // ===== SPEECH =====
 const synth=window.speechSynthesis;let gkV=null,enV=null;
-function loadV(){const v=synth.getVoices();console.log("Available voices:",v.length,v.filter(x=>x.lang.startsWith("el")).map(x=>x.name+" ("+x.lang+")"));gkV=v.find(x=>x.lang.startsWith("el")&&x.name.includes("Google"))||v.find(x=>x.lang.startsWith("el")&&!x.name.includes("Compact"))||v.find(x=>x.lang.startsWith("el"))||null;enV=v.find(x=>x.name.includes("Natural")&&x.lang.startsWith("en"))||v.find(x=>/Samantha|Daniel|Google UK/.test(x.name))||v.find(x=>x.lang.startsWith("en-")&&!x.name.includes("Compact"))||null;console.log("Greek voice:",gkV?.name||"NONE (will use lang=el-GR)");console.log("English voice:",enV?.name||"NONE")}
+function loadV(){
+  const v=synth.getVoices();
+  D('Voices available: '+v.length);
+  // GREEK: prefer female voices
+  gkV=v.find(x=>x.lang.startsWith("el")&&x.name.includes("Google"))||
+      v.find(x=>x.lang.startsWith("el")&&/female|woman/i.test(x.name))||
+      v.find(x=>x.lang.startsWith("el")&&!x.name.includes("Compact"))||
+      v.find(x=>x.lang.startsWith("el"))||null;
+  // ENGLISH: prefer female soft voices
+  enV=v.find(x=>x.name.includes("Microsoft Zira")&&x.lang.startsWith("en"))||
+      v.find(x=>x.name.includes("Samantha")&&x.lang.startsWith("en"))||
+      v.find(x=>/Google UK English Female/i.test(x.name))||
+      v.find(x=>/female/i.test(x.name)&&x.lang.startsWith("en"))||
+      v.find(x=>x.name.includes("Natural")&&x.lang.startsWith("en")&&/female|zira|jenny|aria|sara/i.test(x.name))||
+      v.find(x=>/Zira|Jenny|Aria|Sara|Hazel|Susan|Linda/i.test(x.name)&&x.lang.startsWith("en"))||
+      v.find(x=>x.name.includes("Google UK English Female"))||
+      v.find(x=>/Google.*Female/i.test(x.name)&&x.lang.startsWith("en"))||
+      v.find(x=>x.lang.startsWith("en-")&&!x.name.includes("Compact"))||null;
+  D('Greek voice: '+(gkV?.name||'NONE'));
+  D('English voice: '+(enV?.name||'NONE'));
+}
 if(synth){synth.onvoiceschanged=loadV;loadV()}
 const isGr=t=>/[\u0370-\u03FF\u1F00-\u1FFF]/.test(t);
 function say(text){if(!synth)return;synth.cancel();showSub(text);
-  // Fix VIRON pronunciation for Greek TTS
   const ttsText=text.replace(/VIRON/gi,'Βίρον');
-  // If text is Greek but no Greek voice, use audio fallback
   if(isGr(ttsText)&&!gkV){sayGoogleTTS(ttsText);return}
-  const ss=text.match(/[^.!;·?]+[.!;·?]?/g)||[text];let d=0;ss.forEach((s,i)=>{const x=s.trim();if(!x)return;setTimeout(()=>{const u=new SpeechSynthesisUtterance(x);u.volume=(document.getElementById("volSlider")?.value||75)/100;if(isGr(x)){u.lang="el-GR";if(gkV)u.voice=gkV;u.rate=0.88;u.pitch=1.0}else{u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.0}if(i===0)u.onstart=()=>startT();if(i===ss.length-1){u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()}}synth.speak(u)},d);d+=50})}
+  const ss=text.match(/[^.!;·?]+[.!;·?]?/g)||[text];let d=0;ss.forEach((s,i)=>{const x=s.trim();if(!x)return;setTimeout(()=>{const u=new SpeechSynthesisUtterance(x);u.volume=(document.getElementById("volSlider")?.value||75)/100;if(isGr(x)){u.lang="el-GR";if(gkV)u.voice=gkV;u.rate=0.88;u.pitch=1.1}else{u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.1}if(i===0)u.onstart=()=>startT();if(i===ss.length-1){u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()}}synth.speak(u)},d);d+=50})}
 
 // Google Translate TTS fallback for Greek
 function sayGoogleTTS(text){
@@ -250,14 +294,15 @@ function extractAfterWake(text){
 let wakeStarting=false;
 
 // ===== ALWAYS-ON LISTENING =====
-// Uses Chrome SpeechRecognition ONLY (no AudioContext — it steals the mic)
-// VIRON listens at ALL times. Any speech is processed.
+// continuous=false → Chrome reliably produces FINAL results
+// Auto-restarts after each phrase
+// Only processes speech containing "Hey VIRON" wake word
 
 let alwaysRec=null;
 let alwaysListening=false;
 
 function startAlwaysListening(){
-  D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading);
+  D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', lang='+getSRLang());
   if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(alwaysListening){D('  already listening');return}
@@ -271,21 +316,22 @@ function startAlwaysListening(){
   try{if(alwaysRec){alwaysRec.abort()}}catch{}
   
   alwaysRec=new SR();
-  alwaysRec.continuous=true;
+  // KEY FIX: continuous=false produces reliable FINAL results
+  alwaysRec.continuous=false;
   alwaysRec.interimResults=true;
-  alwaysRec.lang='el-GR'; // Greek primary — also recognizes English
-  alwaysRec.maxAlternatives=3;
+  alwaysRec.lang=getSRLang(); // Use selected language!
+  alwaysRec.maxAlternatives=5;
   
   alwaysRec.onstart=()=>{
     alwaysListening=true;
-    D('  ✅ Always-on listening ACTIVE');
-    document.getElementById("listenText").textContent='Listening...';
+    D('  ✅ Listening ('+getSRLang()+')');
+    document.getElementById("listenText").textContent='Say "Hey VIRON"';
   };
   
   alwaysRec.onresult=(e)=>{
     let finalText="";
     let interim="";
-    for(let i=0;i<e.results.length;i++){
+    for(let i=e.resultIndex;i<e.results.length;i++){
       if(e.results[i].isFinal){
         finalText+=e.results[i][0].transcript;
       }else{
@@ -295,71 +341,178 @@ function startAlwaysListening(){
     
     const display=finalText||interim;
     if(display){
-      D('  🎤 Heard: final="'+finalText+'" interim="'+interim+'"');
-      document.getElementById("subtitle").textContent=display;
-      document.getElementById("subtitle").classList.add("visible");
+      D('  🎤 final="'+finalText+'" interim="'+interim+'"');
     }
     
-    if(finalText&&finalText.trim().length>1&&!loading){
+    if(finalText&&finalText.trim().length>1){
       const text=finalText.trim();
-      D('  ✅ Processing speech: "'+text+'"');
+      D('  ✅ FINAL: "'+text+'"');
       
-      // Stop listening while processing
-      alwaysListening=false;
-      try{alwaysRec.abort()}catch{}
+      // Check ALL alternatives for wake word
+      let wakeFound=false;
+      let bestTranscript=text;
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        for(let j=0;j<e.results[i].length;j++){
+          const alt=e.results[i][j].transcript.trim();
+          if(matchesWakeWord(alt)){
+            wakeFound=true;
+            bestTranscript=alt;
+            D('  🎯 Wake word in alternative '+j+': "'+alt+'"');
+            break;
+          }
+        }
+        if(wakeFound)break;
+      }
       
-      // Show we heard it
-      cE("hopeful");
-      voiceState=VOICE_PROCESSING;
-      updateListenUI();
+      if(!wakeFound&&matchesWakeWord(text)){
+        wakeFound=true;
+      }
       
-      // Process
-      processStudentSpeech(text);
+      if(wakeFound){
+        D('  🎤 WAKE WORD DETECTED in: "'+bestTranscript+'"');
+        alwaysListening=false;
+        try{alwaysRec.abort()}catch{}
+        
+        // Extract what comes after "Hey VIRON"
+        const afterWake=extractAfterWake(bestTranscript);
+        if(afterWake&&afterWake.length>2){
+          D('  → Direct command: "'+afterWake+'"');
+          cE("hopeful");
+          voiceState=VOICE_PROCESSING;
+          updateListenUI();
+          processStudentSpeech(afterWake);
+        }else{
+          // Just "Hey VIRON" — acknowledge and listen for command
+          D('  → Acknowledged, now listening for command');
+          cE("hopeful");
+          voiceState=VOICE_ACTIVATED;
+          updateListenUI();
+          document.getElementById("listenText").textContent='Listening...';
+          // Quick ack sound
+          if(isGreekMode()){
+            sayGoogleTTS("Ναι;");
+          }else{
+            const ack=new SpeechSynthesisUtterance("Yes?");
+            ack.lang="en-US";if(enV)ack.voice=enV;ack.volume=0.6;ack.rate=1.1;ack.pitch=1.2;
+            ack.onend=()=>startCommandListening();
+            ack.onerror=()=>startCommandListening();
+            synth.speak(ack);
+            return;
+          }
+          setTimeout(startCommandListening,800);
+        }
+      }else{
+        // Not a wake word — ignore, keep listening
+        D('  (no wake word, ignoring)');
+      }
     }
   };
   
   alwaysRec.onerror=(e)=>{
-    D('  ⚠️ alwaysRec error: '+e.error);
+    D('  ⚠️ error: '+e.error);
     alwaysListening=false;
     
     if(e.error==='not-allowed'){
       D('  ❌ Mic permission denied!');
-      document.getElementById("listenText").textContent="Mic blocked — click 🔒 to allow";
+      document.getElementById("listenText").textContent="Mic blocked — click 🔒";
       return;
     }
-    
-    // For no-speech, aborted, network — just restart
+    // Restart for no-speech, aborted, network errors
     clearTimeout(wakeRetryTimeout);
     wakeRetryTimeout=setTimeout(()=>{
-      if(!loading&&!(synth&&synth.speaking)){
-        startAlwaysListening();
-      }
-    },500);
+      if(!loading&&!(synth&&synth.speaking))startAlwaysListening();
+    },300);
   };
   
   alwaysRec.onend=()=>{
-    D('  alwaysRec.onend, alwaysListening='+alwaysListening);
+    D('  onend, alwaysListening='+alwaysListening);
     alwaysListening=false;
-    
-    // Auto-restart if we should still be listening
-    if(!loading&&!(synth&&synth.speaking)){
+    // Auto-restart to keep listening
+    if(voiceState===VOICE_IDLE&&!loading&&!(synth&&synth.speaking)){
       clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startAlwaysListening,300);
+      wakeRetryTimeout=setTimeout(startAlwaysListening,200);
     }
   };
   
   try{
     alwaysRec.start();
-    D('  alwaysRec.start() called');
+    D('  start() called');
   }catch(e){
-    D('  ❌ alwaysRec.start() error: '+e.message);
+    D('  ❌ start() error: '+e.message);
     alwaysListening=false;
     clearTimeout(wakeRetryTimeout);
     wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
   }
 }
 
-// Alias for compatibility — other code calls startWakeListener
+// After wake word detected, listen for the actual command
+function startCommandListening(){
+  D('>>> startCommandListening');
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return;
+  
+  let cmdRec=new SR();
+  cmdRec.continuous=false;
+  cmdRec.interimResults=true;
+  cmdRec.lang=getSRLang();
+  cmdRec.maxAlternatives=3;
+  
+  let gotResult=false;
+  let cmdTimeout=setTimeout(()=>{
+    if(!gotResult){
+      D('  ⏰ Command timeout');
+      cmdRec.stop();
+      cE("confused");
+      say(isGreekMode()?"Δεν σε άκουσα!":"I didn't catch that!");
+    }
+  },8000);
+  
+  cmdRec.onresult=(e)=>{
+    let finalText="";
+    let interim="";
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal) finalText+=e.results[i][0].transcript;
+      else interim+=e.results[i][0].transcript;
+    }
+    if(finalText||interim){
+      document.getElementById("listenText").textContent=finalText||interim;
+    }
+    if(finalText&&finalText.trim().length>1){
+      gotResult=true;
+      clearTimeout(cmdTimeout);
+      D('  ✅ Command: "'+finalText.trim()+'"');
+      cE("thinking");
+      voiceState=VOICE_PROCESSING;
+      updateListenUI();
+      processStudentSpeech(finalText.trim());
+    }
+  };
+  
+  cmdRec.onerror=(e)=>{
+    clearTimeout(cmdTimeout);
+    D('  ⚠️ cmd error: '+e.error);
+    if(!gotResult){
+      voiceState=VOICE_IDLE;
+      startAlwaysListening();
+    }
+  };
+  
+  cmdRec.onend=()=>{
+    clearTimeout(cmdTimeout);
+    if(!gotResult){
+      voiceState=VOICE_IDLE;
+      startAlwaysListening();
+    }
+  };
+  
+  try{cmdRec.start()}catch(e){
+    D('  ❌ cmd start error: '+e.message);
+    voiceState=VOICE_IDLE;
+    startAlwaysListening();
+  }
+}
+
+// Alias for compatibility
 function startWakeListener(){
   startAlwaysListening();
 }
@@ -473,28 +626,41 @@ const ST=Date.now();setInterval(()=>{const d=Date.now()-ST;document.getElementBy
 
 // ===== INIT =====
 D('=== INIT ===');
+
+// Set language selector to current language
+document.getElementById('langSelect').value=vironLang;
+
 fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
-// Greet then start listening
+
+// Boot splash → fade out after 3 seconds
 setTimeout(()=>{
+  const splash=document.getElementById('bootSplash');
+  if(splash)splash.classList.add('hidden');
+  setTimeout(()=>{if(splash)splash.style.display='none'},1000);
+  
+  // Greet in selected language
   cE("excited");
-  D('  Playing greeting');
-  say("Γεια! Είμαι ο VIRON!");
-},2500);
+  if(isGreekMode()){
+    say("Γεια! Είμαι η VIRON! Πες Hey VIRON για να μου μιλήσεις!");
+  }else{
+    say("Hi! I'm VIRON! Say Hey VIRON to talk to me!");
+  }
+},3000);
 
 // Keepalive: ensure always-on listening stays alive
 setInterval(()=>{
-  if(!loading&&!(synth&&synth.speaking)&&!alwaysListening){
-    D('  Keepalive: listener dead, restarting');
+  if(voiceState===VOICE_IDLE&&!loading&&!(synth&&synth.speaking)&&!alwaysListening){
+    D('  Keepalive: restarting listener');
     startAlwaysListening();
   }
 },5000);
 
-// Start always-on listening after greeting (give it time to finish speaking)
-D('Will start always-on listening in 5 seconds...');
+// Start always-on listening after greeting finishes
+D('Will start listening in 7 seconds...');
 setTimeout(()=>{
-  D('Starting always-on listening NOW');
+  D('Starting always-on listening');
   startAlwaysListening();
-},5000);
+},7000);
 
 // ===== SVG RENDER =====
 const svg=document.getElementById("face");

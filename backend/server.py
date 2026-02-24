@@ -510,6 +510,11 @@ def main_face():
 def logo():
     return send_from_directory(SCRIPT_DIR, 'viron-logo.png')
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    static_dir = os.path.join(ROOT_DIR, 'static')
+    return send_from_directory(static_dir, filename)
+
 # ============ START ============
 if __name__ == '__main__':
     port = config['port']
