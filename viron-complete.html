@@ -486,9 +486,27 @@ function startAlwaysListening(){
         
         // Quick ack
         const ackText=isGreekMode()?"Ναι;":"Yes?";
-        // Use server TTS for consistent male voice
-        sayServerTTS(ackText,isGreekMode()?'el':'en');
-        setTimeout(startCommandListening,1200);
+        // Play ack then start command listening (DON'T use sayServerTTS — it restarts wake listener)
+        D('  Playing ack: "'+ackText+'"');
+        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
+        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+        .then(blob=>{
+          const url=URL.createObjectURL(blob);
+          const a=new Audio(url);
+          a.volume=0.6;
+          a.onended=()=>{D('  Ack ended, starting command listen');URL.revokeObjectURL(url);startCommandListening()};
+          a.onerror=()=>{URL.revokeObjectURL(url);startCommandListening()};
+          a.play().catch(()=>startCommandListening());
+        })
+        .catch(e=>{
+          D('  Ack TTS failed: '+e+', using browser voice');
+          const ack=new SpeechSynthesisUtterance(ackText);
+          ack.lang="en-US";if(enV)ack.voice=enV;
+          ack.volume=0.6;ack.rate=1.0;ack.pitch=0.85;
+          ack.onend=()=>startCommandListening();
+          ack.onerror=()=>startCommandListening();
+          synth.speak(ack);
+        });
       }
       return;
     }

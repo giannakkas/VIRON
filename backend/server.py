@@ -427,6 +427,7 @@ def text_to_speech():
         import edge_tts, asyncio, io
         # Male voices: el-GR-NestorasNeural (Greek), en-GB-RyanNeural (soft British male)
         voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
+        print(f"🎙️ edge-tts: voice={voice}, text='{text[:50]}'")
         
         async def gen():
             communicate = edge_tts.Communicate(text, voice, rate="-8%", pitch="-4st")
@@ -440,12 +441,17 @@ def text_to_speech():
         loop = asyncio.new_event_loop()
         buf = loop.run_until_complete(gen())
         loop.close()
-        return Response(buf.read(), mimetype='audio/mpeg',
+        audio_bytes = buf.read()
+        print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
+        return Response(audio_bytes, mimetype='audio/mpeg',
                        headers={'Content-Disposition': 'inline'})
     except ImportError:
         print("⚠ edge-tts not installed, using gTTS (pip install edge-tts)")
     except Exception as e:
-        print(f"⚠ edge-tts error: {e}, falling back to gTTS")
+        import traceback
+        print(f"⚠ edge-tts error: {e}")
+        traceback.print_exc()
+        print("Falling back to gTTS")
     
     # Fallback: gTTS
     if not HAS_GTTS:
