@@ -232,17 +232,28 @@ function startWakeListener(){
   if(voiceState===VOICE_ACTIVATED||loading||wakeStarting)return;
   if(synth&&synth.speaking){setTimeout(startWakeListener,1000);return}
   
-  wakeStarting=true;
   voiceState=VOICE_IDLE;
   updateListenUI();
+  wakeStarting=false;
 
-  // If WebSocket wake word server is available, use it
+  // Resume mic capture if already connected
+  if(audioContext&&audioContext.state==="suspended"){
+    audioContext.resume();
+    console.log("🎤 Wake word listening resumed");
+  }
+  
+  // If not connected yet, connect
   if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
-    connectWakeWordServer();
+    if(!wakeStarting){
+      wakeStarting=true;
+      connectWakeWordServer();
+    }
     return;
   }
   
-  wakeStarting=false;
+  if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
+    document.getElementById("listenText").textContent='Say "Hey Jarvis"';
+  }
 }
 
 function connectWakeWordServer(){
@@ -338,11 +349,21 @@ function startMicCapture(){
 }
 
 function stopMicCapture(){
-  // Don't close — just pause sending (voiceState check in onaudioprocess)
+  // Suspend audio context so SpeechRecognition can use the mic
+  if(audioContext&&audioContext.state==="running"){
+    audioContext.suspend();
+    console.log("🎤 Mic capture paused for active listening");
+  }
 }
 
 function resumeMicCapture(){
-  // Audio keeps flowing, onaudioprocess checks voiceState
+  // Resume audio streaming to wake word server
+  if(audioContext&&audioContext.state==="suspended"){
+    audioContext.resume();
+    console.log("🎤 Mic capture resumed for wake word");
+  }
+  voiceState=VOICE_IDLE;
+  updateListenUI();
   if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
     document.getElementById("listenText").textContent='Say "Hey Jarvis"';
   }
@@ -394,7 +415,7 @@ function startActiveListening(){
   activeRec=new SR();
   activeRec.continuous=true; // Keep listening until user stops
   activeRec.interimResults=true;
-  activeRec.lang="el-GR"; // Understands both Greek and English
+  activeRec.lang="en-US"; // Primary language (handles both well)
   activeRec.maxAlternatives=3;
 
   let silenceTimer=null;
@@ -489,6 +510,7 @@ document.getElementById("face").addEventListener("click",()=>{
   if(voiceState===VOICE_ACTIVATED)return;
   console.log("👆 Face tapped — activating");
   stopAllRecognition();
+  stopMicCapture();
   onWakeWordDetected(null);
 });
 

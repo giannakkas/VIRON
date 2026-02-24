@@ -49,9 +49,12 @@ def init_model():
         # Download models if not present
         openwakeword.utils.download_models()
         
-        # Use "hey jarvis" as closest match to "hey viron"
-        # Later we can train a custom model
-        oww_model = Model(inference_framework="onnx")
+        # Only load "hey jarvis" — closest to "hey viron"
+        # This uses far fewer file descriptors than loading all models
+        oww_model = Model(
+            wakeword_models=["hey_jarvis"],
+            inference_framework="onnx"
+        )
         
         print("✅ openWakeWord models loaded:")
         for name in oww_model.models.keys():
@@ -95,6 +98,7 @@ async def handle_client(websocket, path=None):
                         client_sr = data["sample_rate"]
                         print(f"   Client sample rate: {client_sr}Hz")
                     if "threshold" in data:
+                        global THRESHOLD
                         THRESHOLD = data["threshold"]
                         print(f"   Detection threshold: {THRESHOLD}")
                     continue
