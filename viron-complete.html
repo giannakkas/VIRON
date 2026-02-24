@@ -116,7 +116,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <button class="sbtn danger" onclick="if(!confirm('Shutdown?'))return;cE('sleepy');toggleSettings();document.body.style.transition='opacity 2s';document.body.style.opacity='0';setTimeout(()=>{fetch('/api/system/shutdown',{method:'POST'}).catch(()=>{});document.body.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100vh;color:rgba(255,255,255,0.2);font-size:14px\'>VIRON is off.</div>';document.body.style.opacity='1'},2500)">⏻ Shutdown</button></div>
   <div style="text-align:center;color:rgba(255,255,255,0.15);font-size:11px;margin-top:20px">VIRON AI Companion • v1.0</div>
 </div>
-<div class="wb-overlay" id="wb"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div><div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:13px;color:#999;font-style:italic">Say "OK" to close the whiteboard</div></div>
+<div class="wb-overlay" id="wb" onclick="if(wbO&&!wbPresenting)closeWB()"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div><div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:13px;color:#999;font-style:italic">Say "OK" or tap anywhere to close</div></div>
 <div class="yt-container" id="ytC"><div class="yt-header"><span class="yt-title" id="ytT">♪</span><button class="yt-close" onclick="document.getElementById('ytP').src='';document.getElementById('ytC').classList.remove('visible')">✕</button></div><iframe id="ytP" width="280" height="158" src="" allow="autoplay;encrypted-media" allowfullscreen style="border:none;border-radius:10px"></iframe></div>
 <div class="listen-indicator wake" id="listenInd">
   <div class="listen-bars"><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div></div>
@@ -674,8 +674,8 @@ function startCommandListening(){
       let speech=finalText.trim();
       D('  🎤 Final: "'+speech+'" (confidence='+confidence.toFixed(2)+')');
       
-      // NOISE FILTER: reject low-confidence or nonsense speech
-      if(confidence>0&&confidence<0.5){
+      // NOISE FILTER: reject low-confidence speech (skip during whiteboard — just need 'ok')
+      if(!wbO&&confidence>0&&confidence<0.5){
         D('  🔇 Low confidence ('+confidence.toFixed(2)+'), ignoring');
         if(inConversation||wbO)setTimeout(startCommandListening,300);
         return;
@@ -683,17 +683,13 @@ function startCommandListening(){
       
       // WHITEBOARD MODE: only accept close commands, ignore everything else
       if(wbO){
-        if(/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it|κατάλαβα|ωραία)\b/i.test(speech)){
+        if(/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it|κατάλαβα|ωραία|back|πίσω)\b/i.test(speech)){
           D('  📋 Closing whiteboard via voice: "'+speech+'"');
           gotResult=true;handled=true;clearTimeout(cmdTimeout);
-          closeWB();
-          if(inConversation){
-            say(isGreekMode()?"Θέλεις κάτι άλλο;":"Anything else?");
-          }else{voiceState=VOICE_IDLE;startAlwaysListening()}
+          closeWB(); // closeWB handles conversation resume
         }else{
-          D('  📋 Whiteboard open, ignoring non-close speech: "'+speech+'"');
-          // Keep listening for close command
-          setTimeout(startCommandListening,300);
+          D('  📋 Whiteboard open, ignoring: "'+speech+'"');
+          setTimeout(startCommandListening,500);
         }
         return;
       }
@@ -924,14 +920,25 @@ Be real. Be warm. Be their brilliant friend.`,
     const wb=parseWB(c);
     if(wb){
       // Extract spoken explanation (everything outside WHITEBOARD tags)
-      const sp=c.replace(/\[WHITEBOARD:.*?\][\s\S]*?\[\/WHITEBOARD\]\s*/,"").trim()||"Κοίτα!";
-      msgs.push({role:"assistant",content:sp});
+      const sp=c.replace(/\[WHITEBOARD:.*?\][\s\S]*?\[\/WHITEBOARD\]\s*/,"").trim()||"";
+      msgs.push({role:"assistant",content:c});
       cE("thinking");
       wbO=true;wbPresenting=true;
       stopAllRecognition();
-      // Open whiteboard and speak explanation simultaneously
+      
+      // Build narration from whiteboard steps
+      const narrationParts=[];
+      if(sp)narrationParts.push(sp);
+      wb.s.forEach(step=>{
+        if(step.text)narrationParts.push(step.text);
+        else if(step.label)narrationParts.push(step.label);
+        else if(step.result)narrationParts.push(step.result);
+      });
+      const fullNarration=narrationParts.join(". ")||"Κοίτα στον πίνακα!";
+      
+      // Open whiteboard and narrate simultaneously
       setTimeout(()=>openWB(wb.t,wb.s),800);
-      setTimeout(()=>say(sp),1200); // Start speaking while board animates
+      setTimeout(()=>say(fullNarration),1200);
     }
     else{msgs.push({role:"assistant",content:c});say(c)}
   }catch(e){D('  ❌ sendMessage ERROR: '+e.message);cE("confused");say(isGreekMode()?"Ωχ! Κάτι πήγε στραβά.":"Oops! Something went wrong.")}
@@ -957,7 +964,7 @@ let wbO=false,wbT=null,wbPresenting=false;
 
 function openWB(t,steps){
   wbO=true;
-  wbPresenting=true; // Block ALL listening while presenting
+  wbPresenting=true;
   stopAllRecognition();
   
   document.getElementById("wbt").textContent=t;
@@ -981,38 +988,44 @@ function openWB(t,steps){
   document.getElementById("face").style.opacity="0";
   setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
   
-  // Animate steps one by one with narration
-  let delay=1200; // initial delay after board appears
-  const stepDelay=2500; // time per step
-  
+  // Animate steps one by one
+  const stepDelay=3000;
   stepEls.forEach((s,i)=>{
-    setTimeout(()=>{
-      s.el.classList.add("visible");
-      // Narrate this step
-      const narration=s.data.label||s.data.text||s.data.math||s.data.result||"";
-      if(narration&&i<stepEls.length-1){
-        // For non-final steps, just show (narration happens via main speech)
-      }
-    },delay+i*stepDelay);
+    setTimeout(()=>{s.el.classList.add("visible")},1200+i*stepDelay);
   });
   
-  // After all steps shown, enable close listening
-  const totalTime=delay+stepEls.length*stepDelay+1000;
+  // After all steps shown, wait then enable close
+  const totalTime=1200+stepEls.length*stepDelay+2000;
   setTimeout(()=>{
     wbPresenting=false;
-    D('  📋 Whiteboard presentation done, listening for close');
-    startCommandListening(); // Now listen for "ok"
+    cmdRetryCount=0; // fresh start
+    D('  📋 Whiteboard done, listening for close (delay 2s)');
+    // Long delay to let audio fully stop before mic starts
+    setTimeout(()=>{
+      if(wbO)startCommandListening();
+    },1500);
   },totalTime);
   
-  // Safety timeout
   wbT=setTimeout(()=>{if(wbO)closeWB()},120000);
 }
 
 function closeWB(){
+  if(!wbO)return; // prevent double-close
   wbO=false;wbPresenting=false;
   clearTimeout(wbT);
+  stopAllRecognition();
   document.getElementById("wb").classList.remove("active");
-  setTimeout(()=>{document.getElementById("face").style.opacity="1";cE("happy")},400);
+  setTimeout(()=>{
+    document.getElementById("face").style.opacity="1";
+    cE("happy");
+    // Resume conversation
+    if(inConversation){
+      say(isGreekMode()?"Θέλεις κάτι άλλο;":"Anything else?");
+    }else{
+      voiceState=VOICE_IDLE;
+      startAlwaysListening();
+    }
+  },500);
 }
 
 function parseWB(t){
