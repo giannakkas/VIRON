@@ -165,6 +165,7 @@ let subTimer=null;
 const VOICE_IDLE="idle";       // Listening always
 const VOICE_ACTIVATED="activated"; // Wake word heard, processing
 const VOICE_PROCESSING="processing"; // Sending to AI
+const VOICE_HEARING="hearing"; // Student is speaking (show red bars)
 let voiceState=VOICE_IDLE;
 
 // ===== LANGUAGE SETTING =====
@@ -196,7 +197,8 @@ function showSub(text){const el=document.getElementById("subtitle");el.textConte
 function updateListenUI(){
   const ind=document.getElementById("listenInd");
   const txt=document.getElementById("listenText");
-  if(voiceState===VOICE_IDLE){
+  if(voiceState===VOICE_HEARING){ind.className="listen-indicator speaking";txt.textContent="Listening..."}
+  else if(voiceState===VOICE_IDLE){
     ind.className="listen-indicator wake";
     txt.textContent=inConversation?'Listening...':'Say "Hey VIRON"';
   }
@@ -295,9 +297,9 @@ function sayServerTTS(text,lang){
     const url=URL.createObjectURL(blob);
     const a=new Audio(url);
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{D('  TTS playback ended');URL.revokeObjectURL(url);stopT();startWakeListener()};
-    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);URL.revokeObjectURL(url);stopT();startWakeListener()};
-    a.play().catch(e=>{D('  TTS play() ERROR: '+e.message);stopT();startWakeListener()})
+    a.onended=()=>{D('  TTS playback ended');URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
+    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
+    a.play().catch(e=>{D('  TTS play() ERROR: '+e.message);stopT();setTimeout(startWakeListener,600)})
   })
   .catch(e=>{
     D('  Server TTS FAILED: '+e.message+' — falling back to browser voice');
@@ -308,8 +310,8 @@ function sayServerTTS(text,lang){
     if(lang!=='el'&&enV)u.voice=enV;
     if(lang==='el'&&gkV)u.voice=gkV;
     u.rate=0.9;u.pitch=0.85;
-    u.onend=()=>{stopT();startWakeListener()};
-    u.onerror=()=>{stopT();startWakeListener()};
+    u.onend=()=>{stopT();setTimeout(startWakeListener,600)};
+    u.onerror=()=>{stopT();setTimeout(startWakeListener,600)};
     synth.speak(u);
   })
 }
@@ -458,7 +460,7 @@ function startAlwaysListening(){
     if(display&&display.length>2){
       D('  🎤 "'+display+'" (final='+!!finalText+')');
       // Show speaking bars when voice detected
-      document.getElementById("listenInd").className="listen-indicator speaking";
+      voiceState=VOICE_HEARING;updateListenUI();
     }
     
     // CHECK WAKE WORD IN BOTH INTERIM AND FINAL
@@ -523,7 +525,7 @@ function startAlwaysListening(){
     // If we got a final result with no wake word, just ignore it
     if(finalText){
       D('  (no wake word in: "'+finalText.trim()+'")');
-      document.getElementById("listenInd").className="listen-indicator wake";    }
+      voiceState=VOICE_IDLE;updateListenUI();    }
   };
   
   alwaysRec.onerror=(e)=>{
@@ -638,9 +640,7 @@ function startCommandListening(){
     if(finalText||interim){
       document.getElementById("listenText").textContent=finalText||interim;
       // Show red speaking bars when voice detected
-      const ind=document.getElementById("listenInd");
-      if(interim&&!finalText){ind.className="listen-indicator speaking"}
-      else{ind.className="listen-indicator active"}
+      if(interim&&!finalText){voiceState=VOICE_HEARING;updateListenUI()}
     }
     if(finalText&&finalText.trim().length>1){
       gotResult=true;
@@ -653,11 +653,13 @@ function startCommandListening(){
       let speech=finalText.trim();
       
       // Check for whiteboard close commands
-      if(wbO&&/^(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it)$/i.test(speech.trim())){
+      if(wbO&&/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it|κατάλαβα|ωραία)\b/i.test(speech.trim())){
         D('  📋 Closing whiteboard via voice: "'+speech+'"');
         closeWB();
-        if(inConversation)setTimeout(startCommandListening,500);
-        else{voiceState=VOICE_IDLE;startAlwaysListening()}
+        // After whiteboard closes, resume conversation or go back to wake word
+        if(inConversation){
+          say(isGreekMode()?"Θέλεις κάτι άλλο;":"Anything else?");
+        }else{voiceState=VOICE_IDLE;startAlwaysListening()}
         return;
       }
       
@@ -757,6 +759,12 @@ function endConversation(){
 
 function startWakeListener(){
   // After VIRON finishes speaking, decide what to do
+  if(wbO){
+    // Whiteboard is open — only listen for close commands
+    D('  📋 Whiteboard open — listening for close command only');
+    startCommandListening(); // will check wbO in onresult
+    return;
+  }
   if(inConversation){
     D('  🗣️ Still in conversation — listening for next message');
     resetConversationTimer();
@@ -862,7 +870,14 @@ Be real. Be warm. Be their friend. Keep it conversational — this is spoken alo
     const yt=c.match(/\[YOUTUBE:([a-zA-Z0-9_-]+):([^\]]+)\]/);
     if(yt){c=c.replace(/\[YOUTUBE:[^\]]+\]/,"").trim();setTimeout(()=>{document.getElementById("ytT").textContent="♪ "+yt[2];document.getElementById("ytP").src=`https://www.youtube.com/embed/${yt[1]}?autoplay=1&rel=0`;document.getElementById("ytC").classList.add("visible")},1000)}
     const wb=parseWB(c);
-    if(wb){const sp=c.replace(/\[WHITEBOARD:.*?\][\s\S]*?\[\/WHITEBOARD\]\s*/,"").trim()||"Κοίτα!";msgs.push({role:"assistant",content:sp});cE("thinking");say(isGr(sp)?"Άσε με να σου δείξω.":"Let me show you.");setTimeout(()=>{openWB(wb.t,wb.s);setTimeout(()=>say(sp),1000)},1500)}
+    if(wb){const sp=c.replace(/\[WHITEBOARD:.*?\][\s\S]*?\[\/WHITEBOARD\]\s*/,"").trim()||"Κοίτα!";msgs.push({role:"assistant",content:sp});cE("thinking");
+      // Mark whiteboard as pending so startWakeListener routes to whiteboard mode
+      wbO=true;
+      stopAllRecognition();
+      say(isGr(sp)?"Άσε με να σου δείξω.":"Let me show you.");
+      // Open whiteboard after voice finishes (say→startWakeListener→wbO→listen for close)
+      setTimeout(()=>{openWB(wb.t,wb.s)},2500);
+    }
     else{msgs.push({role:"assistant",content:c});say(c)}
   }catch(e){D('  ❌ sendMessage ERROR: '+e.message);cE("confused");say(isGreekMode()?"Ωχ! Κάτι πήγε στραβά.":"Oops! Something went wrong.")}
   loading=false;
