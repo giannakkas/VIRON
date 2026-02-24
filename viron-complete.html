@@ -225,7 +225,6 @@ function extractAfterWake(text){
 let wakeStarting=false;
 function startWakeListener(){
   if(voiceState===VOICE_ACTIVATED||loading||wakeStarting)return;
-  // Don't start while still speaking
   if(synth&&synth.speaking){setTimeout(startWakeListener,1000);return}
   
   wakeStarting=true;
@@ -237,60 +236,57 @@ function startWakeListener(){
   if(!SR){console.warn("SpeechRecognition not available");wakeStarting=false;return;}
 
   wakeRec=new SR();
-  wakeRec.continuous=true;
+  wakeRec.continuous=false; // Short bursts — more reliable than continuous
   wakeRec.interimResults=true;
   wakeRec.lang="en-US";
   wakeRec.maxAlternatives=5;
 
   wakeRec.onstart=()=>{
     wakeStarting=false;
-    console.log("🎤 Wake listener active — say 'Hey VIRON'");
   };
 
   wakeRec.onresult=e=>{
-    for(let i=e.resultIndex;i<e.results.length;i++){
-      const transcript=e.results[i][0].transcript;
-      let found=matchesWakeWord(transcript);
-      if(!found){for(let j=1;j<e.results[i].length;j++)if(matchesWakeWord(e.results[i][j].transcript)){found=true;break}}
-      if(found){
-        console.log("🎤 Wake word detected:",transcript);
-        const afterWake=extractAfterWake(transcript);
-        try{wakeRec.stop()}catch{}
-        onWakeWordDetected(afterWake);
-        return;
+    for(let i=0;i<e.results.length;i++){
+      for(let j=0;j<e.results[i].length;j++){
+        const t=e.results[i][j].transcript;
+        console.log("🎤 Heard:",t);
+        if(matchesWakeWord(t)){
+          console.log("✅ Wake word matched:",t);
+          try{wakeRec.stop()}catch{}
+          wakeRec=null;
+          onWakeWordDetected(extractAfterWake(t));
+          return;
+        }
       }
     }
   };
 
   wakeRec.onerror=e=>{
     wakeStarting=false;
+    wakeRec=null;
     if(e.error==="not-allowed"){
       document.getElementById("listenText").textContent="Tap face to talk";
-      document.getElementById("face").style.cursor="pointer";
       return;
     }
-    if(e.error==="aborted"||e.error==="network"){
-      // Don't spam restarts — wait longer
-      clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startWakeListener,3000);
-      return;
-    }
+    // Restart quickly for next burst
     clearTimeout(wakeRetryTimeout);
-    wakeRetryTimeout=setTimeout(startWakeListener,2000);
+    wakeRetryTimeout=setTimeout(startWakeListener,500);
   };
 
   wakeRec.onend=()=>{
     wakeStarting=false;
+    wakeRec=null;
+    // Immediately start next burst if still idle
     if(voiceState===VOICE_IDLE&&!loading){
       clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startWakeListener,1000);
+      wakeRetryTimeout=setTimeout(startWakeListener,200);
     }
   };
 
   try{wakeRec.start()}catch(e){
-    wakeStarting=false;
+    wakeStarting=false;wakeRec=null;
     clearTimeout(wakeRetryTimeout);
-    wakeRetryTimeout=setTimeout(startWakeListener,3000);
+    wakeRetryTimeout=setTimeout(startWakeListener,1000);
   }
 }
 
@@ -333,15 +329,17 @@ function startActiveListening(){
   if(!SR)return;
 
   activeRec=new SR();
-  activeRec.continuous=false;
-  activeRec.interimResults=false;
-  activeRec.lang="el-GR"; // Greek primary for actual speech
+  activeRec.continuous=true; // Keep listening until user stops
+  activeRec.interimResults=true;
+  activeRec.lang="el-GR"; // Understands both Greek and English
   activeRec.maxAlternatives=3;
 
   let silenceTimer=null;
   let gotResult=false;
+  let finalText="";
 
   activeRec.onstart=()=>{
+    console.log("🎤 Active listening started — speak now!");
     // Quick acknowledging sound/expression change
     setTimeout(()=>{
       if(voiceState===VOICE_ACTIVATED&&!gotResult){
@@ -361,12 +359,28 @@ function startActiveListening(){
   };
 
   activeRec.onresult=e=>{
-    gotResult=true;
     clearTimeout(silenceTimer);
-    let text="";
-    for(let i=0;i<e.results.length;i++)text+=e.results[i][0].transcript;
-    text=text.trim();
-    if(text)processStudentSpeech(text);
+    let interim="";
+    finalText="";
+    for(let i=0;i<e.results.length;i++){
+      if(e.results[i].isFinal){
+        finalText+=e.results[i][0].transcript;
+      }else{
+        interim+=e.results[i][0].transcript;
+      }
+    }
+    // Show what we're hearing
+    const display=finalText||interim;
+    if(display)document.getElementById("listenText").textContent=display;
+    
+    // If we got a final result, wait 1.5s for more speech, then process
+    if(finalText){
+      gotResult=true;
+      silenceTimer=setTimeout(()=>{
+        activeRec.stop();
+        processStudentSpeech(finalText.trim());
+      },1500);
+    }
   };
 
   activeRec.onerror=e=>{
