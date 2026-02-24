@@ -24,9 +24,18 @@ VIRON is an interactive AI-powered robot companion with an animated face, real-t
 VIRON/
 ├── viron-complete.html        # Main face UI (wake word, emotions, voice, YouTube)
 ├── setup-local.sh             # Ubuntu desktop setup script
-├── run.sh                     # One-command start
+├── run.sh                     # Start everything (Ollama + AI Router + Face Server)
+├── ai-router/                 # Smart AI routing system
+│   ├── main.py                # FastAPI server (port 8000)
+│   ├── ai_router.py           # Complexity analyzer + multi-provider routing
+│   ├── emotion_detector.py    # Text → face emotion mapping
+│   ├── safety_filter.py       # Age-based content filtering
+│   ├── config.py              # Settings from .env
+│   ├── .env.example           # Config template
+│   ├── requirements.txt       # Python dependencies
+│   └── setup.sh               # AI router setup
 ├── backend/
-│   ├── server.py              # Flask backend (AI proxy, emotion detection, hardware)
+│   ├── server.py              # Flask backend (proxies to AI router, emotion detection)
 │   ├── config.example.json    # Config template (copy to config.json)
 │   ├── boot.html              # Animated boot splash screen
 │   ├── setup.sh               # Jetson Orin Nano setup script
@@ -56,13 +65,16 @@ VIRON/
 git clone https://github.com/giannakkas/VIRON.git
 cd VIRON
 
-# 2. Run local setup (installs deps, asks for API key)
+# 2. Run local setup (installs Flask, OpenCV)
 sudo bash setup-local.sh
 
-# 3. Start VIRON
+# 3. Setup AI Router (installs FastAPI, configures API keys)
+bash ai-router/setup.sh
+
+# 4. Start everything
 ./run.sh
 
-# 4. Open in browser
+# 5. Open in browser
 # http://localhost:5000
 ```
 
@@ -89,12 +101,31 @@ sudo reboot
 5. **VIRON responds** with appropriate emotion + voice + subtitles
 6. **Returns to idle** listening for the next wake word
 
-## 🧠 AI Backend
+## 🧠 AI Architecture
 
-- **Chat**: Anthropic Claude API (Sonnet)
-- **Emotion Detection**: OpenCV with Haar cascades (face, eyes, smile, mouth)
-- **Voice**: Web Speech API (recognition + synthesis)
-- **Hardware Control**: Flask REST API with system commands
+```
+Student speaks → Face UI (port 5000) → Flask Backend → AI Router (port 8000)
+                                                              │
+                                                    ┌────────┴────────┐
+                                                    ▼                 ▼
+                                              [Simple Q]        [Complex Q]
+                                                    │                 │
+                                              Ollama Local      Cloud AI
+                                              (phi3 3.8B)   ┌────┼────┐
+                                                    │        ▼    ▼    ▼
+                                                    │     Claude Gemini ChatGPT
+                                                    └────────┬────────┘
+                                                             ▼
+                                                    Safety Filter + Emotion
+                                                             ▼
+                                                    Voice Response + Face Animation
+```
+
+- **Smart Routing**: Simple questions → local Ollama (fast, offline). Complex → cloud (Claude/Gemini/ChatGPT)
+- **Confidence Gating**: If local LLM seems uncertain, auto-escalates to cloud
+- **Safety Filter**: Age-based content filtering (kids 5-10, teens 11-15, young adults 16-18, adults 18+)
+- **Response Cache**: SQLite caching to avoid repeated API calls
+- **Emotion Detection**: Real-time student facial analysis via OpenCV
 
 ## 🎭 Emotion List
 

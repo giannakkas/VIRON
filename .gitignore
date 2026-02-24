@@ -1,5 +1,7 @@
 # API keys - NEVER commit
 backend/config.json
+ai-router/.env
+ai-router/viron_cache.db
 
 # Python
 __pycache__/
