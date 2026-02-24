@@ -102,7 +102,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <h2>⚙️ Settings</h2>
   <div class="setting-group"><h3>📶 Wi-Fi</h3><div class="setting-item"><label>📶 Wi-Fi</label><button class="toggle on" onclick="this.classList.toggle('on')"></button></div><div><div class="wifi-item connected"><span>🔒 HomeNetwork</span><span style="color:rgba(255,255,255,0.4)">Connected</span></div></div></div>
   <div class="setting-group"><h3>🔆 Display</h3><div class="setting-item"><label>🔆 Brightness</label><input type="range" min="10" max="100" value="80" oninput="document.body.style.filter='brightness('+this.value/100+')'"></div><div class="setting-item"><label>🌙 Night Mode</label><button class="toggle" onclick="this.classList.toggle('on');document.body.style.background=this.classList.contains('on')?'#0a0508':'#000'"></button></div></div>
-  <div class="setting-group"><h3>🗣️ Language</h3><div class="setting-item"><label>🌍 VIRON Language</label><select id="langSelect" onchange="setVironLang(this.value)" style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px"><option value="en">🇬🇧 English</option><option value="el">🇬🇷 Ελληνικά</option></select></div></div>
+  <div class="setting-group"><h3>🗣️ Language</h3><div class="setting-item"><label>🌍 VIRON Language</label><select id="langSelect" onchange="setVironLang(this.value)" style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px"><option value="en">🇬🇧 English</option><option value="el">🇬🇷 Greek</option></select></div></div>
   <div class="setting-group"><h3>🔊 Sound</h3><div class="setting-item"><label>🔊 Volume</label><input type="range" id="volSlider" min="0" max="100" value="75"></div></div>
   <div class="setting-group"><h3>🔋 Battery</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:8px"><div style="display:flex;justify-content:space-between"><label>🔋</label><span style="color:rgba(0,200,255,0.8)" id="bp">78%</span></div><div class="battery-bar"><div class="battery-fill" id="bf" style="width:78%;background:linear-gradient(90deg,#00e0ff,#00ff88)"></div><span class="battery-text" id="bt">78%</span></div></div></div>
   <div class="setting-group"><h3>🤖 AI</h3><div class="setting-item"><label>📷 Emotion Detection</label><button class="toggle on" onclick="this.classList.toggle('on');emotionDetectionOn=this.classList.contains('on')"></button></div><div class="setting-item"><label>🎭 Proactive Care</label><button class="toggle on" onclick="this.classList.toggle('on');proactiveEnabled=this.classList.contains('on')"></button></div></div>
@@ -256,25 +256,25 @@ let activeRec=null;
 let wakeRetryTimeout=null;
 
 function matchesWakeWord(text){
-  const lower=text.toLowerCase().trim();
+  const lower=text.toLowerCase().trim().replace(/[.,!?]/g,'');
   // Check exact matches
   for(const w of WAKE_WORDS)if(lower.includes(w))return true;
-  // Common misrecognitions of "Hey VIRON"
+  // Actual Chrome misrecognitions from testing
   const misrecognitions=["heavy road","heavy ron","heavy run","heavy iron","heavy roan",
     "hey byron","hey veron","hey baron","hey bron","hey ron","hey run",
     "hey iron","hey violin","hey viral","hey viren","hey vyron",
     "have iran","have iron","hey iran","hey irene","hey vr","hey v run",
     "a viron","a byron","hey brian","hey bryan",
     "heavy wrong","heavy round","hey around","hey brown",
-    "γεια βιρον","γεια βαιρον","για βιρον"];
+    "hayviron","hay viron","hayvironment","hay vironment",
+    "hey environment","hey environ","hey virum","hey vironn",
+    "hey fire on","hey tyron","hey myron","hey virus",
+    "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον"];
   for(const m of misrecognitions)if(lower.includes(m))return true;
-  // Fuzzy: "hey/hi/heavy" + anything containing "r" + "on/oad/un/an/own"
-  if(/(hey|hi|heavy|have|a)\s+\w*[vb]\w*r\w*[no]/i.test(lower))return true;
-  // Fuzzy: anything with "hey"/"γεια" + something close to "viron"
-  if((lower.includes("hey")||lower.includes("hi ")||lower.includes("γεια"))&&
-     (lower.includes("vir")||lower.includes("byr")||lower.includes("βιρ")||
-      lower.includes("βάιρ")||lower.includes("iron")||lower.includes("ron")||
-      lower.includes("run")||lower.includes("road")))return true;
+  // Fuzzy regex: (hey/hi/hay/heavy/a/have) + (vir/byr/bir/fir/ron/iron)
+  if(/(hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)/i.test(lower))return true;
+  // Fuzzy: word starting with hey/hay + word containing r+on/un/oad
+  if(/(hey|hay|hi|heavy)\s/.test(lower)&&/(vir|byr|bir|ron|run|road|iro)/i.test(lower))return true;
   return false;
 }
 
@@ -294,12 +294,12 @@ function extractAfterWake(text){
 let wakeStarting=false;
 
 // ===== ALWAYS-ON LISTENING =====
-// continuous=false → Chrome reliably produces FINAL results
-// Auto-restarts after each phrase
-// Only processes speech containing "Hey VIRON" wake word
+// Detects wake word from INTERIM results (Chrome often skips finals)
+// Filters background noise by checking for wake word pattern
 
 let alwaysRec=null;
 let alwaysListening=false;
+let lastWakeTime=0; // Prevent double triggers
 
 function startAlwaysListening(){
   D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', lang='+getSRLang());
@@ -316,129 +316,129 @@ function startAlwaysListening(){
   try{if(alwaysRec){alwaysRec.abort()}}catch{}
   
   alwaysRec=new SR();
-  // KEY FIX: continuous=false produces reliable FINAL results
   alwaysRec.continuous=false;
   alwaysRec.interimResults=true;
-  alwaysRec.lang=getSRLang(); // Use selected language!
+  alwaysRec.lang=getSRLang();
   alwaysRec.maxAlternatives=5;
+  
+  let wakeDetectedInSession=false;
   
   alwaysRec.onstart=()=>{
     alwaysListening=true;
-    D('  ✅ Listening ('+getSRLang()+')');
+    wakeDetectedInSession=false;
     document.getElementById("listenText").textContent='Say "Hey VIRON"';
   };
   
   alwaysRec.onresult=(e)=>{
+    if(wakeDetectedInSession)return; // Already triggered this session
+    
     let finalText="";
     let interim="";
+    let allText=""; // Combine everything for wake word check
+    
     for(let i=e.resultIndex;i<e.results.length;i++){
+      const transcript=e.results[i][0].transcript;
       if(e.results[i].isFinal){
-        finalText+=e.results[i][0].transcript;
+        finalText+=transcript;
       }else{
-        interim+=e.results[i][0].transcript;
+        interim+=transcript;
+      }
+      // Check ALL alternatives for wake word
+      for(let j=0;j<e.results[i].length;j++){
+        allText+=e.results[i][j].transcript+" ";
       }
     }
     
     const display=finalText||interim;
-    if(display){
-      D('  🎤 final="'+finalText+'" interim="'+interim+'"');
+    // Only log occasionally to reduce spam
+    if(display&&display.length>2){
+      D('  🎤 "'+display+'" (final='+!!finalText+')');
     }
     
-    if(finalText&&finalText.trim().length>1){
-      const text=finalText.trim();
-      D('  ✅ FINAL: "'+text+'"');
-      
-      // Check ALL alternatives for wake word
-      let wakeFound=false;
-      let bestTranscript=text;
-      for(let i=e.resultIndex;i<e.results.length;i++){
-        for(let j=0;j<e.results[i].length;j++){
-          const alt=e.results[i][j].transcript.trim();
-          if(matchesWakeWord(alt)){
-            wakeFound=true;
-            bestTranscript=alt;
-            D('  🎯 Wake word in alternative '+j+': "'+alt+'"');
-            break;
-          }
-        }
-        if(wakeFound)break;
+    // CHECK WAKE WORD IN BOTH INTERIM AND FINAL
+    const textToCheck=(finalText+' '+interim+' '+allText).toLowerCase();
+    
+    if(matchesWakeWord(textToCheck)){
+      // Prevent double triggers within 3 seconds
+      if(Date.now()-lastWakeTime<3000){
+        D('  (wake word debounced)');
+        return;
       }
+      lastWakeTime=Date.now();
+      wakeDetectedInSession=true;
       
-      if(!wakeFound&&matchesWakeWord(text)){
-        wakeFound=true;
-      }
+      D('  🎯 WAKE WORD DETECTED in: "'+display+'"');
+      alwaysListening=false;
+      try{alwaysRec.abort()}catch{}
       
-      if(wakeFound){
-        D('  🎤 WAKE WORD DETECTED in: "'+bestTranscript+'"');
-        alwaysListening=false;
-        try{alwaysRec.abort()}catch{}
-        
-        // Extract what comes after "Hey VIRON"
-        const afterWake=extractAfterWake(bestTranscript);
-        if(afterWake&&afterWake.length>2){
-          D('  → Direct command: "'+afterWake+'"');
-          cE("hopeful");
-          voiceState=VOICE_PROCESSING;
-          updateListenUI();
-          processStudentSpeech(afterWake);
-        }else{
-          // Just "Hey VIRON" — acknowledge and listen for command
-          D('  → Acknowledged, now listening for command');
-          cE("hopeful");
-          voiceState=VOICE_ACTIVATED;
-          updateListenUI();
-          document.getElementById("listenText").textContent='Listening...';
-          // Quick ack sound
-          if(isGreekMode()){
-            sayGoogleTTS("Ναι;");
-          }else{
-            const ack=new SpeechSynthesisUtterance("Yes?");
-            ack.lang="en-US";if(enV)ack.voice=enV;ack.volume=0.6;ack.rate=1.1;ack.pitch=1.2;
-            ack.onend=()=>startCommandListening();
-            ack.onerror=()=>startCommandListening();
-            synth.speak(ack);
-            return;
-          }
-          setTimeout(startCommandListening,800);
-        }
+      // Extract what comes after wake word
+      const afterWake=extractAfterWake(display);
+      if(afterWake&&afterWake.length>3){
+        D('  → Direct command: "'+afterWake+'"');
+        cE("hopeful");
+        voiceState=VOICE_PROCESSING;
+        updateListenUI();
+        processStudentSpeech(afterWake);
       }else{
-        // Not a wake word — ignore, keep listening
-        D('  (no wake word, ignoring)');
+        // Just "Hey VIRON" — ack and listen for command
+        D('  → Acknowledged, listening for command');
+        cE("hopeful");
+        voiceState=VOICE_ACTIVATED;
+        updateListenUI();
+        document.getElementById("listenText").textContent='Listening...';
+        
+        // Quick ack
+        const ackText=isGreekMode()?"Ναι;":"Yes?";
+        if(isGreekMode()&&!gkV){
+          sayGoogleTTS(ackText);
+          setTimeout(startCommandListening,1000);
+        }else{
+          const ack=new SpeechSynthesisUtterance(ackText);
+          ack.lang=isGreekMode()?"el-GR":"en-US";
+          if(isGreekMode()&&gkV)ack.voice=gkV;
+          else if(enV)ack.voice=enV;
+          ack.volume=0.7;ack.rate=1.1;ack.pitch=1.2;
+          ack.onend=()=>startCommandListening();
+          ack.onerror=()=>startCommandListening();
+          synth.speak(ack);
+        }
       }
+      return;
+    }
+    
+    // If we got a final result with no wake word, just ignore it
+    if(finalText){
+      D('  (no wake word in: "'+finalText.trim()+'")');
     }
   };
   
   alwaysRec.onerror=(e)=>{
-    D('  ⚠️ error: '+e.error);
     alwaysListening=false;
-    
     if(e.error==='not-allowed'){
       D('  ❌ Mic permission denied!');
       document.getElementById("listenText").textContent="Mic blocked — click 🔒";
       return;
     }
-    // Restart for no-speech, aborted, network errors
+    // Restart quickly
     clearTimeout(wakeRetryTimeout);
     wakeRetryTimeout=setTimeout(()=>{
-      if(!loading&&!(synth&&synth.speaking))startAlwaysListening();
-    },300);
+      if(voiceState===VOICE_IDLE&&!loading&&!(synth&&synth.speaking))startAlwaysListening();
+    },200);
   };
   
   alwaysRec.onend=()=>{
-    D('  onend, alwaysListening='+alwaysListening);
     alwaysListening=false;
     // Auto-restart to keep listening
     if(voiceState===VOICE_IDLE&&!loading&&!(synth&&synth.speaking)){
       clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startAlwaysListening,200);
+      wakeRetryTimeout=setTimeout(startAlwaysListening,150);
     }
   };
   
   try{
     alwaysRec.start();
-    D('  start() called');
   }catch(e){
-    D('  ❌ start() error: '+e.message);
+    D('  ❌ start error: '+e.message);
     alwaysListening=false;
     clearTimeout(wakeRetryTimeout);
     wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
