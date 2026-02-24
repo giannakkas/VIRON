@@ -299,19 +299,33 @@ function onWakeWordDetected(immediateText){
   updateListenUI();
 
   // VIRON perks up — "I'm listening!" face
-  cE("hopeful"); // Wide eyes, attentive, sparkle — the "I heard you!" look
-  synth.cancel(); // Stop any current speech
+  cE("hopeful");
+  synth.cancel();
   stopT();
 
   if(immediateText){
     // Student already said something after "Hey VIRON"
-    // Brief listening face, then process
     setTimeout(()=>processStudentSpeech(immediateText),500);
     return;
   }
 
-  // Start active listening for the actual command
-  startActiveListening();
+  // Acknowledge wake word so user knows VIRON is listening
+  const ack=new SpeechSynthesisUtterance("Ναι;");
+  ack.lang="el-GR";if(gkV)ack.voice=gkV;
+  ack.volume=0.7;ack.rate=1.1;
+  // If no Greek voice, use server TTS for acknowledgment
+  if(!gkV){
+    fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:"Ναι;",lang:"el"})})
+    .then(r=>r.blob()).then(blob=>{
+      const a=new Audio(URL.createObjectURL(blob));a.volume=0.7;
+      a.onended=()=>startActiveListening();
+      a.play().catch(()=>startActiveListening());
+    }).catch(()=>startActiveListening());
+    return;
+  }
+  ack.onend=()=>startActiveListening();
+  ack.onerror=()=>startActiveListening();
+  synth.speak(ack);
 }
 
 function startActiveListening(){
@@ -392,9 +406,12 @@ function stopAllRecognition(){
   wakeRec=null;activeRec=null;
 }
 
-// Also allow tap as fallback
+// Face tap activation - always works as backup
 document.getElementById("face").addEventListener("click",()=>{
-  if(loading||voiceState===VOICE_ACTIVATED||document.getElementById("wb").classList.contains("active"))return;
+  if(loading)return;
+  if(voiceState===VOICE_ACTIVATED)return;
+  console.log("👆 Face tapped — activating");
+  stopAllRecognition();
   onWakeWordDetected(null);
 });
 
@@ -474,6 +491,16 @@ setTimeout(()=>{
   cE("excited");
   say("Γεια! Είμαι ο VIRON! Πες μου Hey VIRON για να μου μιλήσεις!");
 },2500);
+
+// Keepalive: ensure wake listener is always running in idle mode
+setInterval(()=>{
+  if(voiceState===VOICE_IDLE&&!loading&&!wakeStarting&&!synth?.speaking){
+    if(!wakeRec){
+      console.log("🔄 Wake listener died — restarting");
+      startWakeListener();
+    }
+  }
+},5000);
 
 // Request mic permission on first load, then start wake listener
 if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
