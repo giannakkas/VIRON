@@ -223,71 +223,134 @@ function extractAfterWake(text){
 }
 
 let wakeStarting=false;
+let wakeWs=null;
+let audioContext=null;
+let audioProcessor=null;
+let micStream=null;
+
 function startWakeListener(){
   if(voiceState===VOICE_ACTIVATED||loading||wakeStarting)return;
   if(synth&&synth.speaking){setTimeout(startWakeListener,1000);return}
   
   wakeStarting=true;
-  stopAllRecognition();
   voiceState=VOICE_IDLE;
   updateListenUI();
 
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){console.warn("SpeechRecognition not available");wakeStarting=false;return;}
-
-  wakeRec=new SR();
-  wakeRec.continuous=false; // Short bursts — more reliable than continuous
-  wakeRec.interimResults=true;
-  wakeRec.lang="en-US";
-  wakeRec.maxAlternatives=5;
-
-  wakeRec.onstart=()=>{
-    wakeStarting=false;
-  };
-
-  wakeRec.onresult=e=>{
-    for(let i=0;i<e.results.length;i++){
-      for(let j=0;j<e.results[i].length;j++){
-        const t=e.results[i][j].transcript;
-        console.log("🎤 Heard:",t);
-        if(matchesWakeWord(t)){
-          console.log("✅ Wake word matched:",t);
-          try{wakeRec.stop()}catch{}
-          wakeRec=null;
-          onWakeWordDetected(extractAfterWake(t));
-          return;
-        }
-      }
-    }
-  };
-
-  wakeRec.onerror=e=>{
-    wakeStarting=false;
-    wakeRec=null;
-    if(e.error==="not-allowed"){
-      document.getElementById("listenText").textContent="Tap face to talk";
-      return;
-    }
-    // Restart quickly for next burst
-    clearTimeout(wakeRetryTimeout);
-    wakeRetryTimeout=setTimeout(startWakeListener,500);
-  };
-
-  wakeRec.onend=()=>{
-    wakeStarting=false;
-    wakeRec=null;
-    // Immediately start next burst if still idle
-    if(voiceState===VOICE_IDLE&&!loading){
-      clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startWakeListener,200);
-    }
-  };
-
-  try{wakeRec.start()}catch(e){
-    wakeStarting=false;wakeRec=null;
-    clearTimeout(wakeRetryTimeout);
-    wakeRetryTimeout=setTimeout(startWakeListener,1000);
+  // If WebSocket wake word server is available, use it
+  if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
+    connectWakeWordServer();
+    return;
   }
+  
+  wakeStarting=false;
+}
+
+function connectWakeWordServer(){
+  const wsUrl=`ws://${location.hostname}:9000`;
+  console.log("🔌 Connecting to wake word server:",wsUrl);
+  
+  try{
+    wakeWs=new WebSocket(wsUrl);
+  }catch(e){
+    console.warn("Wake word server not available, falling back to tap mode");
+    wakeStarting=false;
+    fallbackToTapMode();
+    return;
+  }
+  
+  wakeWs.onopen=()=>{
+    console.log("✅ Wake word server connected");
+    wakeStarting=false;
+    startMicCapture();
+  };
+  
+  wakeWs.onmessage=(e)=>{
+    try{
+      const data=JSON.parse(e.data);
+      if(data.type==="wake"){
+        console.log("🎤 Wake word detected!",data.model,"score:",data.score);
+        stopMicCapture();
+        onWakeWordDetected(null);
+      }
+    }catch{}
+  };
+  
+  wakeWs.onclose=()=>{
+    console.log("🔌 Wake word server disconnected");
+    wakeStarting=false;
+    // Try to reconnect after delay
+    if(voiceState===VOICE_IDLE){
+      clearTimeout(wakeRetryTimeout);
+      wakeRetryTimeout=setTimeout(()=>{
+        if(voiceState===VOICE_IDLE)connectWakeWordServer();
+      },3000);
+    }
+  };
+  
+  wakeWs.onerror=()=>{
+    console.warn("Wake word server error — using tap mode");
+    wakeStarting=false;
+    fallbackToTapMode();
+  };
+}
+
+function startMicCapture(){
+  if(audioContext)return;
+  
+  navigator.mediaDevices.getUserMedia({audio:{
+    echoCancellation:true,
+    noiseSuppression:true,
+    channelCount:1,
+    sampleRate:16000
+  }}).then(stream=>{
+    micStream=stream;
+    audioContext=new(window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+    const source=audioContext.createMediaStreamSource(stream);
+    
+    // Send sample rate to server
+    if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
+      wakeWs.send(JSON.stringify({sample_rate:audioContext.sampleRate}));
+    }
+    
+    // Use ScriptProcessor for compatibility (AudioWorklet needs HTTPS)
+    audioProcessor=audioContext.createScriptProcessor(4096,1,1);
+    audioProcessor.onaudioprocess=(e)=>{
+      if(wakeWs&&wakeWs.readyState===WebSocket.OPEN&&voiceState===VOICE_IDLE){
+        const float32=e.inputBuffer.getChannelData(0);
+        // Convert float32 to int16
+        const int16=new Int16Array(float32.length);
+        for(let i=0;i<float32.length;i++){
+          int16[i]=Math.max(-32768,Math.min(32767,Math.round(float32[i]*32767)));
+        }
+        wakeWs.send(int16.buffer);
+      }
+    };
+    
+    source.connect(audioProcessor);
+    audioProcessor.connect(audioContext.destination);
+    
+    console.log("🎤 Mic capture started ("+audioContext.sampleRate+"Hz)");
+    document.getElementById("listenText").textContent='Say "Hey Jarvis"';
+  }).catch(e=>{
+    console.warn("Mic access denied:",e);
+    fallbackToTapMode();
+  });
+}
+
+function stopMicCapture(){
+  // Don't close — just pause sending (voiceState check in onaudioprocess)
+}
+
+function resumeMicCapture(){
+  // Audio keeps flowing, onaudioprocess checks voiceState
+  if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
+    document.getElementById("listenText").textContent='Say "Hey Jarvis"';
+  }
+}
+
+function fallbackToTapMode(){
+  document.getElementById("listenText").textContent="Tap face to talk";
+  document.getElementById("face").style.cursor="pointer";
 }
 
 function onWakeWordDetected(immediateText){
@@ -506,15 +569,15 @@ setTimeout(()=>{
   say("Γεια! Είμαι ο VIRON! Πες μου Hey VIRON για να μου μιλήσεις!");
 },2500);
 
-// Keepalive: ensure wake listener is always running in idle mode
+// Keepalive: ensure wake word connection stays alive
 setInterval(()=>{
-  if(voiceState===VOICE_IDLE&&!loading&&!wakeStarting&&!synth?.speaking){
-    if(!wakeRec){
-      console.log("🔄 Wake listener died — restarting");
-      startWakeListener();
+  if(voiceState===VOICE_IDLE&&!loading&&!synth?.speaking){
+    if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
+      console.log("🔄 Wake word reconnecting...");
+      connectWakeWordServer();
     }
   }
-},5000);
+},10000);
 
 // Request mic permission on first load, then start wake listener
 if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){

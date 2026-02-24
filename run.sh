@@ -48,19 +48,36 @@ python3 backend/server.py &
 FLASK_PID=$!
 sleep 2
 
+# Start Wake Word Server (port 9000)
+WAKE_PID=""
+if python3 -c "import openwakeword" 2>/dev/null; then
+    echo "  🎤 Starting Wake Word Server (port 9000)..."
+    cd "$SCRIPT_DIR"
+    python3 wake-word/wake_server.py &
+    WAKE_PID=$!
+    sleep 2
+    echo "  ✓ Wake word server running"
+else
+    echo "  ⚠ openWakeWord not installed — wake word disabled"
+    echo "    Install: bash wake-word/setup.sh"
+fi
+
 echo ""
 echo "  ═══════════════════════════════════════"
 echo "  🤖 VIRON is running!"
 echo "  ═══════════════════════════════════════"
-echo "  🖥️  Face:    http://localhost:5000"
-echo "  🧠 AI API:  http://localhost:8000/docs"
+echo "  🖥️  Face:      http://localhost:5000"
+echo "  🧠 AI API:    http://localhost:8000/docs"
+if [ -n "$WAKE_PID" ]; then
+echo "  🎤 Wake Word: ws://localhost:9000"
+fi
 echo "  ═══════════════════════════════════════"
 echo ""
 echo "  Press Ctrl+C to stop everything"
 echo ""
 
 # Handle shutdown
-trap "echo ''; echo '🛑 Stopping VIRON...'; kill $AI_PID $FLASK_PID 2>/dev/null; exit" INT TERM
+trap "echo ''; echo '🛑 Stopping VIRON...'; kill $AI_PID $FLASK_PID $WAKE_PID 2>/dev/null; exit" INT TERM
 
 # Wait for either to exit
 wait
