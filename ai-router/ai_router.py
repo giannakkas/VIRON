@@ -258,54 +258,14 @@ class AIRouter:
         complexity, confidence = self.complexity_analyzer.analyze(message, context)
         self.last_complexity = complexity
 
-        if complexity == "simple":
-            # Try local first
+        # ALWAYS use cloud (Claude) — Ollama is too slow/unreliable
+        cloud = self._pick_cloud()
+        if cloud:
             try:
-                local_ok = await self.check_local()
-                if local_ok:
-                    reply = await self.query_local(message, history, system_prompt)
-                    # Confidence gate: if response seems uncertain, escalate
-                    if not self._check_confidence(reply):
-                        cloud = self._pick_cloud()
-                        if cloud:
-                            try:
-                                reply = await self._query_cloud(cloud, message, history, system_prompt)
-                                self.cache.set(message, system_prompt, reply, cloud)
-                                return reply, f"{cloud}(escalated)"
-                            except:
-                                pass
-                    self.cache.set(message, system_prompt, reply, "local")
-                    return reply, "local"
-            except:
+                reply = await self._query_cloud(cloud, message, history, system_prompt)
+                self.cache.set(message, system_prompt, reply, cloud)
+                return reply, cloud
+            except Exception as e:
                 pass
-
-            # Local failed, try cloud
-            cloud = self._pick_cloud()
-            if cloud:
-                try:
-                    reply = await self._query_cloud(cloud, message, history, system_prompt)
-                    self.cache.set(message, system_prompt, reply, f"{cloud}(fallback)")
-                    return reply, f"{cloud}(fallback)"
-                except:
-                    pass
-            return "I'm having trouble thinking right now. Try again in a moment!", "error"
-
-        else:
-            # Complex → cloud first
-            cloud = self._pick_cloud()
-            if cloud:
-                try:
-                    reply = await self._query_cloud(cloud, message, history, system_prompt)
-                    self.cache.set(message, system_prompt, reply, cloud)
-                    return reply, cloud
-                except:
-                    pass
-
-            # Cloud failed, try local
-            try:
-                reply = await self.query_local(message, history, system_prompt)
-                self.cache.set(message, system_prompt, reply, "local(fallback)")
-                return reply, "local(fallback)"
-            except:
-                pass
+        return "I'm having trouble thinking right now. Try again in a moment!", "error"
             return "All my brain cells are busy! Try again soon.", "error"

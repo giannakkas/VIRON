@@ -325,7 +325,7 @@ def test_tts():
     try:
         import edge_tts, asyncio, io
         async def gen():
-            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+10%", pitch="-2st")
+            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+18%", pitch="-2st")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -481,7 +481,7 @@ def text_to_speech():
         print(f"🎙️ edge-tts: voice={voice}, text='{text[:50]}'")
         
         async def gen():
-            communicate = edge_tts.Communicate(text, voice, rate="+10%", pitch="-2st")
+            communicate = edge_tts.Communicate(text, voice, rate="+18%", pitch="-2st")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":

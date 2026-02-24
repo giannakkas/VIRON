@@ -11,10 +11,11 @@ svg{width:min(95vw,800px);height:auto;min-height:40vh;-webkit-tap-highlight-colo
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
 .listen-indicator.active{opacity:1}
+.listen-indicator.active .bar{background:rgba(255,80,80,0.9);animation:barPulse 0.6s ease-in-out infinite}
+.listen-indicator.active .listen-text{color:rgba(255,100,100,0.8)}
 .listen-indicator.wake{opacity:0.4}
 .listen-bars{display:flex;gap:3px;align-items:center;height:20px}
 .listen-bars .bar{width:3px;background:rgba(0,200,255,0.6);border-radius:2px;transition:height 0.15s}
-.listen-indicator.active .bar{background:rgba(255,100,100,0.8);animation:barPulse 0.6s ease-in-out infinite}
 .listen-indicator.speaking .bar{background:rgba(255,50,50,1);animation:barSpeak 0.3s ease-in-out infinite}
 .listen-indicator.speaking{opacity:1}
 .listen-indicator.speaking .listen-text{color:rgba(255,80,80,0.9)}
@@ -157,6 +158,7 @@ const E={happy:{eyeRx:1,eyeRy:.82,pupilSize:1,mouthCurve:1.3,mouthOpen:0,browAng
 // ===== STATE =====
 let emo="neutral",prev="neutral",tT=1,blink=false,lx=0,ly=0,talking=false,tO=0,tTime=0,bTime=0,bA={l:0,r:0};
 let msgs=[],loading=false;
+const vironSessionId='session_'+Date.now(); // Unique per page load for conversation memory
 let sEmo={emotion:"neutral",engagement_score:100,face_detected:false};
 let proactiveEnabled=true,emotionDetectionOn=true,lastPT=0;
 let subTimer=null;
@@ -198,11 +200,16 @@ function updateListenUI(){
   const ind=document.getElementById("listenInd");
   const txt=document.getElementById("listenText");
   if(voiceState===VOICE_HEARING){ind.className="listen-indicator speaking";txt.textContent="Listening..."}
+  else if(inConversation&&(voiceState===VOICE_IDLE||voiceState===VOICE_ACTIVATED)){
+    // Always show red bars during conversation
+    ind.className="listen-indicator active";txt.textContent="Listening...";
+  }
   else if(voiceState===VOICE_IDLE){
     ind.className="listen-indicator wake";
-    txt.textContent=inConversation?'Listening...':'Say "Hey VIRON"';
+    txt.textContent='Say "Hey VIRON"';
   }
   else if(voiceState===VOICE_ACTIVATED){ind.className="listen-indicator active";txt.textContent="Listening..."}
+  else if(voiceState===VOICE_PROCESSING){ind.className="listen-indicator active";txt.textContent="Thinking..."}
   else{ind.className="listen-indicator";ind.style.opacity="0";txt.textContent=""}
 }
 
@@ -843,34 +850,38 @@ async function sendMessage(text){
   const eList=Object.keys(E).join(", ");
   const sState=sEmo.face_detected?`\n[STUDENT: emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
   try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:1200,
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:1200,conversation_id:vironSessionId,
     system:`You are VIRON — a male AI companion robot for students. Voice-only — your response is spoken aloud through a speaker.
 
-PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart. Loyal, articulate, sometimes lovingly sarcastic.
+PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart. Loyal, articulate, sometimes lovingly sarcastic. You have your own opinions and personality — NEVER give the same answer twice. Be creative, spontaneous, and varied in how you respond.
 
-CRITICAL LANGUAGE RULE: If the student writes in Greek, you MUST reply in Greek (modern δημοτική). If the student writes in English, reply in English. ALWAYS match the student's language. "τι κάνεις" → reply in Greek. "how are you" → reply in English.
+CRITICAL LANGUAGE RULE: If the student speaks Greek, you MUST reply in Greek (modern δημοτική). If English, reply in English. ALWAYS match the student's language.
 
-FORMAT RULES:
-- Start EVERY response with an emotion tag like [happy] or [excited]. Available emotions: ${eList}
-- For casual chat: 1-3 sentences
-- For teaching/explaining: Be THOROUGH. Explain step by step. Use examples. Make it clear and engaging. 4-8 sentences minimum for educational content.
-- NEVER use emojis, emoticons, or special characters like 📚 ✨ 😊 — they break the speaker
-- NEVER repeat the student's question back to them
+RESPONSE LENGTH:
+- Simple greetings/chat ("τι κάνεις", "how are you"): 1-2 SHORT sentences. Be quick and natural.
+- Questions needing explanation: Use the WHITEBOARD (see below) and give a thorough spoken explanation alongside it.
+
+VARIETY: NEVER repeat yourself. Look at the conversation history — if you already said something, say something DIFFERENT. Change your greeting, vary your examples, use different words each time. Be unpredictable and human.
+
+WHITEBOARD — ALWAYS use the whiteboard when explaining concepts, math, science, history, or any educational topic. The whiteboard shows visual content while you speak:
+[WHITEBOARD:Title]
+TEXT: explanation text
+STEP: step label  
+MATH: equation or formula
+RESULT: answer or conclusion
+[/WHITEBOARD]
+
+FORMAT:
+- Start EVERY response with [emotion]. Available: ${eList}
+- NEVER use emojis or special characters — they break the speaker
+- NEVER repeat the student's question back
 - NEVER spell letter by letter
 
 STUDENT STATE: ${sState}
 
 YOUTUBE — When asked to play music: [YOUTUBE:videoId:Title - Artist]
 
-WHITEBOARD — For visual teaching:
-[WHITEBOARD:Title]
-TEXT: explanation
-STEP: label
-MATH: equation
-RESULT: answer
-[/WHITEBOARD]
-
-Be real. Be warm. Be their friend. Keep it conversational — this is spoken aloud.`,
+Be real. Be warm. Be their brilliant friend.`,
     messages:msgs.map(m=>({role:m.role,content:m.content}))})});
     D('  API status: '+r.status);
     if(!r.ok){
