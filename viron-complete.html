@@ -15,6 +15,9 @@ svg{width:min(95vw,800px);height:auto;min-height:40vh;-webkit-tap-highlight-colo
 .listen-bars{display:flex;gap:3px;align-items:center;height:20px}
 .listen-bars .bar{width:3px;background:rgba(0,200,255,0.6);border-radius:2px;transition:height 0.15s}
 .listen-indicator.active .bar{background:rgba(255,100,100,0.8);animation:barPulse 0.6s ease-in-out infinite}
+.listen-indicator.speaking .bar{background:rgba(255,50,50,1);animation:barSpeak 0.3s ease-in-out infinite}
+.listen-indicator.speaking{opacity:1}
+.listen-indicator.speaking .listen-text{color:rgba(255,80,80,0.9)}
 .listen-indicator.wake .bar{background:rgba(0,200,255,0.4);height:4px!important;animation:none}
 .bar:nth-child(1){animation-delay:0s!important}
 .bar:nth-child(2){animation-delay:0.1s!important}
@@ -22,6 +25,7 @@ svg{width:min(95vw,800px);height:auto;min-height:40vh;-webkit-tap-highlight-colo
 .bar:nth-child(4){animation-delay:0.1s!important}
 .bar:nth-child(5){animation-delay:0s!important}
 @keyframes barPulse{0%,100%{height:6px}50%{height:20px}}
+@keyframes barSpeak{0%,100%{height:8px}50%{height:28px}}
 .listen-text{font-size:13px;color:rgba(255,255,255,0.5);letter-spacing:1px}
 .listen-indicator.active .listen-text{color:rgba(255,100,100,0.7)}
 /* Subtitle */
@@ -453,6 +457,8 @@ function startAlwaysListening(){
     // Only log occasionally to reduce spam
     if(display&&display.length>2){
       D('  🎤 "'+display+'" (final='+!!finalText+')');
+      // Show speaking bars when voice detected
+      document.getElementById("listenInd").className="listen-indicator speaking";
     }
     
     // CHECK WAKE WORD IN BOTH INTERIM AND FINAL
@@ -517,7 +523,7 @@ function startAlwaysListening(){
     // If we got a final result with no wake word, just ignore it
     if(finalText){
       D('  (no wake word in: "'+finalText.trim()+'")');
-    }
+      document.getElementById("listenInd").className="listen-indicator wake";    }
   };
   
   alwaysRec.onerror=(e)=>{
@@ -562,12 +568,19 @@ function startCommandListening(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR)return;
   
-  // Don't start if audio is still playing
+  // Don't start if audio is still playing (browser TTS or edge-tts Audio)
   if(synth&&synth.speaking){
     D('  synth still speaking, retry in 500ms');
     setTimeout(startCommandListening,500);
     return;
   }
+  // Check for any playing Audio elements (edge-tts)
+  const audios=document.querySelectorAll('audio');
+  for(const a of audios){if(!a.paused&&!a.ended){
+    D('  Audio still playing, retry in 500ms');
+    setTimeout(startCommandListening,500);
+    return;
+  }}
   
   // Prevent infinite restart loops
   if(cmdRetryCount>=MAX_CMD_RETRIES){
@@ -624,6 +637,10 @@ function startCommandListening(){
     }
     if(finalText||interim){
       document.getElementById("listenText").textContent=finalText||interim;
+      // Show red speaking bars when voice detected
+      const ind=document.getElementById("listenInd");
+      if(interim&&!finalText){ind.className="listen-indicator speaking"}
+      else{ind.className="listen-indicator active"}
     }
     if(finalText&&finalText.trim().length>1){
       gotResult=true;
@@ -696,7 +713,7 @@ function startCommandListening(){
     }
   };
   
-  try{cmdRec.start();cmdRetryCount=0}catch(e){
+  try{cmdRec.start()}catch(e){
     D('  ❌ cmd start error: '+e.message);
     cmdRetryCount++;
     if(inConversation)setTimeout(startCommandListening,1000);
