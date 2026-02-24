@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html><head><title>VIRON Debug</title>
+<style>
+body{background:#111;color:#0f0;font-family:monospace;padding:20px}
+h2{color:#0ff}
+.ok{color:#0f0} .err{color:#f00} .warn{color:#ff0} .info{color:#aaa}
+#log{background:#000;padding:10px;height:500px;overflow-y:auto;border:1px solid #333;white-space:pre-wrap;font-size:12px}
+button{background:#333;color:#fff;border:1px solid #555;padding:8px 16px;margin:5px;cursor:pointer;font-family:monospace}
+button:hover{background:#555}
+.status{margin:10px 0;padding:10px;background:#1a1a1a;border:1px solid #333}
+.section{margin:15px 0}
+</style></head><body>
+<h2>🤖 VIRON Debug Console</h2>
+
+<div class="status" id="status">Checking services...</div>
+
+<div class="section">
+<h3>🔍 Quick Tests (run each one)</h3>
+<button onclick="testMic()">🎤 1. Test Microphone</button>
+<button onclick="testWakeWs()">🔌 2. Test Wake Word WS</button>
+<button onclick="testSpeechRec()">👂 3. Test Speech Recognition (speak after clicking!)</button>
+<button onclick="testTTS()">🗣️ 4. Test Greek TTS</button>
+<button onclick="testChat()">💬 5. Test AI Chat</button>
+<button onclick="testFullFlow()">🔄 6. Full Wake→Listen→Chat Flow</button>
+</div>
+
+<div class="section">
+<button onclick="clearLog()">🗑️ Clear</button>
+<button onclick="getServerLog()">📋 Get Server Log</button>
+<button onclick="commitLog()">📤 Save to Git</button>
+</div>
+
+<h3>Live Log</h3>
+<div id="log"></div>
+
+<script>
+const logEl=document.getElementById('log');
+
+function addLog(msg,cls='ok'){
+    const t=new Date().toTimeString().split(' ')[0];
+    logEl.innerHTML+=`<span class="${cls}">[${t}] ${msg}</span>\n`;
+    logEl.scrollTop=logEl.scrollHeight;
+    fetch('/debug/log',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({source:'debug',message:msg,level:cls==='err'?'ERROR':cls==='warn'?'WARN':'INFO'})}).catch(()=>{});
+}
+
+// ===== SERVICE STATUS =====
+async function checkStatus(){
+    try{
+        const r=await fetch('/debug/status');
+        const d=await r.json();
+        let html='<b>🔧 Service Status:</b><br>';
+        for(const[k,v]of Object.entries(d)) html+=`  ${k}: ${v}<br>`;
+        document.getElementById('status').innerHTML=html;
+        addLog('Service status checked','info');
+    }catch(e){
+        document.getElementById('status').innerHTML='<span class="err">Cannot reach server</span>';
+    }
+}
+checkStatus();
+
+// ===== TEST 1: MICROPHONE =====
+async function testMic(){
+    addLog('═══ TEST: Microphone Access ═══');
+    
+    // Check API availability
+    if(!navigator.mediaDevices){
+        addLog('❌ navigator.mediaDevices is UNDEFINED','err');
+        addLog('   This means you are NOT on localhost or HTTPS','err');
+        addLog('   URL: '+location.href,'err');
+        return;
+    }
+    if(!navigator.mediaDevices.getUserMedia){
+        addLog('❌ getUserMedia not available','err');
+        return;
+    }
+    addLog('✅ getUserMedia API available');
+    
+    try{
+        const stream=await navigator.mediaDevices.getUserMedia({audio:{
+            echoCancellation:true, noiseSuppression:true, channelCount:1
+        }});
+        const track=stream.getAudioTracks()[0];
+        const settings=track.getSettings();
+        addLog(`✅ Mic access granted: ${track.label}`);
+        addLog(`   Sample rate: ${settings.sampleRate||'unknown'}Hz`);
+        addLog(`   Channel count: ${settings.channelCount||'unknown'}`);
+        
+        // Check actual audio level
+        const ctx=new AudioContext();
+        const src=ctx.createMediaStreamSource(stream);
+        const analyser=ctx.createAnalyser();
+        analyser.fftSize=2048;
+        src.connect(analyser);
+        
+        addLog('   Measuring audio level... SPEAK NOW for 2 seconds');
+        
+        let maxLevel=0;
+        const checkInterval=setInterval(()=>{
+            const data=new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(data);
+            const level=Math.max(...data.map(Math.abs));
+            if(level>maxLevel)maxLevel=level;
+        },100);
+        
+        setTimeout(()=>{
+            clearInterval(checkInterval);
+            stream.getTracks().forEach(t=>t.stop());
+            ctx.close();
+            
+            if(maxLevel>0.05){
+                addLog(`✅ Audio flowing! Max level: ${maxLevel.toFixed(4)} — mic works great`);
+            }else if(maxLevel>0.005){
+                addLog(`⚠️ Audio detected but low: ${maxLevel.toFixed(6)} — try speaking louder`,'warn');
+            }else{
+                addLog(`❌ No audio detected (${maxLevel.toFixed(8)}) — mic may be muted!`,'err');
+            }
+        },2000);
+        
+    }catch(e){
+        addLog(`❌ Mic error: ${e.name}: ${e.message}`,'err');
+        if(e.name==='NotAllowedError') addLog('   → Click the lock icon in address bar → allow microphone','warn');
+        if(e.name==='NotFoundError') addLog('   → No microphone found on this device','warn');
+    }
+}
+
+// ===== TEST 2: WAKE WORD WEBSOCKET =====
+function testWakeWs(){
+    addLog('═══ TEST: Wake Word WebSocket ═══');
+    const wsUrl=`ws://${location.hostname}:9000`;
+    addLog(`Connecting to ${wsUrl}...`);
+    
+    try{
+        const ws=new WebSocket(wsUrl);
+        let timeout=setTimeout(()=>{
+            addLog('❌ Connection timeout (3s)','err');
+            ws.close();
+        },3000);
+        
+        ws.onopen=()=>{
+            clearTimeout(timeout);
+            addLog('✅ WebSocket connected!');
+            ws.send(JSON.stringify({sample_rate:16000}));
+            addLog('   Sent config. Sending 2s of test audio...');
+            
+            // Send some fake audio to test the pipeline
+            const fakeAudio=new Int16Array(16000); // 1 sec silence
+            ws.send(fakeAudio.buffer);
+            addLog('   Sent test audio frame (silence)');
+            
+            setTimeout(()=>{
+                addLog('   Connection stable ✓ — wake word server is working');
+                ws.close();
+            },2000);
+        };
+        ws.onerror=()=>{
+            clearTimeout(timeout);
+            addLog(`❌ WebSocket connection FAILED`,'err');
+            addLog('   → Is wake_server.py running?','warn');
+            addLog('   → Run: python3 wake-word/wake_server.py &','warn');
+            addLog('   → Is SSH tunnel forwarding port 9000?','warn');
+        };
+        ws.onmessage=(e)=>{
+            addLog(`   📨 Server message: ${e.data}`);
+        };
+        ws.onclose=()=>{
+            addLog('   WebSocket closed','info');
+        };
+    }catch(e){
+        addLog(`❌ WebSocket error: ${e.message}`,'err');
+    }
+}
+
+// ===== TEST 3: SPEECH RECOGNITION =====
+function testSpeechRec(){
+    addLog('═══ TEST: Chrome Speech Recognition ═══');
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){
+        addLog('❌ SpeechRecognition API not available','err');
+        addLog('   This browser does not support speech recognition','err');
+        return;
+    }
+    addLog('✅ SpeechRecognition API exists');
+    
+    const rec=new SR();
+    rec.continuous=false;
+    rec.interimResults=true;
+    rec.lang='en-US';
+    rec.maxAlternatives=5;
+    
+    addLog('   Starting... SPEAK NOW! (you have 8 seconds)');
+    
+    rec.onstart=()=>addLog('   🎤 Listening...');
+    
+    rec.onresult=(e)=>{
+        for(let i=0;i<e.results.length;i++){
+            let alts=[];
+            for(let j=0;j<e.results[i].length;j++){
+                alts.push(`"${e.results[i][j].transcript}" (${(e.results[i][j].confidence*100).toFixed(1)}%)`);
+            }
+            const final=e.results[i].isFinal?'FINAL':'interim';
+            addLog(`   ✅ [${final}] ${alts.join(' | ')}`);
+        }
+    };
+    
+    rec.onerror=(e)=>{
+        addLog(`   ❌ Error: ${e.error}`,'err');
+        if(e.error==='not-allowed') addLog('   → Microphone permission denied','warn');
+        if(e.error==='aborted') addLog('   → Recognition was aborted (mic in use?)','warn');
+        if(e.error==='no-speech') addLog('   → No speech detected — try speaking louder','warn');
+    };
+    
+    rec.onend=()=>addLog('   Speech recognition ended');
+    
+    try{
+        rec.start();
+        setTimeout(()=>{try{rec.stop()}catch{}},8000);
+    }catch(e){
+        addLog(`   ❌ Could not start: ${e.message}`,'err');
+    }
+}
+
+// ===== TEST 4: GREEK TTS =====
+async function testTTS(){
+    addLog('═══ TEST: Greek Text-to-Speech ═══');
+    try{
+        const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({text:'Γεια σου, είμαι ο Βίρον!',lang:'el'})});
+        if(!r.ok){
+            addLog(`❌ TTS HTTP error: ${r.status}`,'err');
+            try{const t=await r.text();addLog(`   Response: ${t}`,'err');}catch{}
+            return;
+        }
+        const blob=await r.blob();
+        addLog(`✅ TTS returned ${blob.size} bytes of audio`);
+        const url=URL.createObjectURL(blob);
+        const a=new Audio(url);
+        a.onplay=()=>addLog('   🔊 Playing Greek audio...');
+        a.onended=()=>{addLog('   ✅ Audio playback complete');URL.revokeObjectURL(url)};
+        a.onerror=(e)=>addLog(`   ❌ Playback error: ${e.message||'unknown'}`,'err');
+        a.play();
+    }catch(e){
+        addLog(`❌ TTS error: ${e.message}`,'err');
+    }
+}
+
+// ===== TEST 5: AI CHAT =====
+async function testChat(){
+    addLog('═══ TEST: AI Chat ═══');
+    try{
+        const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({max_tokens:100,system:'Reply in one short sentence.',
+                messages:[{role:'user',content:'What is 2 plus 2?'}]})});
+        if(!r.ok){
+            addLog(`❌ Chat HTTP error: ${r.status}`,'err');
+            try{const t=await r.text();addLog(`   ${t}`,'err');}catch{}
+            return;
+        }
+        const d=await r.json();
+        const text=d.content?.filter(c=>c.type==='text').map(c=>c.text).join('')||JSON.stringify(d).substring(0,200);
+        addLog(`✅ AI says: ${text}`);
+    }catch(e){
+        addLog(`❌ Chat error: ${e.message}`,'err');
+    }
+}
+
+// ===== TEST 6: FULL FLOW =====
+async function testFullFlow(){
+    addLog('═══ TEST: Full Wake→Listen→Chat Flow ═══');
+    addLog('Step 1: Getting mic...');
+    
+    try{
+        const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+        addLog('✅ Mic OK');
+        
+        addLog('Step 2: Connecting wake word server...');
+        const ws=new WebSocket(`ws://${location.hostname}:9000`);
+        
+        await new Promise((resolve,reject)=>{
+            ws.onopen=resolve;
+            ws.onerror=reject;
+            setTimeout(reject,3000);
+        });
+        addLog('✅ Wake WS connected');
+        
+        ws.send(JSON.stringify({sample_rate:16000}));
+        
+        addLog('Step 3: Streaming mic audio to wake word server...');
+        addLog('   *** SAY "HEY JARVIS" NOW! *** (10 second timeout)');
+        
+        const ctx=new AudioContext({sampleRate:16000});
+        const src=ctx.createMediaStreamSource(stream);
+        const proc=ctx.createScriptProcessor(4096,1,1);
+        
+        let detected=false;
+        
+        ws.onmessage=(e)=>{
+            try{
+                const d=JSON.parse(e.data);
+                if(d.type==='wake'){
+                    detected=true;
+                    addLog(`✅ WAKE WORD DETECTED! Model: ${d.model}, Score: ${d.score}`);
+                    addLog('Step 4: Now testing speech recognition...');
+                    
+                    // Stop mic capture
+                    proc.disconnect();
+                    src.disconnect();
+                    ctx.close();
+                    stream.getTracks().forEach(t=>t.stop());
+                    ws.close();
+                    
+                    // Test speech recognition
+                    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+                    if(!SR){addLog('❌ No SpeechRecognition','err');return;}
+                    
+                    const rec=new SR();
+                    rec.lang='en-US';
+                    rec.interimResults=true;
+                    
+                    addLog('   🎤 SPEAK YOUR QUESTION NOW!');
+                    
+                    rec.onresult=(e)=>{
+                        let text='';
+                        for(let i=0;i<e.results.length;i++){
+                            if(e.results[i].isFinal)text+=e.results[i][0].transcript;
+                        }
+                        if(text){
+                            addLog(`   ✅ You said: "${text}"`);
+                            addLog('Step 5: Sending to AI...');
+                            fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({max_tokens:200,system:'Reply briefly.',
+                                    messages:[{role:'user',content:text}]})})
+                            .then(r=>r.json())
+                            .then(d=>{
+                                const t=d.content?.filter(c=>c.type==='text').map(c=>c.text).join('')||'no response';
+                                addLog(`   ✅ AI: ${t}`);
+                                addLog('✅ FULL FLOW WORKS!');
+                            }).catch(e=>addLog(`   ❌ AI error: ${e}`,'err'));
+                        }
+                    };
+                    rec.onerror=(e)=>addLog(`   ❌ Speech error: ${e.error}`,'err');
+                    rec.start();
+                    setTimeout(()=>{try{rec.stop()}catch{}},8000);
+                }
+            }catch{}
+        };
+        
+        proc.onaudioprocess=(e)=>{
+            if(detected)return;
+            const f=e.inputBuffer.getChannelData(0);
+            const i16=new Int16Array(f.length);
+            for(let i=0;i<f.length;i++)i16[i]=Math.max(-32768,Math.min(32767,Math.round(f[i]*32767)));
+            if(ws.readyState===WebSocket.OPEN)ws.send(i16.buffer);
+        };
+        src.connect(proc);
+        proc.connect(ctx.destination);
+        
+        // Timeout
+        setTimeout(()=>{
+            if(!detected){
+                addLog('❌ Timeout — no wake word detected in 10 seconds','err');
+                proc.disconnect();src.disconnect();ctx.close();
+                stream.getTracks().forEach(t=>t.stop());
+                ws.close();
+            }
+        },10000);
+        
+    }catch(e){
+        addLog(`❌ Flow error: ${e.message||e}`,'err');
+    }
+}
+
+function clearLog(){logEl.innerHTML='';addLog('Log cleared','info');}
+
+async function getServerLog(){
+    try{
+        const r=await fetch('/debug/viewlog');
+        const t=await r.text();
+        addLog('═══ SERVER LOG ═══\n'+t,'info');
+    }catch(e){addLog('Cannot fetch server log','err');}
+}
+
+async function commitLog(){
+    addLog('To save debug log, run on server:');
+    addLog('  cd ~/VIRON && git add debug.log && git commit -m "debug log" && git push','warn');
+}
+
+addLog('🤖 VIRON Debug Console Ready');
+addLog('Run each test in order (1→2→3→4→5→6) and screenshot results','info');
+addLog('','info');
+</script>
+</body></html>

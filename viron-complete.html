@@ -109,6 +109,32 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <svg id="face" viewBox="0 0 800 500"></svg>
 
 <script>
+// ===== DEBUG LOGGER =====
+const _dbg=[];
+function D(msg){
+  const t=new Date().toTimeString().split(' ')[0]+'.'+String(Date.now()%1000).padStart(3,'0');
+  const line=`[${t}] ${msg}`;
+  _dbg.push(line);
+  console.log('🔍 '+line);
+  // Send to server for persistent logging
+  fetch('/debug/log',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({source:'browser',message:msg,level:'INFO'})}).catch(()=>{});
+}
+// Save debug log to server on demand
+function saveDebugLog(){
+  fetch('/debug/save',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({log:_dbg.join('\n')})}).catch(()=>{});
+}
+// Auto-save every 10 seconds
+setInterval(saveDebugLog,10000);
+D('=== VIRON Debug Session Started ===');
+D('URL: '+location.href);
+D('UserAgent: '+navigator.userAgent);
+D('mediaDevices: '+(navigator.mediaDevices?'YES':'NO'));
+D('getUserMedia: '+(navigator.mediaDevices?.getUserMedia?'YES':'NO'));
+D('SpeechRecognition: '+((window.SpeechRecognition||window.webkitSpeechRecognition)?'YES':'NO'));
+D('SpeechSynthesis: '+(window.speechSynthesis?'YES':'NO'));
+
 // ===== EMOTIONS (43) =====
 const E={happy:{eyeRx:1,eyeRy:.82,pupilSize:1,mouthCurve:1.3,mouthOpen:0,browAngle:0,browY:0,sparkle:true,irisStyle:0,winkLeft:false,squint:0},excited:{eyeRx:1.05,eyeRy:.88,pupilSize:.85,mouthCurve:1.6,mouthOpen:0,browAngle:-5,browY:-8,sparkle:true,irisStyle:0,winkLeft:false,squint:0},sad:{eyeRx:.95,eyeRy:.65,pupilSize:1.1,mouthCurve:-.8,mouthOpen:0,browAngle:8,browY:-5,sparkle:false,irisStyle:0,winkLeft:false,squint:0},angry:{eyeRx:.95,eyeRy:.6,pupilSize:.8,mouthCurve:-.5,mouthOpen:0,browAngle:15,browY:5,sparkle:false,irisStyle:1,winkLeft:false,squint:0},surprised:{eyeRx:1.1,eyeRy:.95,pupilSize:.7,mouthCurve:.1,mouthOpen:.9,browAngle:-8,browY:-15,sparkle:false,irisStyle:0,winkLeft:false,squint:0},sleepy:{eyeRx:.95,eyeRy:.4,pupilSize:1.2,mouthCurve:.3,mouthOpen:0,browAngle:3,browY:5,sparkle:false,irisStyle:0,winkLeft:false,squint:0},love:{eyeRx:1.02,eyeRy:.85,pupilSize:1.3,mouthCurve:1.1,mouthOpen:0,browAngle:-3,browY:-3,sparkle:true,irisStyle:2,winkLeft:false,squint:0},neutral:{eyeRx:1,eyeRy:.78,pupilSize:1,mouthCurve:.2,mouthOpen:0,browAngle:0,browY:0,sparkle:false,irisStyle:0,winkLeft:false,squint:0},teasing:{eyeRx:1,eyeRy:.75,pupilSize:.9,mouthCurve:.9,mouthOpen:0,browAngle:6,browY:-2,sparkle:false,irisStyle:0,winkLeft:true,squint:.3},confused:{eyeRx:1,eyeRy:.8,pupilSize:1.05,mouthCurve:-.2,mouthOpen:0,browAngle:10,browY:-8,sparkle:false,irisStyle:0,winkLeft:false,squint:0},scared:{eyeRx:1.12,eyeRy:1,pupilSize:.6,mouthCurve:-.4,mouthOpen:.5,browAngle:-10,browY:-12,sparkle:false,irisStyle:0,winkLeft:false,squint:0},disgusted:{eyeRx:.9,eyeRy:.55,pupilSize:.85,mouthCurve:-1.2,mouthOpen:.2,browAngle:6,browY:3,sparkle:false,irisStyle:0,winkLeft:false,squint:.4},proud:{eyeRx:.98,eyeRy:.7,pupilSize:.95,mouthCurve:.8,mouthOpen:0,browAngle:-4,browY:-6,sparkle:true,irisStyle:0,winkLeft:false,squint:.15},shy:{eyeRx:1.05,eyeRy:.85,pupilSize:1.15,mouthCurve:.5,mouthOpen:0,browAngle:4,browY:-4,sparkle:false,irisStyle:2,winkLeft:false,squint:0},bored:{eyeRx:1,eyeRy:.5,pupilSize:1.1,mouthCurve:-.1,mouthOpen:0,browAngle:2,browY:4,sparkle:false,irisStyle:0,winkLeft:false,squint:.2},laughing:{eyeRx:1,eyeRy:.35,pupilSize:1,mouthCurve:1.8,mouthOpen:.7,browAngle:-3,browY:-5,sparkle:true,irisStyle:0,winkLeft:false,squint:.5},crying:{eyeRx:.95,eyeRy:.7,pupilSize:1.15,mouthCurve:-1,mouthOpen:.6,browAngle:10,browY:-6,sparkle:false,irisStyle:0,winkLeft:false,squint:0},thinking:{eyeRx:1,eyeRy:.78,pupilSize:.95,mouthCurve:.1,mouthOpen:0,browAngle:8,browY:-6,sparkle:false,irisStyle:0,winkLeft:false,squint:.15},winking:{eyeRx:1,eyeRy:.82,pupilSize:1,mouthCurve:1,mouthOpen:0,browAngle:-2,browY:-2,sparkle:true,irisStyle:0,winkLeft:true,squint:0},suspicious:{eyeRx:1,eyeRy:.6,pupilSize:.85,mouthCurve:-.3,mouthOpen:0,browAngle:12,browY:0,sparkle:false,irisStyle:0,winkLeft:false,squint:.3},grateful:{eyeRx:1,eyeRy:.85,pupilSize:1.2,mouthCurve:1.4,mouthOpen:0,browAngle:-2,browY:-4,sparkle:true,irisStyle:2,winkLeft:false,squint:0},mischievous:{eyeRx:1.02,eyeRy:.72,pupilSize:.8,mouthCurve:1.2,mouthOpen:.15,browAngle:10,browY:3,sparkle:false,irisStyle:1,winkLeft:false,squint:.2},worried:{eyeRx:1.05,eyeRy:.85,pupilSize:1.1,mouthCurve:-.6,mouthOpen:0,browAngle:9,browY:-8,sparkle:false,irisStyle:0,winkLeft:false,squint:0},hopeful:{eyeRx:1.08,eyeRy:.92,pupilSize:1.35,mouthCurve:.4,mouthOpen:0,browAngle:6,browY:-10,sparkle:true,irisStyle:0,winkLeft:false,squint:0},sassy:{eyeRx:1,eyeRy:.68,pupilSize:.9,mouthCurve:.7,mouthOpen:0,browAngle:8,browY:-2,sparkle:false,irisStyle:0,winkLeft:false,squint:.25},dizzy:{eyeRx:1.05,eyeRy:.85,pupilSize:.6,mouthCurve:-.3,mouthOpen:.3,browAngle:0,browY:-3,sparkle:false,irisStyle:0,winkLeft:false,squint:0},cheeky:{eyeRx:1,eyeRy:.4,pupilSize:1,mouthCurve:1.5,mouthOpen:.5,browAngle:-3,browY:-4,sparkle:true,irisStyle:0,winkLeft:false,squint:.4},flirty:{eyeRx:1,eyeRy:.8,pupilSize:1.2,mouthCurve:1,mouthOpen:0,browAngle:-4,browY:-3,sparkle:true,irisStyle:2,winkLeft:true,squint:0},jealous:{eyeRx:.95,eyeRy:.6,pupilSize:.9,mouthCurve:-.4,mouthOpen:0,browAngle:10,browY:2,sparkle:false,irisStyle:0,winkLeft:false,squint:.35},determined:{eyeRx:.98,eyeRy:.7,pupilSize:.85,mouthCurve:.1,mouthOpen:0,browAngle:8,browY:4,sparkle:false,irisStyle:0,winkLeft:false,squint:.2},embarrassed:{eyeRx:1.02,eyeRy:.8,pupilSize:1.1,mouthCurve:.6,mouthOpen:.15,browAngle:5,browY:-6,sparkle:false,irisStyle:0,winkLeft:false,squint:.1},mindblown:{eyeRx:1.15,eyeRy:1,pupilSize:.5,mouthCurve:0,mouthOpen:.8,browAngle:-12,browY:-18,sparkle:true,irisStyle:0,winkLeft:false,squint:0},smug:{eyeRx:.98,eyeRy:.65,pupilSize:.95,mouthCurve:.7,mouthOpen:0,browAngle:7,browY:0,sparkle:false,irisStyle:0,winkLeft:false,squint:.3},evil:{eyeRx:1,eyeRy:.6,pupilSize:.7,mouthCurve:1.1,mouthOpen:.2,browAngle:14,browY:6,sparkle:false,irisStyle:1,winkLeft:false,squint:.25},dreamy:{eyeRx:1.02,eyeRy:.75,pupilSize:1.3,mouthCurve:.6,mouthOpen:0,browAngle:-2,browY:-4,sparkle:true,irisStyle:2,winkLeft:false,squint:.1},focused:{eyeRx:.96,eyeRy:.72,pupilSize:.75,mouthCurve:0,mouthOpen:0,browAngle:5,browY:2,sparkle:false,irisStyle:0,winkLeft:false,squint:.2},relieved:{eyeRx:1,eyeRy:.55,pupilSize:1.1,mouthCurve:.9,mouthOpen:0,browAngle:-2,browY:-2,sparkle:false,irisStyle:0,winkLeft:false,squint:.15},skeptical:{eyeRx:1,eyeRy:.7,pupilSize:.9,mouthCurve:-.2,mouthOpen:0,browAngle:12,browY:-4,sparkle:false,irisStyle:0,winkLeft:false,squint:.2},panicking:{eyeRx:1.12,eyeRy:1.05,pupilSize:.5,mouthCurve:-.6,mouthOpen:.85,browAngle:-12,browY:-16,sparkle:false,irisStyle:0,winkLeft:false,squint:0},silly:{eyeRx:1.05,eyeRy:.82,pupilSize:1,mouthCurve:1.5,mouthOpen:.4,browAngle:-5,browY:-6,sparkle:true,irisStyle:0,winkLeft:true,squint:.2},grumpy:{eyeRx:.92,eyeRy:.5,pupilSize:.9,mouthCurve:-.7,mouthOpen:0,browAngle:12,browY:6,sparkle:false,irisStyle:0,winkLeft:false,squint:.35},amazed:{eyeRx:1.1,eyeRy:.95,pupilSize:1.3,mouthCurve:1.2,mouthOpen:.3,browAngle:-8,browY:-14,sparkle:true,irisStyle:0,winkLeft:false,squint:0},zen:{eyeRx:1,eyeRy:.45,pupilSize:1.15,mouthCurve:.4,mouthOpen:0,browAngle:0,browY:-2,sparkle:false,irisStyle:0,winkLeft:false,squint:.1}};
 
@@ -229,8 +255,9 @@ let audioProcessor=null;
 let micStream=null;
 
 function startWakeListener(){
+  D('>>> startWakeListener, voiceState='+voiceState+', loading='+loading);
   if(voiceState===VOICE_ACTIVATED||loading||wakeStarting)return;
-  if(synth&&synth.speaking){setTimeout(startWakeListener,1000);return}
+  if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startWakeListener,1000);return}
   
   voiceState=VOICE_IDLE;
   updateListenUI();
@@ -239,12 +266,13 @@ function startWakeListener(){
   // Resume mic capture if already connected
   if(audioContext&&audioContext.state==="suspended"){
     audioContext.resume();
-    console.log("🎤 Wake word listening resumed");
+    D('  Resumed audioContext for wake word');
   }
   
   // If not connected yet, connect
   if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
     if(!wakeStarting){
+      D('  No WS, connecting...');
       wakeStarting=true;
       connectWakeWordServer();
     }
@@ -252,25 +280,26 @@ function startWakeListener(){
   }
   
   if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
+    D('  Wake word active via WebSocket');
     document.getElementById("listenText").textContent='Say "Hey Jarvis"';
   }
 }
 
 function connectWakeWordServer(){
   const wsUrl=`ws://${location.hostname}:9000`;
-  console.log("🔌 Connecting to wake word server:",wsUrl);
+  D('>>> connectWakeWordServer: '+wsUrl);
   
   try{
     wakeWs=new WebSocket(wsUrl);
   }catch(e){
-    console.warn("Wake word server not available, falling back to tap mode");
+    D('  ❌ WebSocket constructor error: '+e.message);
     wakeStarting=false;
     fallbackToTapMode();
     return;
   }
   
   wakeWs.onopen=()=>{
-    console.log("✅ Wake word server connected");
+    D('  ✅ Wake word WS connected');
     wakeStarting=false;
     startMicCapture();
   };
@@ -279,7 +308,7 @@ function connectWakeWordServer(){
     try{
       const data=JSON.parse(e.data);
       if(data.type==="wake"){
-        console.log("🎤 Wake word detected!",data.model,"score:",data.score);
+        D('  🎤 WAKE WORD DETECTED! model='+data.model+' score='+data.score);
         stopMicCapture();
         onWakeWordDetected(null);
       }
@@ -287,9 +316,8 @@ function connectWakeWordServer(){
   };
   
   wakeWs.onclose=()=>{
-    console.log("🔌 Wake word server disconnected");
+    D('  Wake word WS closed');
     wakeStarting=false;
-    // Try to reconnect after delay
     if(voiceState===VOICE_IDLE){
       clearTimeout(wakeRetryTimeout);
       wakeRetryTimeout=setTimeout(()=>{
@@ -299,14 +327,15 @@ function connectWakeWordServer(){
   };
   
   wakeWs.onerror=()=>{
-    console.warn("Wake word server error — using tap mode");
+    D('  ❌ Wake word WS error — falling back to tap mode');
     wakeStarting=false;
     fallbackToTapMode();
   };
 }
 
 function startMicCapture(){
-  if(audioContext)return;
+  D('>>> startMicCapture, audioContext='+(audioContext?'exists':'null'));
+  if(audioContext){D('  audioContext already exists, skipping');return}
   
   navigator.mediaDevices.getUserMedia({audio:{
     echoCancellation:true,
@@ -314,45 +343,48 @@ function startMicCapture(){
     channelCount:1,
     sampleRate:16000
   }}).then(stream=>{
+    D('  ✅ Mic stream obtained');
     micStream=stream;
     audioContext=new(window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+    D('  AudioContext sampleRate='+audioContext.sampleRate);
     const source=audioContext.createMediaStreamSource(stream);
     
-    // Send sample rate to server
     if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
       wakeWs.send(JSON.stringify({sample_rate:audioContext.sampleRate}));
+      D('  Sent sample rate to wake server');
     }
     
-    // Use ScriptProcessor for compatibility (AudioWorklet needs HTTPS)
     audioProcessor=audioContext.createScriptProcessor(4096,1,1);
+    let frameCount=0;
     audioProcessor.onaudioprocess=(e)=>{
       if(wakeWs&&wakeWs.readyState===WebSocket.OPEN&&voiceState===VOICE_IDLE){
         const float32=e.inputBuffer.getChannelData(0);
-        // Convert float32 to int16
         const int16=new Int16Array(float32.length);
         for(let i=0;i<float32.length;i++){
           int16[i]=Math.max(-32768,Math.min(32767,Math.round(float32[i]*32767)));
         }
         wakeWs.send(int16.buffer);
+        frameCount++;
+        if(frameCount%50===0)D('  Sent '+frameCount+' audio frames to wake server');
       }
     };
     
     source.connect(audioProcessor);
     audioProcessor.connect(audioContext.destination);
     
-    console.log("🎤 Mic capture started ("+audioContext.sampleRate+"Hz)");
+    D('  ✅ Mic capture started ('+audioContext.sampleRate+'Hz), streaming to wake server');
     document.getElementById("listenText").textContent='Say "Hey Jarvis"';
   }).catch(e=>{
-    console.warn("Mic access denied:",e);
+    D('  ❌ Mic access DENIED: '+e.name+': '+e.message);
     fallbackToTapMode();
   });
 }
 
 function stopMicCapture(){
-  // Suspend audio context so SpeechRecognition can use the mic
+  D('>>> stopMicCapture, audioContext='+(audioContext?audioContext.state:'null'));
   if(audioContext&&audioContext.state==="running"){
     audioContext.suspend();
-    console.log("🎤 Mic capture paused for active listening");
+    D('  AudioContext suspended');
   }
 }
 
@@ -375,47 +407,51 @@ function fallbackToTapMode(){
 }
 
 function onWakeWordDetected(immediateText){
+  D('>>> onWakeWordDetected called, immediateText='+immediateText);
   voiceState=VOICE_ACTIVATED;
   updateListenUI();
-
-  // VIRON perks up — "I'm listening!" face
   cE("hopeful");
   synth.cancel();
   stopT();
 
   if(immediateText){
-    // Student already said something after "Hey VIRON"
+    D('  Has immediate text, processing: '+immediateText);
     setTimeout(()=>processStudentSpeech(immediateText),500);
     return;
   }
 
-  // Acknowledge wake word so user knows VIRON is listening
+  // Acknowledge wake word
+  D('  Sending acknowledgment "Ναι;"');
   const ack=new SpeechSynthesisUtterance("Ναι;");
   ack.lang="el-GR";if(gkV)ack.voice=gkV;
   ack.volume=0.7;ack.rate=1.1;
-  // If no Greek voice, use server TTS for acknowledgment
   if(!gkV){
+    D('  No Greek voice, using server TTS');
     fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:"Ναι;",lang:"el"})})
     .then(r=>r.blob()).then(blob=>{
+      D('  TTS blob received, size='+blob.size);
       const a=new Audio(URL.createObjectURL(blob));a.volume=0.7;
-      a.onended=()=>startActiveListening();
-      a.play().catch(()=>startActiveListening());
-    }).catch(()=>startActiveListening());
+      a.onended=()=>{D('  Ack audio ended, starting active listening');startActiveListening()};
+      a.onerror=(e)=>{D('  Ack audio ERROR: '+e.type);startActiveListening()};
+      a.play().catch(e=>{D('  Ack play ERROR: '+e.message);startActiveListening()});
+    }).catch(e=>{D('  TTS fetch ERROR: '+e.message);startActiveListening()});
     return;
   }
-  ack.onend=()=>startActiveListening();
-  ack.onerror=()=>startActiveListening();
+  D('  Using browser Greek voice for ack');
+  ack.onend=()=>{D('  Ack speech ended');startActiveListening()};
+  ack.onerror=(e)=>{D('  Ack speech ERROR');startActiveListening()};
   synth.speak(ack);
 }
 
 function startActiveListening(){
+  D('>>> startActiveListening called');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR)return;
+  if(!SR){D('  ❌ SpeechRecognition API not available!');return;}
 
   activeRec=new SR();
-  activeRec.continuous=true; // Keep listening until user stops
+  activeRec.continuous=true;
   activeRec.interimResults=true;
-  activeRec.lang="en-US"; // Primary language (handles both well)
+  activeRec.lang="en-US";
   activeRec.maxAlternatives=3;
 
   let silenceTimer=null;
@@ -423,18 +459,17 @@ function startActiveListening(){
   let finalText="";
 
   activeRec.onstart=()=>{
-    console.log("🎤 Active listening started — speak now!");
-    // Quick acknowledging sound/expression change
+    D('  ✅ activeRec.onstart fired — LISTENING NOW');
     setTimeout(()=>{
       if(voiceState===VOICE_ACTIVATED&&!gotResult){
-        // Subtle shift to show we're still listening attentively
         cE("focused");
       }
     },2000);
 
-    // Timeout: if no speech after 10 seconds, go back to idle
     silenceTimer=setTimeout(()=>{
+      D('  ⏰ TIMEOUT: 10s no speech, gotResult='+gotResult+', voiceState='+voiceState);
       if(!gotResult&&voiceState===VOICE_ACTIVATED){
+        D('  → Stopping activeRec, will say "didn\'t catch that"');
         activeRec.stop();
         cE("confused");
         say(isGr(msgs[msgs.length-1]?.content||"")?"Δεν σε άκουσα. Πες μου ξανά!":"I didn't catch that. Try again!");
@@ -453,14 +488,15 @@ function startActiveListening(){
         interim+=e.results[i][0].transcript;
       }
     }
-    // Show what we're hearing
     const display=finalText||interim;
+    D('  🎤 onresult: final="'+finalText+'" interim="'+interim+'" isFinal='+!!finalText);
     if(display)document.getElementById("listenText").textContent=display;
     
-    // If we got a final result, wait 1.5s for more speech, then process
     if(finalText){
       gotResult=true;
+      D('  ✅ Got final text! Waiting 1.5s then processing: "'+finalText+'"');
       silenceTimer=setTimeout(()=>{
+        D('  → Processing speech: "'+finalText.trim()+'"');
         activeRec.stop();
         processStudentSpeech(finalText.trim());
       },1500);
@@ -469,6 +505,7 @@ function startActiveListening(){
 
   activeRec.onerror=e=>{
     clearTimeout(silenceTimer);
+    D('  ❌ activeRec.onerror: '+e.error+' (message: '+(e.message||'none')+')');
     if(voiceState===VOICE_ACTIVATED){
       voiceState=VOICE_IDLE;
       cE("neutral");
@@ -478,19 +515,27 @@ function startActiveListening(){
 
   activeRec.onend=()=>{
     clearTimeout(silenceTimer);
+    D('  activeRec.onend fired, gotResult='+gotResult+', voiceState='+voiceState);
     if(!gotResult&&voiceState===VOICE_ACTIVATED){
+      D('  → No result, returning to idle');
       voiceState=VOICE_IDLE;
       startWakeListener();
     }
   };
 
-  try{activeRec.start()}catch(e){
+  try{
+    D('  Calling activeRec.start()...');
+    activeRec.start();
+    D('  activeRec.start() called successfully');
+  }catch(e){
+    D('  ❌ activeRec.start() THREW: '+e.message);
     voiceState=VOICE_IDLE;
     startWakeListener();
   }
 }
 
 function processStudentSpeech(text){
+  D('>>> processStudentSpeech: "'+text+'"');
   voiceState=VOICE_PROCESSING;
   updateListenUI();
   cE("thinking");
@@ -506,6 +551,9 @@ function stopAllRecognition(){
 
 // Face tap activation - always works as backup
 document.getElementById("face").addEventListener("click",()=>{
+  if(loading)return;
+  if(voiceState===VOICE_ACTIVATED)return;
+  D('>>> Face tapped, loading='+loading+', voiceState='+voiceState);
   if(loading)return;
   if(voiceState===VOICE_ACTIVATED)return;
   console.log("👆 Face tapped — activating");
@@ -584,10 +632,12 @@ setInterval(()=>{fetch('/api/battery').then(r=>r.json()).then(d=>{if(d.percent>=
 const ST=Date.now();setInterval(()=>{const d=Date.now()-ST;document.getElementById("ut").textContent=`${Math.floor(d/3600000)}h ${Math.floor((d%3600000)/60000)}m`},30000);
 
 // ===== INIT =====
+D('=== INIT ===');
 fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
 // Greet then start listening
 setTimeout(()=>{
   cE("excited");
+  D('  Playing greeting');
   say("Γεια! Είμαι ο VIRON! Πες μου Hey VIRON για να μου μιλήσεις!");
 },2500);
 
@@ -595,27 +645,28 @@ setTimeout(()=>{
 setInterval(()=>{
   if(voiceState===VOICE_IDLE&&!loading&&!synth?.speaking){
     if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
-      console.log("🔄 Wake word reconnecting...");
+      D('  Keepalive: wake WS dead, reconnecting');
       connectWakeWordServer();
     }
   }
 },10000);
 
 // Request mic permission on first load, then start wake listener
+D('Requesting initial mic permission...');
 if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
   navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{
+    D('✅ Initial mic permission granted');
     s.getTracks().forEach(t=>t.stop());
-    // Start wake word listener after greeting finishes
-    setTimeout(startWakeListener,6000);
-  }).catch(()=>{
+    setTimeout(()=>{D('Starting wake listener (6s after init)');startWakeListener()},6000);
+  }).catch(e=>{
+    D('❌ Initial mic permission DENIED: '+e.name+': '+e.message);
     document.getElementById("listenText").textContent="Tap face to talk";
     document.getElementById("face").style.cursor="pointer";
   });
 }else{
-  // HTTP or no mic support — tap mode only
+  D('❌ getUserMedia not available (need localhost or HTTPS)');
   document.getElementById("listenText").textContent="Tap face to talk";
   document.getElementById("face").style.cursor="pointer";
-  console.warn("getUserMedia not available (requires HTTPS). Using tap mode.");
 }
 
 // ===== SVG RENDER =====

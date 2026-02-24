@@ -418,6 +418,85 @@ def text_to_speech():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ============ DEBUG LOGGING ============
+DEBUG_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log")
+
+# Initialize debug log
+with open(DEBUG_LOG, "w") as f:
+    f.write(f"=== VIRON Debug Log - {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+
+def debug_log(source, message, level="INFO"):
+    timestamp = time.strftime("%H:%M:%S")
+    line = f"[{timestamp}] [{level}] [{source}] {message}"
+    print(f"  DEBUG: {line}")
+    try:
+        with open(DEBUG_LOG, "a") as f:
+            f.write(line + "\n")
+    except:
+        pass
+
+@app.route('/debug/log', methods=['POST', 'OPTIONS'])
+def debug_receive_log():
+    if request.method == 'OPTIONS':
+        return '', 204
+    data = request.get_json()
+    if data:
+        debug_log(data.get('source', 'browser'), data.get('message', ''), data.get('level', 'INFO'))
+    return jsonify({"ok": True})
+
+@app.route('/debug/save', methods=['POST', 'OPTIONS'])
+def debug_save_log():
+    if request.method == 'OPTIONS':
+        return '', 204
+    data = request.get_json()
+    if data and 'log' in data:
+        try:
+            with open(DEBUG_LOG, "w") as f:
+                f.write("=== VIRON Browser Debug Log ===\n")
+                f.write(data['log'] + "\n")
+            return jsonify({"ok": True, "size": len(data['log'])})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": False}), 400
+
+@app.route('/debug/viewlog', methods=['GET'])
+def debug_view_log():
+    try:
+        with open(DEBUG_LOG, "r") as f:
+            return f.read(), 200, {'Content-Type': 'text/plain'}
+    except:
+        return "No log file yet", 200
+
+@app.route('/debug/status', methods=['GET'])
+def debug_status():
+    import urllib.request
+    checks = {}
+    # Flask
+    checks["flask_5000"] = "✅ Running (you're seeing this)"
+    # AI Router
+    try:
+        urllib.request.urlopen("http://localhost:8000/health", timeout=2)
+        checks["ai_router_8000"] = "✅ Running"
+    except:
+        checks["ai_router_8000"] = "❌ Down"
+    # Wake Word
+    try:
+        result = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True, timeout=3)
+        checks["wake_word_9000"] = "✅ Running" if ":9000" in result.stdout else "❌ Down"
+    except:
+        checks["wake_word_9000"] = "❓ Unknown"
+    # Ollama
+    try:
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+        checks["ollama"] = "✅ Running"
+    except:
+        checks["ollama"] = "❌ Down"
+    return jsonify(checks)
+
+@app.route('/debug')
+def debug_page():
+    return send_from_directory(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'debug.html')
+
 # ============ SERVE FILES ============
 @app.route('/')
 def index():
