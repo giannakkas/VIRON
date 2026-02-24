@@ -7,7 +7,7 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:center;justify-content:center;transition:opacity 0.5s}
-svg{width:min(95vw,800px);height:auto;-webkit-tap-highlight-color:transparent}
+svg{width:min(95vw,800px);height:auto;min-height:40vh;-webkit-tap-highlight-color:transparent;display:block}
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
 .listen-indicator.active{opacity:1}
@@ -460,7 +460,7 @@ h+=`<path d="M ${-mW} 0 Q ${-iW} ${lly} 0 ${lly+4} Q ${iW} ${lly} ${mW} 0" fill=
 if(co>.05)h+=`<path d="M ${-mW} 0 Q ${-iW} ${uly} 0 ${uly+2} Q ${iW} ${uly} ${mW} 0 Q ${iW} ${lly} 0 ${lly+4} Q ${-iW} ${lly} ${-mW} 0 Z" fill="rgba(15,5,25,${Math.min(.85,co*1.2)})"/>`;
 if((emo==="cheeky"||tO>.4)&&co>.2){const ty=(uly+lly)*.55+2;h+=`<ellipse cx="0" cy="${ty}" rx="${10+tO*5}" ry="${4+tO*4}" fill="rgba(120,20,30,0.75)"/>`}
 h+=`<circle cx="${-mW}" cy="0" r="7" fill="rgba(255,255,255,0.45)"/><circle cx="${mW}" cy="0" r="7" fill="rgba(255,255,255,0.45)"/>`}
-h+=`</g>`;svg.innerHTML=h;requestAnimationFrame(rF)}
+h+=`</g>`;svg.innerHTML=h;requestAnimationFrame(rF)}catch(err){console.error("Render error:",err);setTimeout(()=>requestAnimationFrame(rF),1000)}}
 requestAnimationFrame(rF);
 </script>
 </body>
