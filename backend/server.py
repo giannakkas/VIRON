@@ -85,11 +85,25 @@ class StudentEmotionDetector:
         self.last_eye_state = True
         self.looking_away_since = 0
         if HAS_CV2:
-            d = cv2.data.haarcascades
-            self.face_cascade = cv2.CascadeClassifier(d + 'haarcascade_frontalface_default.xml')
-            self.eye_cascade = cv2.CascadeClassifier(d + 'haarcascade_eye.xml')
-            self.smile_cascade = cv2.CascadeClassifier(d + 'haarcascade_smile.xml')
-            self.mouth_cascade = cv2.CascadeClassifier(d + 'haarcascade_mcs_mouth.xml')
+            # Find haarcascades path (varies by OpenCV version)
+            cascade_dir = ""
+            if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+                cascade_dir = cv2.data.haarcascades
+            else:
+                # Common paths on Ubuntu
+                for p in ['/usr/share/opencv4/haarcascades/', '/usr/share/opencv/haarcascades/',
+                          '/usr/local/share/opencv4/haarcascades/', '/usr/share/OpenCV/haarcascades/']:
+                    if os.path.exists(p):
+                        cascade_dir = p
+                        break
+            if not cascade_dir:
+                print("⚠ Cannot find haarcascade files — emotion detection disabled")
+                HAS_CV2 = False
+                return
+            self.face_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_frontalface_default.xml')
+            self.eye_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_eye.xml')
+            self.smile_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_smile.xml')
+            self.mouth_cascade = cv2.CascadeClassifier(cascade_dir + 'haarcascade_mcs_mouth.xml')
 
     def start(self, camera_index=0):
         if self.running or not HAS_CV2:
