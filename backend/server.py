@@ -65,6 +65,7 @@ CORS(app)
 # ============ STUDENT EMOTION DETECTOR ============
 class StudentEmotionDetector:
     def __init__(self):
+        global HAS_CV2
         self.running = False
         self.thread = None
         self.cap = None
@@ -96,6 +97,15 @@ class StudentEmotionDetector:
                     if os.path.exists(p):
                         cascade_dir = p
                         break
+                # Last resort: find it
+                if not cascade_dir:
+                    try:
+                        result = subprocess.run(['find', '/usr', '-name', 'haarcascade_frontalface_default.xml', '-type', 'f'],
+                                                capture_output=True, text=True, timeout=5)
+                        if result.stdout.strip():
+                            cascade_dir = os.path.dirname(result.stdout.strip().split('\n')[0]) + '/'
+                    except:
+                        pass
             if not cascade_dir:
                 print("⚠ Cannot find haarcascade files — emotion detection disabled")
                 HAS_CV2 = False
