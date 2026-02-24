@@ -111,7 +111,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <button class="sbtn danger" onclick="if(!confirm('Shutdown?'))return;cE('sleepy');toggleSettings();document.body.style.transition='opacity 2s';document.body.style.opacity='0';setTimeout(()=>{fetch('/api/system/shutdown',{method:'POST'}).catch(()=>{});document.body.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100vh;color:rgba(255,255,255,0.2);font-size:14px\'>VIRON is off.</div>';document.body.style.opacity='1'},2500)">⏻ Shutdown</button></div>
   <div style="text-align:center;color:rgba(255,255,255,0.15);font-size:11px;margin-top:20px">VIRON AI Companion • v1.0</div>
 </div>
-<div class="wb-overlay" id="wb"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div></div>
+<div class="wb-overlay" id="wb"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div><div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:13px;color:#999;font-style:italic">Say "OK" to close the whiteboard</div></div>
 <div class="yt-container" id="ytC"><div class="yt-header"><span class="yt-title" id="ytT">♪</span><button class="yt-close" onclick="document.getElementById('ytP').src='';document.getElementById('ytC').classList.remove('visible')">✕</button></div><iframe id="ytP" width="280" height="158" src="" allow="autoplay;encrypted-media" allowfullscreen style="border:none;border-radius:10px"></iframe></div>
 <div class="listen-indicator wake" id="listenInd">
   <div class="listen-bars"><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div></div>
@@ -554,13 +554,33 @@ function startAlwaysListening(){
 }
 
 // After wake word detected, listen for the actual command
+let cmdRetryCount=0;
+const MAX_CMD_RETRIES=5;
+
 function startCommandListening(){
-  D('>>> startCommandListening (inConversation='+inConversation+')');
+  D('>>> startCommandListening (inConversation='+inConversation+', retry='+cmdRetryCount+')');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR)return;
   
+  // Don't start if audio is still playing
+  if(synth&&synth.speaking){
+    D('  synth still speaking, retry in 500ms');
+    setTimeout(startCommandListening,500);
+    return;
+  }
+  
+  // Prevent infinite restart loops
+  if(cmdRetryCount>=MAX_CMD_RETRIES){
+    D('  ❌ Too many retries, ending conversation');
+    cmdRetryCount=0;
+    if(inConversation)endConversation();
+    else{voiceState=VOICE_IDLE;startAlwaysListening()}
+    return;
+  }
+  
   voiceState=VOICE_ACTIVATED;
   updateListenUI();
+  document.getElementById("listenText").textContent='Listening...';
   
   let cmdRec=new SR();
   cmdRec.continuous=false;
@@ -569,13 +589,14 @@ function startCommandListening(){
   cmdRec.maxAlternatives=3;
   
   let gotResult=false;
-  let handled=false; // prevent double-handling from timeout+onend race
+  let handled=false;
   const timeout=inConversation?12000:8000;
   let cmdTimeout=setTimeout(()=>{
     if(!gotResult&&!handled){
       handled=true;
       D('  ⏰ Command timeout');
       try{cmdRec.stop()}catch{}
+      cmdRetryCount=0; // timeout is normal, reset retries
       if(inConversation){
         silenceCount++;
         if(silenceCount>=2){
@@ -585,7 +606,7 @@ function startCommandListening(){
           clearTimeout(conversationTimer);
         }else{
           D('  🗣️ Silence in conversation, still listening...');
-          setTimeout(startCommandListening,300);
+          setTimeout(startCommandListening,500);
         }
       }else{
         cE("confused");
@@ -606,21 +627,32 @@ function startCommandListening(){
     }
     if(finalText&&finalText.trim().length>1){
       gotResult=true;
+      handled=true;
       clearTimeout(cmdTimeout);
-      silenceCount=0; // reset silence counter
+      cmdRetryCount=0; // got speech, reset retries
+      silenceCount=0;
       if(inConversation)resetConversationTimer();
       
-      // In conversation mode, strip accidental wake words from speech
       let speech=finalText.trim();
+      
+      // Check for whiteboard close commands
+      if(wbO&&/^(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it)$/i.test(speech.trim())){
+        D('  📋 Closing whiteboard via voice: "'+speech+'"');
+        closeWB();
+        if(inConversation)setTimeout(startCommandListening,500);
+        else{voiceState=VOICE_IDLE;startAlwaysListening()}
+        return;
+      }
+      
+      // In conversation mode, strip accidental wake words
       if(inConversation&&matchesWakeWord(speech.toLowerCase())){
         const after=extractAfterWake(speech);
         if(after&&after.length>2){
           speech=after;
           D('  ✅ Stripped wake word, command: "'+speech+'"');
         }else{
-          // Just said "hey viron" again with nothing after — ignore, keep listening
           D('  (wake word only in conversation, ignoring)');
-          startCommandListening();
+          setTimeout(startCommandListening,300);
           return;
         }
       }
@@ -638,13 +670,18 @@ function startCommandListening(){
     D('  ⚠️ cmd error: '+e.error);
     if(!gotResult&&!handled){
       handled=true;
-      if(inConversation&&(e.error==='no-speech'||e.error==='aborted')){
-        setTimeout(startCommandListening,300);
-      }else if(inConversation){
-        setTimeout(startCommandListening,500);
+      if(e.error==='aborted'){
+        cmdRetryCount++;
+        if(inConversation)setTimeout(startCommandListening,800);
+        else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
+      }else if(e.error==='no-speech'){
+        cmdRetryCount=0; // no-speech is normal
+        if(inConversation)setTimeout(startCommandListening,500);
+        else{voiceState=VOICE_IDLE;startAlwaysListening()}
       }else{
-        voiceState=VOICE_IDLE;
-        startAlwaysListening();
+        cmdRetryCount++;
+        if(inConversation)setTimeout(startCommandListening,1000);
+        else{voiceState=VOICE_IDLE;startAlwaysListening()}
       }
     }
   };
@@ -653,20 +690,17 @@ function startCommandListening(){
     clearTimeout(cmdTimeout);
     if(!gotResult&&!handled){
       handled=true;
-      if(inConversation){
-        setTimeout(startCommandListening,300);
-      }else{
-        voiceState=VOICE_IDLE;
-        startAlwaysListening();
-      }
+      cmdRetryCount++;
+      if(inConversation)setTimeout(startCommandListening,500);
+      else{voiceState=VOICE_IDLE;startAlwaysListening()}
     }
   };
   
-  try{cmdRec.start()}catch(e){
+  try{cmdRec.start();cmdRetryCount=0}catch(e){
     D('  ❌ cmd start error: '+e.message);
-    voiceState=VOICE_IDLE;
-    if(inConversation){setTimeout(startCommandListening,500)}
-    else{startAlwaysListening()}
+    cmdRetryCount++;
+    if(inConversation)setTimeout(startCommandListening,1000);
+    else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
   }
 }
 
@@ -835,7 +869,7 @@ let wbO=false,wbT=null;
 function openWB(t,s){wbO=true;document.getElementById("wbt").textContent=t;const c=document.getElementById("wbc");c.innerHTML="";s.forEach((x,i)=>{const d=document.createElement("div");d.className="wb-step";let h="";if(x.label)h+=`<div class="sl">${x.label}</div>`;if(x.math)h+=`<div class="sm">${x.math}</div>`;if(x.text)h+=`<div class="st">${x.text}</div>`;if(x.result)h+=`<div class="sr">${x.result}</div>`;d.innerHTML=h;c.appendChild(d);setTimeout(()=>d.classList.add("visible"),400+i*800)});
 document.getElementById("face").style.transition="opacity 0.6s";document.getElementById("face").style.opacity="0";
 setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
-wbT=setTimeout(()=>{if(wbO)closeWB()},600+s.length*800+5000)}
+wbT=setTimeout(()=>{if(wbO)closeWB()},120000)} // 2 min safety timeout — student should say "ok" to close
 function closeWB(){wbO=false;clearTimeout(wbT);document.getElementById("wb").classList.remove("active");setTimeout(()=>{document.getElementById("face").style.opacity="1";cE("happy")},400)}
 function parseWB(t){const m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);if(!m)return null;const s=[];m[2].trim().split("\n").filter(l=>l.trim()).forEach(l=>{const x=l.trim();if(x.startsWith("STEP:"))s.push({label:x.slice(5).trim()});else if(x.startsWith("MATH:"))s.push({math:x.slice(5).trim()});else if(x.startsWith("RESULT:"))s.push({result:x.slice(7).trim()});else if(x.startsWith("TEXT:"))s.push({text:x.slice(5).trim()});else s.push({text:x})});return{t:m[1].trim(),s}}
 
