@@ -222,35 +222,40 @@ function extractAfterWake(text){
   return null;
 }
 
+let wakeStarting=false;
 function startWakeListener(){
-  if(voiceState===VOICE_ACTIVATED||loading)return;
+  if(voiceState===VOICE_ACTIVATED||loading||wakeStarting)return;
   // Don't start while still speaking
-  if(synth&&synth.speaking){setTimeout(startWakeListener,500);return}
+  if(synth&&synth.speaking){setTimeout(startWakeListener,1000);return}
+  
+  wakeStarting=true;
   stopAllRecognition();
   voiceState=VOICE_IDLE;
   updateListenUI();
 
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){console.warn("SpeechRecognition not available");return;}
+  if(!SR){console.warn("SpeechRecognition not available");wakeStarting=false;return;}
 
   wakeRec=new SR();
   wakeRec.continuous=true;
   wakeRec.interimResults=true;
-  wakeRec.lang="en-US"; // Primary for "Hey VIRON"
-  wakeRec.maxAlternatives=3;
+  wakeRec.lang="en-US";
+  wakeRec.maxAlternatives=5;
+
+  wakeRec.onstart=()=>{
+    wakeStarting=false;
+    console.log("🎤 Wake listener active — say 'Hey VIRON'");
+  };
 
   wakeRec.onresult=e=>{
     for(let i=e.resultIndex;i<e.results.length;i++){
       const transcript=e.results[i][0].transcript;
-      // Check all alternatives too
       let found=matchesWakeWord(transcript);
       if(!found){for(let j=1;j<e.results[i].length;j++)if(matchesWakeWord(e.results[i][j].transcript)){found=true;break}}
-
       if(found){
         console.log("🎤 Wake word detected:",transcript);
-        // Check if there's already a command after the wake word
         const afterWake=extractAfterWake(transcript);
-        wakeRec.stop();
+        try{wakeRec.stop()}catch{}
         onWakeWordDetected(afterWake);
         return;
       }
@@ -258,31 +263,34 @@ function startWakeListener(){
   };
 
   wakeRec.onerror=e=>{
-    console.log("Wake listener error:",e.error);
+    wakeStarting=false;
     if(e.error==="not-allowed"){
-      // Mic permission denied — fall back to tap
       document.getElementById("listenText").textContent="Tap face to talk";
       document.getElementById("face").style.cursor="pointer";
-      document.getElementById("face").onclick=()=>{if(!loading&&voiceState!==VOICE_ACTIVATED)onWakeWordDetected(null)};
       return;
     }
-    // Restart after delay (longer for aborted to prevent loop)
+    if(e.error==="aborted"||e.error==="network"){
+      // Don't spam restarts — wait longer
+      clearTimeout(wakeRetryTimeout);
+      wakeRetryTimeout=setTimeout(startWakeListener,3000);
+      return;
+    }
     clearTimeout(wakeRetryTimeout);
-    const delay=e.error==="aborted"?2000:1000;
-    wakeRetryTimeout=setTimeout(startWakeListener,delay);
+    wakeRetryTimeout=setTimeout(startWakeListener,2000);
   };
 
   wakeRec.onend=()=>{
-    // Restart if still in idle mode (continuous listening)
+    wakeStarting=false;
     if(voiceState===VOICE_IDLE&&!loading){
       clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(startWakeListener,500);
+      wakeRetryTimeout=setTimeout(startWakeListener,1000);
     }
   };
 
-  try{wakeRec.start();console.log("🎤 Wake listener started")}catch(e){
+  try{wakeRec.start()}catch(e){
+    wakeStarting=false;
     clearTimeout(wakeRetryTimeout);
-    wakeRetryTimeout=setTimeout(startWakeListener,2000);
+    wakeRetryTimeout=setTimeout(startWakeListener,3000);
   }
 }
 
@@ -314,7 +322,7 @@ function startActiveListening(){
   activeRec.continuous=false;
   activeRec.interimResults=false;
   activeRec.lang="el-GR"; // Greek primary for actual speech
-  activeRec.maxAlternatives=1;
+  activeRec.maxAlternatives=3;
 
   let silenceTimer=null;
   let gotResult=false;
@@ -328,14 +336,14 @@ function startActiveListening(){
       }
     },2000);
 
-    // Timeout: if no speech after 5 seconds, go back to idle
+    // Timeout: if no speech after 10 seconds, go back to idle
     silenceTimer=setTimeout(()=>{
       if(!gotResult&&voiceState===VOICE_ACTIVATED){
         activeRec.stop();
         cE("confused");
         say(isGr(msgs[msgs.length-1]?.content||"")?"Δεν σε άκουσα. Πες μου ξανά!":"I didn't catch that. Try again!");
       }
-    },5000);
+    },10000);
   };
 
   activeRec.onresult=e=>{
