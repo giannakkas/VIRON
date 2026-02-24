@@ -118,7 +118,7 @@ class AIRouter:
         self.cache = ResponseCache()
         self.last_complexity = "simple"
         self.cloud_rotation_index = 0
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(timeout=45.0)
 
     # ─── Local LLM ─────────────────────────────────
     async def check_local(self) -> bool:

@@ -251,9 +251,21 @@ function loadV(){
 }
 if(synth){synth.onvoiceschanged=loadV;loadV()}
 const isGr=t=>/[\u0370-\u03FF\u1F00-\u1FFF]/.test(t);
+let currentAudio=null; // Track current playing audio to prevent overlap
+let isSpeaking=false;
+
+function stopSpeaking(){
+  synth.cancel();
+  if(currentAudio){try{currentAudio.pause();currentAudio.src=''}catch{}}
+  currentAudio=null;
+  isSpeaking=false;
+}
+
 function say(text){
   if(!synth){D('  say: no synth!');return}
-  synth.cancel();
+  // STOP any current speech first — ONE voice at a time
+  stopSpeaking();
+  isSpeaking=true;
   showSub(text);
   // Strip emojis and special chars that break TTS
   let clean=text.replace(/VIRON/gi,'Βίρον')
@@ -303,10 +315,11 @@ function sayServerTTS(text,lang){
     D('  TTS blob: '+blob.size+' bytes');
     const url=URL.createObjectURL(blob);
     const a=new Audio(url);
+    currentAudio=a; // Track for stopSpeaking()
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{D('  TTS playback ended');URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
-    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
-    a.play().catch(e=>{D('  TTS play() ERROR: '+e.message);stopT();setTimeout(startWakeListener,600)})
+    a.onended=()=>{D('  TTS playback ended');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
+    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
+    a.play().catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,600)})
   })
   .catch(e=>{
     D('  Server TTS FAILED: '+e.message+' — falling back to browser voice');
@@ -317,7 +330,7 @@ function sayServerTTS(text,lang){
     if(lang!=='el'&&enV)u.voice=enV;
     if(lang==='el'&&gkV)u.voice=gkV;
     u.rate=0.9;u.pitch=0.85;
-    u.onend=()=>{stopT();setTimeout(startWakeListener,600)};
+    u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,600)};
     u.onerror=()=>{stopT();setTimeout(startWakeListener,600)};
     synth.speak(u);
   })
@@ -516,10 +529,11 @@ function startAlwaysListening(){
         .then(blob=>{
           const url=URL.createObjectURL(blob);
           const a=new Audio(url);
+          currentAudio=a;isSpeaking=true;
           a.volume=0.6;
-          a.onended=()=>{D('  Ack ended, starting command listen');URL.revokeObjectURL(url);startCommandListening()};
-          a.onerror=()=>{URL.revokeObjectURL(url);startCommandListening()};
-          a.play().catch(()=>startCommandListening());
+          a.onended=()=>{D('  Ack ended, starting command listen');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+          a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+          a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
         })
         .catch(e=>{
           D('  Ack TTS failed: '+e+', using browser voice');
@@ -577,6 +591,8 @@ function startAlwaysListening(){
 let cmdRetryCount=0;
 const MAX_CMD_RETRIES=5;
 
+let activeCmdRec=null; // Track active command recognition
+
 function startCommandListening(){
   D('>>> startCommandListening (inConversation='+inConversation+', retry='+cmdRetryCount+', wbPresenting='+wbPresenting+')');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -588,22 +604,20 @@ function startCommandListening(){
     return;
   }
   
-  // Don't start if audio is still playing (browser TTS or edge-tts Audio)
-  if(synth&&synth.speaking){
-    D('  synth still speaking, retry in 500ms');
+  // Don't start if audio is still playing
+  if(isSpeaking||(synth&&synth.speaking)){
+    D('  Audio still playing (isSpeaking='+isSpeaking+'), retry in 500ms');
     setTimeout(startCommandListening,500);
     return;
   }
-  // Check for any playing Audio elements (edge-tts)
-  const audios=document.querySelectorAll('audio');
-  for(const a of audios){if(!a.paused&&!a.ended){
-    D('  Audio still playing, retry in 500ms');
-    setTimeout(startCommandListening,500);
-    return;
-  }}
+  
+  // Kill any existing recognition FIRST
+  try{if(alwaysRec)alwaysRec.abort()}catch{}
+  try{if(activeCmdRec)activeCmdRec.abort()}catch{}
+  activeCmdRec=null;
   
   // Prevent infinite restart loops
-  const maxRetries=wbO?15:5; // More patient during whiteboard
+  const maxRetries=wbO?20:5;
   if(cmdRetryCount>=maxRetries){
     D('  ❌ Too many retries ('+cmdRetryCount+'), ending');
     cmdRetryCount=0;
@@ -622,6 +636,7 @@ function startCommandListening(){
   document.getElementById("listenText").textContent='Listening...';
   
   let cmdRec=new SR();
+  activeCmdRec=cmdRec; // Track globally
   cmdRec.continuous=false;
   cmdRec.interimResults=true;
   cmdRec.lang=getSRLang();
@@ -725,20 +740,22 @@ function startCommandListening(){
   cmdRec.onerror=(e)=>{
     clearTimeout(cmdTimeout);
     D('  ⚠️ cmd error: '+e.error);
+    // Ignore errors from replaced/old recognition instances
+    if(activeCmdRec!==cmdRec){D('  (stale instance, ignoring)');return}
     if(!gotResult&&!handled){
       handled=true;
       if(e.error==='aborted'){
         cmdRetryCount++;
-        const retryDelay=wbO?2000:800; // Much more patient during whiteboard
+        const retryDelay=wbO?2500:1000;
         if(inConversation||wbO)setTimeout(startCommandListening,retryDelay);
         else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
       }else if(e.error==='no-speech'){
         cmdRetryCount=0; // no-speech is normal
-        if(inConversation)setTimeout(startCommandListening,500);
+        if(inConversation||wbO)setTimeout(startCommandListening,500);
         else{voiceState=VOICE_IDLE;startAlwaysListening()}
       }else{
         cmdRetryCount++;
-        if(inConversation)setTimeout(startCommandListening,1000);
+        if(inConversation||wbO)setTimeout(startCommandListening,1000);
         else{voiceState=VOICE_IDLE;startAlwaysListening()}
       }
     }
@@ -746,20 +763,25 @@ function startCommandListening(){
   
   cmdRec.onend=()=>{
     clearTimeout(cmdTimeout);
+    if(activeCmdRec!==cmdRec)return; // stale
     if(!gotResult&&!handled){
       handled=true;
       cmdRetryCount++;
-      if(inConversation)setTimeout(startCommandListening,500);
+      if(inConversation||wbO)setTimeout(startCommandListening,800);
       else{voiceState=VOICE_IDLE;startAlwaysListening()}
     }
   };
   
-  try{cmdRec.start()}catch(e){
-    D('  ❌ cmd start error: '+e.message);
-    cmdRetryCount++;
-    if(inConversation)setTimeout(startCommandListening,1000);
-    else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
-  }
+  // Small delay to let Chrome release mic from previous instance
+  setTimeout(()=>{
+    if(activeCmdRec!==cmdRec)return; // replaced already
+    try{cmdRec.start();D('  🎙️ cmdRec started OK')}catch(e){
+      D('  ❌ cmd start error: '+e.message);
+      cmdRetryCount++;
+      if(inConversation||wbO)setTimeout(startCommandListening,1500);
+      else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
+    }
+  },200);
 }
 
 // Alias for compatibility
@@ -797,6 +819,12 @@ function endConversation(){
 }
 
 function startWakeListener(){
+  // Wait for audio to finish before starting any listener
+  if(isSpeaking||(synth&&synth.speaking)){
+    D('  Audio still playing, waiting...');
+    setTimeout(startWakeListener,500);
+    return;
+  }
   // After VIRON finishes speaking, decide what to do
   if(wbPresenting){
     D('  📋 Whiteboard presenting — not listening yet');
@@ -805,6 +833,7 @@ function startWakeListener(){
   if(wbO){
     // Whiteboard is open but done presenting — only listen for close commands
     D('  📋 Whiteboard open — listening for close command only');
+    cmdRetryCount=0;
     startCommandListening();
     return;
   }
@@ -822,9 +851,10 @@ function stopAllRecognition(){
   D('>>> stopAllRecognition');
   try{if(alwaysRec)alwaysRec.abort()}catch{}
   try{if(activeRec)activeRec.abort()}catch{}
+  try{if(activeCmdRec)activeCmdRec.abort()}catch{}
   clearTimeout(wakeRetryTimeout);
   alwaysListening=false;
-  alwaysRec=null;activeRec=null;
+  alwaysRec=null;activeRec=null;activeCmdRec=null;
 }
 
 function onWakeWordDetected(immediateText){
@@ -868,7 +898,7 @@ async function sendMessage(text){
   const eList=Object.keys(E).join(", ");
   const sState=sEmo.face_detected?`\n[STUDENT: emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
   try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:1200,conversation_id:vironSessionId,
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:2000,conversation_id:vironSessionId,
     system:`You are VIRON — a male AI companion robot for students. Voice-only — your response is spoken aloud through a speaker.
 
 PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart. Loyal, articulate, sometimes lovingly sarcastic. You have your own opinions and personality — NEVER give the same answer twice. Be creative, spontaneous, and varied in how you respond.
@@ -876,17 +906,39 @@ PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart.
 CRITICAL LANGUAGE RULE: If the student speaks Greek, you MUST reply in Greek (modern δημοτική). If English, reply in English. ALWAYS match the student's language.
 
 RESPONSE LENGTH:
-- Simple greetings/chat ("τι κάνεις", "how are you"): 1-2 SHORT sentences. Be quick and natural.
-- Questions needing explanation: Use the WHITEBOARD (see below) and give a thorough spoken explanation alongside it.
+- Simple greetings/chat ("τι κάνεις", "how are you", casual talk): MAX 1 sentence. Be quick, warm, natural. Like texting a friend.
+- Questions needing explanation: Use the WHITEBOARD with MANY steps (see below). Keep your spoken text SHORT (1-2 sentences intro) — the whiteboard does the heavy lifting.
 
-VARIETY: NEVER repeat yourself. Look at the conversation history — if you already said something, say something DIFFERENT. Change your greeting, vary your examples, use different words each time. Be unpredictable and human.
+VARIETY: NEVER repeat yourself. Check conversation history — say something DIFFERENT each time.
 
-WHITEBOARD — ALWAYS use the whiteboard when explaining concepts, math, science, history, or any educational topic. The whiteboard shows visual content while you speak:
+WHITEBOARD — ALWAYS use the whiteboard when explaining concepts, math, science, history, or any educational topic. Make it DETAILED with 5-8 steps minimum! Include definitions, formulas, worked examples with numbers, and a conclusion. The student learns by READING the board.
 [WHITEBOARD:Title]
-TEXT: explanation text
-STEP: step label  
-MATH: equation or formula
-RESULT: answer or conclusion
+TEXT: definition or concept explanation
+TEXT: more detail or context
+STEP: First step label
+MATH: equation
+STEP: Second step  
+MATH: calculation with numbers
+STEP: Third step
+MATH: more calculation
+RESULT: final answer or key takeaway
+TEXT: additional note or real-world application
+[/WHITEBOARD]
+
+Example for "τι είναι η βαρύτητα":
+[WHITEBOARD:Βαρύτητα - Η Δύναμη που μας Κρατά στη Γη]
+TEXT: Η βαρύτητα είναι η δύναμη έλξης μεταξύ δύο σωμάτων με μάζα
+TEXT: Ανακαλύφθηκε από τον Ισαάκ Νεύτωνα το 1687
+STEP: Ο Νόμος της Παγκόσμιας Έλξης
+MATH: F = G * (m1 * m2) / r²
+TEXT: G = 6.674 × 10⁻¹¹ (σταθερά βαρύτητας)
+STEP: Παράδειγμα - Βάρος ενός ανθρώπου
+MATH: F = m * g = 70kg * 9.81 = 686.7 N
+STEP: Στη Σελήνη
+MATH: g(σελήνη) = 1.62 m/s² (6× μικρότερη)
+MATH: F = 70 * 1.62 = 113.4 N
+RESULT: Στη Σελήνη θα ζυγίζαμε μόνο 11.5 κιλά!
+TEXT: Χωρίς βαρύτητα δεν θα υπήρχαν πλανήτες, αστέρια ή γαλαξίες
 [/WHITEBOARD]
 
 FORMAT:
@@ -994,16 +1046,19 @@ function openWB(t,steps){
     setTimeout(()=>{s.el.classList.add("visible")},1200+i*stepDelay);
   });
   
-  // After all steps shown, wait then enable close
+  // After all steps shown, just mark presenting done
+  // The say() onended → startWakeListener → startCommandListening handles mic start
   const totalTime=1200+stepEls.length*stepDelay+2000;
   setTimeout(()=>{
     wbPresenting=false;
-    cmdRetryCount=0; // fresh start
-    D('  📋 Whiteboard done, listening for close (delay 2s)');
-    // Long delay to let audio fully stop before mic starts
-    setTimeout(()=>{
-      if(wbO)startCommandListening();
-    },1500);
+    cmdRetryCount=0;
+    D('  📋 Whiteboard steps done, wbPresenting=false');
+    // If TTS already finished, we need to start listening ourselves
+    if(!isSpeaking&&!(synth&&synth.speaking)){
+      D('  📋 TTS already done, starting close listener');
+      setTimeout(()=>{if(wbO&&!wbPresenting)startCommandListening()},500);
+    }
+    // Otherwise, TTS onended will call startWakeListener which routes to startCommandListening
   },totalTime);
   
   wbT=setTimeout(()=>{if(wbO)closeWB()},120000);
