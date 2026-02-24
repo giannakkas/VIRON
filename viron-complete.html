@@ -341,6 +341,7 @@ function matchesWakeWord(text){
     "hey iron","hey violin","hey viral","hey viren","hey vyron",
     "have iran","have iron","hey iran","hey irene","hey vr","hey v run",
     "a viron","a byron","hey brian","hey bryan",
+    "tegan","tegan is","t gun","tigan","tea gun","tik on","tick on",
     "heavy wrong","heavy round","hey around","hey brown",
     "hayviron","hay viron","hayvironment","hay vironment",
     "hey environment","hey environ","hey virum","hey vironn",
@@ -351,6 +352,8 @@ function matchesWakeWord(text){
   for(const m of misrecognitions)if(lower.includes(m))return true;
   // Fuzzy regex: (hey/hi/hay/heavy/a/have) + (vir/byr/bir/fir/ron/iron)
   if(/(hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)/i.test(lower))return true;
+  // "Tegan" = Chrome hearing "Hey VIRON" with Greek accent
+  if(/^(tegan|tigan|teegan|deghan|degan)\b/i.test(lower))return true;
   // Greek fuzzy: χέι/έι/ε/γεια + βιρ/βαιρ/βύρ
   if(/(χέι|χει|έι|ει|γεια|για|ε)\s*(βιρ|βαιρ|βύρ|βίρ|μπαιρ)/i.test(lower))return true;
   // Fuzzy: word starting with hey/hay + word containing r+on/un/oad
@@ -373,6 +376,7 @@ function extractAfterWake(text){
     "hey byron","hey veron","hey baron","hey bron","hey ron","hey run",
     "hey iron","hey violin","hey viral","hey viren","hey vyron",
     "have iran","have iron","hey iran","hey irene","hey brian","hey bryan",
+    "tegan","tegan is","t gun","tigan","tea gun","tik on","tick on",
     "heavy wrong","heavy round","hey around","hey brown",
     "hayviron","hay viron","hayvironment","hay vironment",
     "hey environment","hey environ","hey virum","hey vironn",
@@ -391,7 +395,8 @@ function extractAfterWake(text){
   const fuzzyPatterns=[
     /((?:hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(?:vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)\w*)/i,
     /((?:hey|hay|hi|heavy)\s+\S*(?:vir|byr|bir|ron|run|road|iro)\S*)/i,
-    /((?:χέι|χει|έι|ει|γεια|για|ε)\s*(?:βιρ|βαιρ|βύρ|βίρ|μπαιρ)\S*)/i
+    /((?:χέι|χει|έι|ει|γεια|για|ε)\s*(?:βιρ|βαιρ|βύρ|βίρ|μπαιρ)\S*)/i,
+    /((?:tegan|tigan|teegan|deghan|degan)\s*(?:is)?)/i
   ];
   for(const pat of fuzzyPatterns){
     const match=lower.match(pat);
