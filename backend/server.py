@@ -415,14 +415,41 @@ except ImportError:
 
 @app.route('/api/tts', methods=['POST'])
 def text_to_speech():
-    """Generate speech audio from text. Returns MP3."""
-    if not HAS_GTTS:
-        return jsonify({"error": "gTTS not installed"}), 500
+    """Generate speech audio from text. Returns MP3. Uses edge-tts for male voice, gTTS fallback."""
     data = request.get_json()
     if not data or not data.get('text'):
         return jsonify({"error": "No text"}), 400
     text = data['text']
-    lang = data.get('lang', 'el')  # default Greek
+    lang = data.get('lang', 'el')
+    
+    # Try edge-tts first (has male Greek voice)
+    try:
+        import edge_tts, asyncio, io
+        # Male voices: el-GR-NestorasNeural (Greek), en-US-GuyNeural (English)
+        voice = "el-GR-NestorasNeural" if lang == "el" else "en-US-GuyNeural"
+        
+        async def gen():
+            communicate = edge_tts.Communicate(text, voice, rate="-5%", pitch="-2st")
+            buf = io.BytesIO()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            buf.seek(0)
+            return buf
+        
+        loop = asyncio.new_event_loop()
+        buf = loop.run_until_complete(gen())
+        loop.close()
+        return Response(buf.read(), mimetype='audio/mpeg',
+                       headers={'Content-Disposition': 'inline'})
+    except ImportError:
+        print("⚠ edge-tts not installed, using gTTS (pip install edge-tts)")
+    except Exception as e:
+        print(f"⚠ edge-tts error: {e}, falling back to gTTS")
+    
+    # Fallback: gTTS
+    if not HAS_GTTS:
+        return jsonify({"error": "No TTS engine available"}), 500
     try:
         import io
         tts = gTTS(text=text, lang=lang, slow=False)

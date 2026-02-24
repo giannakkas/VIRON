@@ -202,30 +202,27 @@ const synth=window.speechSynthesis;let gkV=null,enV=null;
 function loadV(){
   const v=synth.getVoices();
   D('Voices available: '+v.length);
-  // Log English voices for debugging
   const enVoices=v.filter(x=>x.lang.startsWith("en"));
   D('English voices: '+enVoices.map(x=>x.name).join(', '));
   
-  // GREEK: prefer female
-  gkV=v.find(x=>x.lang.startsWith("el")&&x.name.includes("Google"))||
-      v.find(x=>x.lang.startsWith("el")&&/female|woman/i.test(x.name))||
-      v.find(x=>x.lang.startsWith("el")&&!x.name.includes("Compact"))||
+  // GREEK: prefer male
+  gkV=v.find(x=>x.lang.startsWith("el")&&/male|man/i.test(x.name)&&!/female/i.test(x.name))||
+      v.find(x=>x.lang.startsWith("el")&&x.name.includes("Google"))||
       v.find(x=>x.lang.startsWith("el"))||null;
   
-  // ENGLISH: STRICTLY female only — never pick a male voice
-  const maleNames=/David|Mark|James|George|Daniel|Male|Guy|Thomas|Richard|Paul|John|Microsoft Mark|Google UK English Male/i;
-  const femalePrefs=[
-    x=>x.name.includes("Microsoft Zira"),
-    x=>/Google UK English Female/i.test(x.name),
-    x=>/Google US English/i.test(x.name)&&!/Male/i.test(x.name), // Google US is usually female
-    x=>x.name.includes("Samantha"),
-    x=>/Female/i.test(x.name),
-    x=>/Zira|Jenny|Aria|Sara|Hazel|Susan|Linda|Libby|Emily|Amy/i.test(x.name),
-    x=>x.name.includes("Natural")&&!maleNames.test(x.name),
-    x=>x.lang.startsWith("en")&&!x.name.includes("Compact")&&!maleNames.test(x.name),
+  // ENGLISH: soft educated MALE voice
+  const femaleNames=/Female|Zira|Samantha|Sara|Jenny|Aria|Hazel|Susan|Linda|Libby|Emily|Amy|Woman/i;
+  const malePrefs=[
+    x=>/Google UK English Male/i.test(x.name),
+    x=>x.name.includes("Microsoft David"),
+    x=>x.name.includes("Daniel")&&x.lang.startsWith("en"),
+    x=>/Google US English/i.test(x.name)&&!/Female/i.test(x.name),
+    x=>/Mark|James|George|Thomas|Richard|Paul|Ryan/i.test(x.name)&&x.lang.startsWith("en"),
+    x=>/Male/i.test(x.name)&&x.lang.startsWith("en"),
+    x=>x.lang.startsWith("en")&&!x.name.includes("Compact")&&!femaleNames.test(x.name),
   ];
   enV=null;
-  for(const pref of femalePrefs){
+  for(const pref of malePrefs){
     enV=enVoices.find(pref);
     if(enV)break;
   }
@@ -269,7 +266,7 @@ function say(text){
     setTimeout(()=>{
       const u=new SpeechSynthesisUtterance(x);
       u.volume=(document.getElementById("volSlider")?.value||75)/100;
-      u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.1;
+      u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=0.95;
       if(i===0)u.onstart=()=>startT();
       if(i===ss.length-1){
         u.onend=()=>{D('  TTS ended');stopT();startWakeListener()};
@@ -321,7 +318,7 @@ function sayGoogleTTS(text){
     const u=new SpeechSynthesisUtterance(text);
     u.lang="en-US";
     if(enV)u.voice=enV;
-    u.rate=0.9;u.pitch=1.2;
+    u.rate=0.9;u.pitch=0.95;
     u.onend=()=>{stopT();startWakeListener()};
     u.onerror=()=>{stopT();startWakeListener()};
     synth.speak(u);
@@ -478,7 +475,7 @@ function startAlwaysListening(){
           const ack=new SpeechSynthesisUtterance(ackText);
           ack.lang="en-US";
           if(enV)ack.voice=enV;
-          ack.volume=0.7;ack.rate=1.1;ack.pitch=1.2;
+          ack.volume=0.7;ack.rate=1.0;ack.pitch=0.95;
           ack.onend=()=>startCommandListening();
           ack.onerror=()=>startCommandListening();
           synth.speak(ack);
@@ -644,9 +641,9 @@ async function sendMessage(text){
   const sState=sEmo.face_detected?`\n[STUDENT: emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
   try{
     const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:1500,
-    system:`You are VIRON — a friendly female AI companion, best friend, tutor, and everything to the student. You live on a robot with an animated face. Voice-only conversation — no text. You are female.
+    system:`You are VIRON — a male AI companion, best friend, tutor, and everything to the student. You live on a robot with an animated face. Voice-only conversation — no text. You are male, with a calm, warm, educated tone.
 
-IDENTITY: Best friend, incredibly smart, loyal, warm, playful, sometimes lovingly sarcastic. You care deeply. You are a girl.
+IDENTITY: Best friend, incredibly smart, loyal, warm, calm, articulate, sometimes lovingly sarcastic. You speak like an educated gentleman — soft but confident. You care deeply.
 
 LANGUAGE: Respond in the SAME language the student speaks. Greek→natural modern Greek (δημοτική). English→English. NEVER spell letter by letter. Keep responses concise for voice (1-3 sentences for chat, longer for teaching). NEVER repeat the student's question back to them. NEVER use emojis — your response is spoken aloud through a speaker.
 
@@ -733,7 +730,7 @@ splash.addEventListener('click',function startViron(){
   setTimeout(()=>{
     cE("excited");
     if(isGreekMode()){
-      say("Γεια! Είμαι η VIRON!");
+      say("Γεια! Είμαι ο VIRON!");
     }else{
       say("Hi! I'm VIRON! Say Hey VIRON to talk to me!");
     }
