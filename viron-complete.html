@@ -190,9 +190,22 @@ function matchesWakeWord(text){
   const lower=text.toLowerCase().trim();
   // Check exact matches
   for(const w of WAKE_WORDS)if(lower.includes(w))return true;
-  // Fuzzy: check if has "hey"/"γεια" + something close to "viron"
-  if((lower.includes("hey")||lower.includes("γεια"))&&
-     (lower.includes("vir")||lower.includes("byr")||lower.includes("βιρ")||lower.includes("βάιρ")||lower.includes("iron")))return true;
+  // Common misrecognitions of "Hey VIRON"
+  const misrecognitions=["heavy road","heavy ron","heavy run","heavy iron","heavy roan",
+    "hey byron","hey veron","hey baron","hey bron","hey ron","hey run",
+    "hey iron","hey violin","hey viral","hey viren","hey vyron",
+    "have iran","have iron","hey iran","hey irene","hey vr","hey v run",
+    "a viron","a byron","hey brian","hey bryan",
+    "heavy wrong","heavy round","hey around","hey brown",
+    "γεια βιρον","γεια βαιρον","για βιρον"];
+  for(const m of misrecognitions)if(lower.includes(m))return true;
+  // Fuzzy: "hey/hi/heavy" + anything containing "r" + "on/oad/un/an/own"
+  if(/(hey|hi|heavy|have|a)\s+\w*[vb]\w*r\w*[no]/i.test(lower))return true;
+  // Fuzzy: anything with "hey"/"γεια" + something close to "viron"
+  if((lower.includes("hey")||lower.includes("hi ")||lower.includes("γεια"))&&
+     (lower.includes("vir")||lower.includes("byr")||lower.includes("βιρ")||
+      lower.includes("βάιρ")||lower.includes("iron")||lower.includes("ron")||
+      lower.includes("run")||lower.includes("road")))return true;
   return false;
 }
 
