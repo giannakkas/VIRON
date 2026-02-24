@@ -202,22 +202,35 @@ const synth=window.speechSynthesis;let gkV=null,enV=null;
 function loadV(){
   const v=synth.getVoices();
   D('Voices available: '+v.length);
-  // GREEK: prefer female voices
+  // Log English voices for debugging
+  const enVoices=v.filter(x=>x.lang.startsWith("en"));
+  D('English voices: '+enVoices.map(x=>x.name).join(', '));
+  
+  // GREEK: prefer female
   gkV=v.find(x=>x.lang.startsWith("el")&&x.name.includes("Google"))||
       v.find(x=>x.lang.startsWith("el")&&/female|woman/i.test(x.name))||
       v.find(x=>x.lang.startsWith("el")&&!x.name.includes("Compact"))||
       v.find(x=>x.lang.startsWith("el"))||null;
-  // ENGLISH: prefer female soft voices
-  enV=v.find(x=>x.name.includes("Microsoft Zira")&&x.lang.startsWith("en"))||
-      v.find(x=>x.name.includes("Samantha")&&x.lang.startsWith("en"))||
-      v.find(x=>/Google UK English Female/i.test(x.name))||
-      v.find(x=>/female/i.test(x.name)&&x.lang.startsWith("en"))||
-      v.find(x=>x.name.includes("Natural")&&x.lang.startsWith("en")&&/female|zira|jenny|aria|sara/i.test(x.name))||
-      v.find(x=>/Zira|Jenny|Aria|Sara|Hazel|Susan|Linda/i.test(x.name)&&x.lang.startsWith("en"))||
-      v.find(x=>x.name.includes("Google UK English Female"))||
-      v.find(x=>/Google.*Female/i.test(x.name)&&x.lang.startsWith("en"))||
-      v.find(x=>x.lang.startsWith("en-")&&!x.name.includes("Compact"))||null;
-  D('Greek voice: '+(gkV?.name||'NONE'));
+  
+  // ENGLISH: STRICTLY female only — never pick a male voice
+  const maleNames=/David|Mark|James|George|Daniel|Male|Guy|Thomas|Richard|Paul|John|Microsoft Mark|Google UK English Male/i;
+  const femalePrefs=[
+    x=>x.name.includes("Microsoft Zira"),
+    x=>/Google UK English Female/i.test(x.name),
+    x=>/Google US English/i.test(x.name)&&!/Male/i.test(x.name), // Google US is usually female
+    x=>x.name.includes("Samantha"),
+    x=>/Female/i.test(x.name),
+    x=>/Zira|Jenny|Aria|Sara|Hazel|Susan|Linda|Libby|Emily|Amy/i.test(x.name),
+    x=>x.name.includes("Natural")&&!maleNames.test(x.name),
+    x=>x.lang.startsWith("en")&&!x.name.includes("Compact")&&!maleNames.test(x.name),
+  ];
+  enV=null;
+  for(const pref of femalePrefs){
+    enV=enVoices.find(pref);
+    if(enV)break;
+  }
+  
+  D('Greek voice: '+(gkV?.name||'NONE (will use gTTS)'));
   D('English voice: '+(enV?.name||'NONE'));
 }
 if(synth){synth.onvoiceschanged=loadV;loadV()}
@@ -302,14 +315,13 @@ function sayGoogleTTS(text){
     a.play().catch(e=>{D('  gTTS play() ERROR: '+e.message);stopT();startWakeListener()})
   })
   .catch(e=>{
-    D('  gTTS FAILED: '+e.message+' — trying browser TTS');
+    D('  gTTS FAILED: '+e.message+' — using female English voice');
     stopT();
-    // Fallback: try browser speech synthesis
+    // Fallback: use English female voice (never risk a male Greek voice)
     const u=new SpeechSynthesisUtterance(text);
-    u.lang="el-GR";
-    if(gkV)u.voice=gkV;
-    else{u.lang="en-US";if(enV)u.voice=enV;}
-    u.rate=0.9;u.pitch=1.1;
+    u.lang="en-US";
+    if(enV)u.voice=enV;
+    u.rate=0.9;u.pitch=1.2;
     u.onend=()=>{stopT();startWakeListener()};
     u.onerror=()=>{stopT();startWakeListener()};
     synth.speak(u);
@@ -458,14 +470,14 @@ function startAlwaysListening(){
         
         // Quick ack
         const ackText=isGreekMode()?"Ναι;":"Yes?";
-        if(isGreekMode()&&!gkV){
+        if(isGreekMode()){
+          // Always use gTTS for Greek — guarantees female voice
           sayGoogleTTS(ackText);
           setTimeout(startCommandListening,1000);
         }else{
           const ack=new SpeechSynthesisUtterance(ackText);
-          ack.lang=isGreekMode()?"el-GR":"en-US";
-          if(isGreekMode()&&gkV)ack.voice=gkV;
-          else if(enV)ack.voice=enV;
+          ack.lang="en-US";
+          if(enV)ack.voice=enV;
           ack.volume=0.7;ack.rate=1.1;ack.pitch=1.2;
           ack.onend=()=>startCommandListening();
           ack.onerror=()=>startCommandListening();
@@ -636,7 +648,7 @@ async function sendMessage(text){
 
 IDENTITY: Best friend, incredibly smart, loyal, warm, playful, sometimes lovingly sarcastic. You care deeply. You are a girl.
 
-LANGUAGE: Respond in the SAME language the student speaks. Greek→natural modern Greek (δημοτική). English→English. NEVER spell letter by letter. Keep responses concise for voice (1-3 sentences for chat, longer for teaching). NEVER repeat the student's question back to them.
+LANGUAGE: Respond in the SAME language the student speaks. Greek→natural modern Greek (δημοτική). English→English. NEVER spell letter by letter. Keep responses concise for voice (1-3 sentences for chat, longer for teaching). NEVER repeat the student's question back to them. NEVER use emojis — your response is spoken aloud through a speaker.
 
 EMOTION — Start EVERY response with [emotion_name]. Available: ${eList}
 
