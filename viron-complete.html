@@ -87,7 +87,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .wb-title{font-size:14px;color:#444;font-weight:600}
 .wb-close{background:rgba(0,0,0,0.06);border:1px solid rgba(0,0,0,0.1);border-radius:8px;padding:6px 14px;font-size:12px;color:#555;cursor:pointer}
 .wb-content{position:absolute;top:50px;left:20px;right:20px;bottom:20px;overflow-y:auto;font-family:Georgia,serif}
-.wb-step{opacity:0;transform:translateY(15px);transition:all 0.5s;margin-bottom:16px}
+.wb-step{opacity:0;transform:translateY(15px);transition:all 1.2s ease-out;margin-bottom:16px}
 .wb-step.visible{opacity:1;transform:translateY(0)}
 .wb-step .sl{font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
 .wb-step .sm{font-size:24px;color:#1a5276;font-family:'Courier New',monospace;background:rgba(0,0,0,0.03);padding:12px 16px;border-radius:8px;border-left:4px solid #2980b9;margin:8px 0}
@@ -573,9 +573,15 @@ let cmdRetryCount=0;
 const MAX_CMD_RETRIES=5;
 
 function startCommandListening(){
-  D('>>> startCommandListening (inConversation='+inConversation+', retry='+cmdRetryCount+')');
+  D('>>> startCommandListening (inConversation='+inConversation+', retry='+cmdRetryCount+', wbPresenting='+wbPresenting+')');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR)return;
+  
+  // Don't listen while whiteboard is presenting
+  if(wbPresenting){
+    D('  📋 Whiteboard presenting, skipping');
+    return;
+  }
   
   // Don't start if audio is still playing (browser TTS or edge-tts Audio)
   if(synth&&synth.speaking){
@@ -592,9 +598,15 @@ function startCommandListening(){
   }}
   
   // Prevent infinite restart loops
-  if(cmdRetryCount>=MAX_CMD_RETRIES){
-    D('  ❌ Too many retries, ending conversation');
+  const maxRetries=wbO?15:5; // More patient during whiteboard
+  if(cmdRetryCount>=maxRetries){
+    D('  ❌ Too many retries ('+cmdRetryCount+'), ending');
     cmdRetryCount=0;
+    if(wbO){
+      // Don't end conversation, just stop trying to listen
+      D('  📋 Whiteboard still open, waiting for tap or timeout');
+      return;
+    }
     if(inConversation)endConversation();
     else{voiceState=VOICE_IDLE;startAlwaysListening()}
     return;
@@ -716,7 +728,8 @@ function startCommandListening(){
       handled=true;
       if(e.error==='aborted'){
         cmdRetryCount++;
-        if(inConversation)setTimeout(startCommandListening,800);
+        const retryDelay=wbO?2000:800; // Much more patient during whiteboard
+        if(inConversation||wbO)setTimeout(startCommandListening,retryDelay);
         else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
       }else if(e.error==='no-speech'){
         cmdRetryCount=0; // no-speech is normal
@@ -784,10 +797,14 @@ function endConversation(){
 
 function startWakeListener(){
   // After VIRON finishes speaking, decide what to do
+  if(wbPresenting){
+    D('  📋 Whiteboard presenting — not listening yet');
+    return; // openWB will start listening when done
+  }
   if(wbO){
-    // Whiteboard is open — only listen for close commands
+    // Whiteboard is open but done presenting — only listen for close commands
     D('  📋 Whiteboard open — listening for close command only');
-    startCommandListening(); // will check wbO in onresult
+    startCommandListening();
     return;
   }
   if(inConversation){
@@ -900,13 +917,16 @@ Be real. Be warm. Be their brilliant friend.`,
     const yt=c.match(/\[YOUTUBE:([a-zA-Z0-9_-]+):([^\]]+)\]/);
     if(yt){c=c.replace(/\[YOUTUBE:[^\]]+\]/,"").trim();setTimeout(()=>{document.getElementById("ytT").textContent="♪ "+yt[2];document.getElementById("ytP").src=`https://www.youtube.com/embed/${yt[1]}?autoplay=1&rel=0`;document.getElementById("ytC").classList.add("visible")},1000)}
     const wb=parseWB(c);
-    if(wb){const sp=c.replace(/\[WHITEBOARD:.*?\][\s\S]*?\[\/WHITEBOARD\]\s*/,"").trim()||"Κοίτα!";msgs.push({role:"assistant",content:sp});cE("thinking");
-      // Mark whiteboard as pending so startWakeListener routes to whiteboard mode
-      wbO=true;
+    if(wb){
+      // Extract spoken explanation (everything outside WHITEBOARD tags)
+      const sp=c.replace(/\[WHITEBOARD:.*?\][\s\S]*?\[\/WHITEBOARD\]\s*/,"").trim()||"Κοίτα!";
+      msgs.push({role:"assistant",content:sp});
+      cE("thinking");
+      wbO=true;wbPresenting=true;
       stopAllRecognition();
-      say(isGr(sp)?"Άσε με να σου δείξω.":"Let me show you.");
-      // Open whiteboard after voice finishes (say→startWakeListener→wbO→listen for close)
-      setTimeout(()=>{openWB(wb.t,wb.s)},2500);
+      // Open whiteboard and speak explanation simultaneously
+      setTimeout(()=>openWB(wb.t,wb.s),800);
+      setTimeout(()=>say(sp),1200); // Start speaking while board animates
     }
     else{msgs.push({role:"assistant",content:c});say(c)}
   }catch(e){D('  ❌ sendMessage ERROR: '+e.message);cE("confused");say(isGreekMode()?"Ωχ! Κάτι πήγε στραβά.":"Oops! Something went wrong.")}
@@ -928,13 +948,82 @@ else return;
 if(em)cE(em);stopAllRecognition();msgs.push({role:"assistant",content:m});say(m);lastPT=n}
 
 // ===== WHITEBOARD =====
-let wbO=false,wbT=null;
-function openWB(t,s){wbO=true;document.getElementById("wbt").textContent=t;const c=document.getElementById("wbc");c.innerHTML="";s.forEach((x,i)=>{const d=document.createElement("div");d.className="wb-step";let h="";if(x.label)h+=`<div class="sl">${x.label}</div>`;if(x.math)h+=`<div class="sm">${x.math}</div>`;if(x.text)h+=`<div class="st">${x.text}</div>`;if(x.result)h+=`<div class="sr">${x.result}</div>`;d.innerHTML=h;c.appendChild(d);setTimeout(()=>d.classList.add("visible"),400+i*800)});
-document.getElementById("face").style.transition="opacity 0.6s";document.getElementById("face").style.opacity="0";
-setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
-wbT=setTimeout(()=>{if(wbO)closeWB()},120000)} // 2 min safety timeout — student should say "ok" to close
-function closeWB(){wbO=false;clearTimeout(wbT);document.getElementById("wb").classList.remove("active");setTimeout(()=>{document.getElementById("face").style.opacity="1";cE("happy")},400)}
-function parseWB(t){const m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);if(!m)return null;const s=[];m[2].trim().split("\n").filter(l=>l.trim()).forEach(l=>{const x=l.trim();if(x.startsWith("STEP:"))s.push({label:x.slice(5).trim()});else if(x.startsWith("MATH:"))s.push({math:x.slice(5).trim()});else if(x.startsWith("RESULT:"))s.push({result:x.slice(7).trim()});else if(x.startsWith("TEXT:"))s.push({text:x.slice(5).trim()});else s.push({text:x})});return{t:m[1].trim(),s}}
+let wbO=false,wbT=null,wbPresenting=false;
+
+function openWB(t,steps){
+  wbO=true;
+  wbPresenting=true; // Block ALL listening while presenting
+  stopAllRecognition();
+  
+  document.getElementById("wbt").textContent=t;
+  const c=document.getElementById("wbc");c.innerHTML="";
+  
+  // Create all step elements (hidden)
+  const stepEls=[];
+  steps.forEach((x)=>{
+    const d=document.createElement("div");d.className="wb-step";
+    let h="";
+    if(x.label)h+=`<div class="sl">${x.label}</div>`;
+    if(x.text)h+=`<div class="st">${x.text}</div>`;
+    if(x.math)h+=`<div class="sm">${x.math}</div>`;
+    if(x.result)h+=`<div class="sr">${x.result}</div>`;
+    d.innerHTML=h;c.appendChild(d);
+    stepEls.push({el:d,data:x});
+  });
+  
+  // Show whiteboard
+  document.getElementById("face").style.transition="opacity 0.6s";
+  document.getElementById("face").style.opacity="0";
+  setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
+  
+  // Animate steps one by one with narration
+  let delay=1200; // initial delay after board appears
+  const stepDelay=2500; // time per step
+  
+  stepEls.forEach((s,i)=>{
+    setTimeout(()=>{
+      s.el.classList.add("visible");
+      // Narrate this step
+      const narration=s.data.label||s.data.text||s.data.math||s.data.result||"";
+      if(narration&&i<stepEls.length-1){
+        // For non-final steps, just show (narration happens via main speech)
+      }
+    },delay+i*stepDelay);
+  });
+  
+  // After all steps shown, enable close listening
+  const totalTime=delay+stepEls.length*stepDelay+1000;
+  setTimeout(()=>{
+    wbPresenting=false;
+    D('  📋 Whiteboard presentation done, listening for close');
+    startCommandListening(); // Now listen for "ok"
+  },totalTime);
+  
+  // Safety timeout
+  wbT=setTimeout(()=>{if(wbO)closeWB()},120000);
+}
+
+function closeWB(){
+  wbO=false;wbPresenting=false;
+  clearTimeout(wbT);
+  document.getElementById("wb").classList.remove("active");
+  setTimeout(()=>{document.getElementById("face").style.opacity="1";cE("happy")},400);
+}
+
+function parseWB(t){
+  const m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);
+  if(!m)return null;
+  const s=[];
+  m[2].trim().split("\n").filter(l=>l.trim()).forEach(l=>{
+    const x=l.trim();
+    if(x.startsWith("STEP:"))s.push({label:x.slice(5).trim()});
+    else if(x.startsWith("MATH:"))s.push({math:x.slice(5).trim()});
+    else if(x.startsWith("RESULT:"))s.push({result:x.slice(7).trim()});
+    else if(x.startsWith("TEXT:"))s.push({text:x.slice(5).trim()});
+    else s.push({text:x});
+  });
+  return{t:m[1].trim(),s};
+}
 
 // ===== SETTINGS =====
 let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO)}
