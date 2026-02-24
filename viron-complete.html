@@ -208,7 +208,6 @@ function sayGoogleTTS(text){
 // ========================================
 const WAKE_WORDS=["hey viron","hey byron","hey iron","hey vyron","hey veron","hey biron",
   "γεια viron","γεια βάιρον","γεια βιρον","hey vi ron","ey viron","a viron"];
-let wakeRec=null;
 let activeRec=null;
 let wakeRetryTimeout=null;
 
@@ -249,241 +248,43 @@ function extractAfterWake(text){
 }
 
 let wakeStarting=false;
-let wakeWs=null;
-let audioContext=null;
-let audioProcessor=null;
-let micStream=null;
 
-function startWakeListener(){
-  D('>>> startWakeListener, voiceState='+voiceState+', loading='+loading);
-  if(voiceState===VOICE_ACTIVATED||loading||wakeStarting)return;
-  if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startWakeListener,1000);return}
+// ===== ALWAYS-ON LISTENING =====
+// Uses Chrome SpeechRecognition ONLY (no AudioContext — it steals the mic)
+// VIRON listens at ALL times. Any speech is processed.
+
+let alwaysRec=null;
+let alwaysListening=false;
+
+function startAlwaysListening(){
+  D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading);
+  if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
+  if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
+  if(alwaysListening){D('  already listening');return}
   
-  voiceState=VOICE_IDLE;
-  updateListenUI();
-  wakeStarting=false;
-
-  // Resume mic capture if already connected
-  if(audioContext&&audioContext.state==="suspended"){
-    audioContext.resume();
-    D('  Resumed audioContext for wake word');
-  }
-  
-  // If not connected yet, connect
-  if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
-    if(!wakeStarting){
-      D('  No WS, connecting...');
-      wakeStarting=true;
-      connectWakeWordServer();
-    }
-    return;
-  }
-  
-  if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
-    D('  Wake word active via WebSocket');
-    document.getElementById("listenText").textContent='Say "Hey Jarvis"';
-  }
-}
-
-function connectWakeWordServer(){
-  const wsUrl=`ws://${location.hostname}:9000`;
-  D('>>> connectWakeWordServer: '+wsUrl);
-  
-  try{
-    wakeWs=new WebSocket(wsUrl);
-  }catch(e){
-    D('  ❌ WebSocket constructor error: '+e.message);
-    wakeStarting=false;
-    fallbackToTapMode();
-    return;
-  }
-  
-  wakeWs.onopen=()=>{
-    D('  ✅ Wake word WS connected');
-    wakeStarting=false;
-    startMicCapture();
-  };
-  
-  wakeWs.onmessage=(e)=>{
-    try{
-      const data=JSON.parse(e.data);
-      if(data.type==="wake"){
-        D('  🎤 WAKE WORD DETECTED! model='+data.model+' score='+data.score);
-        stopMicCapture();
-        onWakeWordDetected(null);
-      }
-    }catch{}
-  };
-  
-  wakeWs.onclose=()=>{
-    D('  Wake word WS closed');
-    wakeStarting=false;
-    if(voiceState===VOICE_IDLE){
-      clearTimeout(wakeRetryTimeout);
-      wakeRetryTimeout=setTimeout(()=>{
-        if(voiceState===VOICE_IDLE)connectWakeWordServer();
-      },3000);
-    }
-  };
-  
-  wakeWs.onerror=()=>{
-    D('  ❌ Wake word WS error — falling back to tap mode');
-    wakeStarting=false;
-    fallbackToTapMode();
-  };
-}
-
-function startMicCapture(){
-  D('>>> startMicCapture, audioContext='+(audioContext?'exists':'null'));
-  if(audioContext){D('  audioContext already exists, skipping');return}
-  
-  navigator.mediaDevices.getUserMedia({audio:{
-    echoCancellation:true,
-    noiseSuppression:true,
-    channelCount:1
-  }}).then(stream=>{
-    D('  ✅ Mic stream obtained');
-    micStream=stream;
-    // Use DEFAULT sample rate (browser's native rate, usually 48000)
-    // Do NOT force 16000 — it causes AudioNode mismatch errors
-    audioContext=new(window.AudioContext||window.webkitAudioContext)();
-    const nativeSR=audioContext.sampleRate;
-    D('  AudioContext sampleRate='+nativeSR);
-    const source=audioContext.createMediaStreamSource(stream);
-    
-    if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
-      wakeWs.send(JSON.stringify({sample_rate:nativeSR}));
-      D('  Sent sample rate '+nativeSR+' to wake server');
-    }
-    
-    audioProcessor=audioContext.createScriptProcessor(4096,1,1);
-    let frameCount=0;
-    audioProcessor.onaudioprocess=(e)=>{
-      if(wakeWs&&wakeWs.readyState===WebSocket.OPEN&&voiceState===VOICE_IDLE){
-        const float32=e.inputBuffer.getChannelData(0);
-        // Convert float32 to int16
-        const int16=new Int16Array(float32.length);
-        for(let i=0;i<float32.length;i++){
-          int16[i]=Math.max(-32768,Math.min(32767,Math.round(float32[i]*32767)));
-        }
-        wakeWs.send(int16.buffer);
-        frameCount++;
-        if(frameCount%50===0)D('  Sent '+frameCount+' audio frames to wake server');
-      }
-    };
-    
-    source.connect(audioProcessor);
-    audioProcessor.connect(audioContext.destination);
-    
-    D('  ✅ Mic capture started ('+nativeSR+'Hz), streaming to wake server');
-    document.getElementById("listenText").textContent='Say "Hey Jarvis"';
-  }).catch(e=>{
-    D('  ❌ Mic access DENIED: '+e.name+': '+e.message);
-    fallbackToTapMode();
-  });
-}
-
-function stopMicCapture(){
-  D('>>> stopMicCapture, audioContext='+(audioContext?audioContext.state:'null'));
-  if(audioContext&&audioContext.state==="running"){
-    audioContext.suspend();
-    D('  AudioContext suspended');
-  }
-}
-
-function resumeMicCapture(){
-  // Resume audio streaming to wake word server
-  if(audioContext&&audioContext.state==="suspended"){
-    audioContext.resume();
-    console.log("🎤 Mic capture resumed for wake word");
-  }
-  voiceState=VOICE_IDLE;
-  updateListenUI();
-  if(wakeWs&&wakeWs.readyState===WebSocket.OPEN){
-    document.getElementById("listenText").textContent='Say "Hey Jarvis"';
-  }
-}
-
-function fallbackToTapMode(){
-  document.getElementById("listenText").textContent="Tap face to talk";
-  document.getElementById("face").style.cursor="pointer";
-}
-
-function onWakeWordDetected(immediateText){
-  D('>>> onWakeWordDetected called, immediateText='+immediateText);
-  voiceState=VOICE_ACTIVATED;
-  updateListenUI();
-  cE("hopeful");
-  synth.cancel();
-  stopT();
-
-  if(immediateText){
-    D('  Has immediate text, processing: '+immediateText);
-    setTimeout(()=>processStudentSpeech(immediateText),500);
-    return;
-  }
-
-  // Acknowledge wake word
-  D('  Sending acknowledgment "Ναι;"');
-  const ack=new SpeechSynthesisUtterance("Ναι;");
-  ack.lang="el-GR";if(gkV)ack.voice=gkV;
-  ack.volume=0.7;ack.rate=1.1;
-  if(!gkV){
-    D('  No Greek voice, using server TTS');
-    fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:"Ναι;",lang:"el"})})
-    .then(r=>r.blob()).then(blob=>{
-      D('  TTS blob received, size='+blob.size);
-      const a=new Audio(URL.createObjectURL(blob));a.volume=0.7;
-      a.onended=()=>{D('  Ack audio ended, starting active listening');startActiveListening()};
-      a.onerror=(e)=>{D('  Ack audio ERROR: '+e.type);startActiveListening()};
-      a.play().catch(e=>{D('  Ack play ERROR: '+e.message);startActiveListening()});
-    }).catch(e=>{D('  TTS fetch ERROR: '+e.message);startActiveListening()});
-    return;
-  }
-  D('  Using browser Greek voice for ack');
-  ack.onend=()=>{D('  Ack speech ended');startActiveListening()};
-  ack.onerror=(e)=>{D('  Ack speech ERROR');startActiveListening()};
-  synth.speak(ack);
-}
-
-function startActiveListening(){
-  D('>>> startActiveListening called');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){D('  ❌ SpeechRecognition API not available!');return;}
-
-  activeRec=new SR();
-  activeRec.continuous=true;
-  activeRec.interimResults=true;
-  activeRec.lang="en-US";
-  activeRec.maxAlternatives=3;
-
-  let silenceTimer=null;
-  let gotResult=false;
-  let finalText="";
-
-  activeRec.onstart=()=>{
-    D('  ✅ activeRec.onstart fired — LISTENING NOW');
-    setTimeout(()=>{
-      if(voiceState===VOICE_ACTIVATED&&!gotResult){
-        cE("focused");
-      }
-    },2000);
-
-    silenceTimer=setTimeout(()=>{
-      D('  ⏰ TIMEOUT: 10s no speech, gotResult='+gotResult+', voiceState='+voiceState);
-      if(!gotResult&&voiceState===VOICE_ACTIVATED){
-        D('  → Stopping activeRec, will say "didn\'t catch that"');
-        activeRec.stop();
-        cE("confused");
-        say(isGr(msgs[msgs.length-1]?.content||"")?"Δεν σε άκουσα. Πες μου ξανά!":"I didn't catch that. Try again!");
-      }
-    },10000);
+  if(!SR){D('  ❌ SpeechRecognition not available');return}
+  
+  voiceState=VOICE_IDLE;
+  updateListenUI();
+  
+  try{if(alwaysRec){alwaysRec.abort()}}catch{}
+  
+  alwaysRec=new SR();
+  alwaysRec.continuous=true;
+  alwaysRec.interimResults=true;
+  alwaysRec.lang='el-GR'; // Greek primary — also recognizes English
+  alwaysRec.maxAlternatives=3;
+  
+  alwaysRec.onstart=()=>{
+    alwaysListening=true;
+    D('  ✅ Always-on listening ACTIVE');
+    document.getElementById("listenText").textContent='Listening...';
   };
-
-  activeRec.onresult=e=>{
-    clearTimeout(silenceTimer);
+  
+  alwaysRec.onresult=(e)=>{
+    let finalText="";
     let interim="";
-    finalText="";
     for(let i=0;i<e.results.length;i++){
       if(e.results[i].isFinal){
         finalText+=e.results[i][0].transcript;
@@ -491,50 +292,97 @@ function startActiveListening(){
         interim+=e.results[i][0].transcript;
       }
     }
-    const display=finalText||interim;
-    D('  🎤 onresult: final="'+finalText+'" interim="'+interim+'" isFinal='+!!finalText);
-    if(display)document.getElementById("listenText").textContent=display;
     
-    if(finalText){
-      gotResult=true;
-      D('  ✅ Got final text! Waiting 1.5s then processing: "'+finalText+'"');
-      silenceTimer=setTimeout(()=>{
-        D('  → Processing speech: "'+finalText.trim()+'"');
-        activeRec.stop();
-        processStudentSpeech(finalText.trim());
-      },1500);
+    const display=finalText||interim;
+    if(display){
+      D('  🎤 Heard: final="'+finalText+'" interim="'+interim+'"');
+      document.getElementById("subtitle").textContent=display;
+      document.getElementById("subtitle").classList.add("visible");
+    }
+    
+    if(finalText&&finalText.trim().length>1&&!loading){
+      const text=finalText.trim();
+      D('  ✅ Processing speech: "'+text+'"');
+      
+      // Stop listening while processing
+      alwaysListening=false;
+      try{alwaysRec.abort()}catch{}
+      
+      // Show we heard it
+      cE("hopeful");
+      voiceState=VOICE_PROCESSING;
+      updateListenUI();
+      
+      // Process
+      processStudentSpeech(text);
     }
   };
-
-  activeRec.onerror=e=>{
-    clearTimeout(silenceTimer);
-    D('  ❌ activeRec.onerror: '+e.error+' (message: '+(e.message||'none')+')');
-    if(voiceState===VOICE_ACTIVATED){
-      voiceState=VOICE_IDLE;
-      cE("neutral");
-      startWakeListener();
+  
+  alwaysRec.onerror=(e)=>{
+    D('  ⚠️ alwaysRec error: '+e.error);
+    alwaysListening=false;
+    
+    if(e.error==='not-allowed'){
+      D('  ❌ Mic permission denied!');
+      document.getElementById("listenText").textContent="Mic blocked — click 🔒 to allow";
+      return;
+    }
+    
+    // For no-speech, aborted, network — just restart
+    clearTimeout(wakeRetryTimeout);
+    wakeRetryTimeout=setTimeout(()=>{
+      if(!loading&&!(synth&&synth.speaking)){
+        startAlwaysListening();
+      }
+    },500);
+  };
+  
+  alwaysRec.onend=()=>{
+    D('  alwaysRec.onend, alwaysListening='+alwaysListening);
+    alwaysListening=false;
+    
+    // Auto-restart if we should still be listening
+    if(!loading&&!(synth&&synth.speaking)){
+      clearTimeout(wakeRetryTimeout);
+      wakeRetryTimeout=setTimeout(startAlwaysListening,300);
     }
   };
-
-  activeRec.onend=()=>{
-    clearTimeout(silenceTimer);
-    D('  activeRec.onend fired, gotResult='+gotResult+', voiceState='+voiceState);
-    if(!gotResult&&voiceState===VOICE_ACTIVATED){
-      D('  → No result, returning to idle');
-      voiceState=VOICE_IDLE;
-      startWakeListener();
-    }
-  };
-
+  
   try{
-    D('  Calling activeRec.start()...');
-    activeRec.start();
-    D('  activeRec.start() called successfully');
+    alwaysRec.start();
+    D('  alwaysRec.start() called');
   }catch(e){
-    D('  ❌ activeRec.start() THREW: '+e.message);
-    voiceState=VOICE_IDLE;
-    startWakeListener();
+    D('  ❌ alwaysRec.start() error: '+e.message);
+    alwaysListening=false;
+    clearTimeout(wakeRetryTimeout);
+    wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
   }
+}
+
+// Alias for compatibility — other code calls startWakeListener
+function startWakeListener(){
+  startAlwaysListening();
+}
+
+function stopAllRecognition(){
+  D('>>> stopAllRecognition');
+  try{if(alwaysRec)alwaysRec.abort()}catch{}
+  try{if(activeRec)activeRec.abort()}catch{}
+  clearTimeout(wakeRetryTimeout);
+  alwaysListening=false;
+  alwaysRec=null;activeRec=null;
+}
+
+function onWakeWordDetected(immediateText){
+  // Legacy compatibility — just start always-on listening
+  D('>>> onWakeWordDetected (legacy), restarting always-on listener');
+  startAlwaysListening();
+}
+
+function startActiveListening(){
+  // Legacy compatibility — just start always-on listening
+  D('>>> startActiveListening (legacy), restarting always-on listener');
+  startAlwaysListening();
 }
 
 function processStudentSpeech(text){
@@ -545,24 +393,13 @@ function processStudentSpeech(text){
   sendMessage(text);
 }
 
-function stopAllRecognition(){
-  try{if(wakeRec)wakeRec.abort()}catch{}
-  try{if(activeRec)activeRec.abort()}catch{}
-  clearTimeout(wakeRetryTimeout);
-  wakeRec=null;activeRec=null;
-}
-
 // Face tap activation - always works as backup
 document.getElementById("face").addEventListener("click",()=>{
-  if(loading)return;
-  if(voiceState===VOICE_ACTIVATED)return;
   D('>>> Face tapped, loading='+loading+', voiceState='+voiceState);
   if(loading)return;
-  if(voiceState===VOICE_ACTIVATED)return;
-  console.log("👆 Face tapped — activating");
+  console.log("👆 Face tapped — restarting listener");
   stopAllRecognition();
-  stopMicCapture();
-  onWakeWordDetected(null);
+  startAlwaysListening();
 });
 
 // ===== AI CHAT =====
@@ -641,36 +478,23 @@ fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'app
 setTimeout(()=>{
   cE("excited");
   D('  Playing greeting');
-  say("Γεια! Είμαι ο VIRON! Πες μου Hey VIRON για να μου μιλήσεις!");
+  say("Γεια! Είμαι ο VIRON!");
 },2500);
 
-// Keepalive: ensure wake word connection stays alive
+// Keepalive: ensure always-on listening stays alive
 setInterval(()=>{
-  if(voiceState===VOICE_IDLE&&!loading&&!synth?.speaking){
-    if(!wakeWs||wakeWs.readyState!==WebSocket.OPEN){
-      D('  Keepalive: wake WS dead, reconnecting');
-      connectWakeWordServer();
-    }
+  if(!loading&&!(synth&&synth.speaking)&&!alwaysListening){
+    D('  Keepalive: listener dead, restarting');
+    startAlwaysListening();
   }
-},10000);
+},5000);
 
-// Request mic permission on first load, then start wake listener
-D('Requesting initial mic permission...');
-if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
-  navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{
-    D('✅ Initial mic permission granted');
-    s.getTracks().forEach(t=>t.stop());
-    setTimeout(()=>{D('Starting wake listener (6s after init)');startWakeListener()},6000);
-  }).catch(e=>{
-    D('❌ Initial mic permission DENIED: '+e.name+': '+e.message);
-    document.getElementById("listenText").textContent="Tap face to talk";
-    document.getElementById("face").style.cursor="pointer";
-  });
-}else{
-  D('❌ getUserMedia not available (need localhost or HTTPS)');
-  document.getElementById("listenText").textContent="Tap face to talk";
-  document.getElementById("face").style.cursor="pointer";
-}
+// Start always-on listening after greeting (give it time to finish speaking)
+D('Will start always-on listening in 5 seconds...');
+setTimeout(()=>{
+  D('Starting always-on listening NOW');
+  startAlwaysListening();
+},5000);
 
 // ===== SVG RENDER =====
 const svg=document.getElementById("face");
