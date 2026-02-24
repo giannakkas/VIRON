@@ -151,8 +151,10 @@ function loadV(){const v=synth.getVoices();console.log("Available voices:",v.len
 if(synth){synth.onvoiceschanged=loadV;loadV()}
 const isGr=t=>/[\u0370-\u03FF\u1F00-\u1FFF]/.test(t);
 function say(text){if(!synth)return;synth.cancel();showSub(text);
+  // Fix VIRON pronunciation for Greek TTS
+  const ttsText=text.replace(/VIRON/gi,'Βέρον');
   // If text is Greek but no Greek voice, use audio fallback
-  if(isGr(text)&&!gkV){sayGoogleTTS(text);return}
+  if(isGr(ttsText)&&!gkV){sayGoogleTTS(ttsText);return}
   const ss=text.match(/[^.!;·?]+[.!;·?]?/g)||[text];let d=0;ss.forEach((s,i)=>{const x=s.trim();if(!x)return;setTimeout(()=>{const u=new SpeechSynthesisUtterance(x);u.volume=(document.getElementById("volSlider")?.value||75)/100;if(isGr(x)){u.lang="el-GR";if(gkV)u.voice=gkV;u.rate=0.88;u.pitch=1.0}else{u.lang="en-US";if(enV)u.voice=enV;u.rate=0.92;u.pitch=1.0}if(i===0)u.onstart=()=>startT();if(i===ss.length-1){u.onend=()=>{stopT();startWakeListener()};u.onerror=()=>{stopT();startWakeListener()}}synth.speak(u)},d);d+=50})}
 
 // Google Translate TTS fallback for Greek
