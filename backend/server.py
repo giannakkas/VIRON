@@ -252,30 +252,46 @@ def chat_proxy():
     if not data:
         return jsonify({"error": "No data"}), 400
 
+    user_msg = data.get("messages", [{}])[-1].get("content", "")
+
     # Try AI Router first (port 8000)
     try:
         resp = http_requests.post("http://localhost:8000/chat",
             json={
-                "message": data.get("messages", [{}])[-1].get("content", ""),
+                "message": user_msg,
                 "age_mode": data.get("age_mode", config.get("age_mode", "kids")),
                 "conversation_id": data.get("conversation_id", "default"),
             }, timeout=35)
         if resp.status_code == 200:
             router_data = resp.json()
-            # Convert to Anthropic-style response for the frontend
-            return jsonify({
-                "content": [{"type": "text", "text": router_data.get("reply", "")}],
-                "provider": router_data.get("provider", "unknown"),
-                "complexity": router_data.get("complexity", "unknown"),
-                "emotion": router_data.get("emotion", "neutral"),
-            })
+            reply = router_data.get("reply", "")
+            provider = router_data.get("provider", "unknown")
+            # Check if the reply is just an echo or error
+            is_echo = reply.lower().startswith("received:") or reply == user_msg
+            is_error = provider == "error" or not reply or len(reply) < 3
+            if not is_echo and not is_error:
+                return jsonify({
+                    "content": [{"type": "text", "text": reply}],
+                    "provider": provider,
+                    "complexity": router_data.get("complexity", "unknown"),
+                    "emotion": router_data.get("emotion", "neutral"),
+                })
+            else:
+                print(f"⚠ AI Router returned echo/error (provider={provider}), falling back")
     except Exception as e:
         print(f"⚠ AI Router unavailable ({e}), falling back to direct API")
 
     # Fallback: direct to Anthropic
     api_key = config.get("anthropic_api_key", "")
     if not api_key or api_key == "YOUR_API_KEY_HERE":
-        return jsonify({"error": "AI Router not running and no API key configured"}), 500
+        # Try environment variable
+        import os
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return jsonify({
+            "content": [{"type": "text", "text": "[confused] I can't think right now. My AI brain isn't connected. Please check the API keys!"}],
+            "provider": "none",
+        })
     try:
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
