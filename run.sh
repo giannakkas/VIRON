@@ -57,14 +57,33 @@ echo "  🖥️  Starting VIRON server (port 5000)..."
 cd "$SCRIPT_DIR"
 python3 backend/server.py &
 FLASK_PID=$!
+echo $FLASK_PID > /tmp/viron_server.pid
 sleep 2
 
 # Check it started
 if curl -s http://localhost:5000/api/ping > /dev/null 2>&1; then
-    echo "  ✓ VIRON server running"
+    echo "  ✓ VIRON server running (PID: $FLASK_PID)"
 else
     echo "  ⚠ Server may still be starting..."
 fi
+
+# Watchdog: restart server if it crashes (check every 10s)
+(while true; do
+    sleep 10
+    if [ -f /tmp/viron_server.pid ]; then
+        PID=$(cat /tmp/viron_server.pid)
+        if ! kill -0 "$PID" 2>/dev/null; then
+            echo "  ⚠ Server crashed! Restarting..."
+            cd "$SCRIPT_DIR"
+            python3 backend/server.py &
+            NEW_PID=$!
+            echo $NEW_PID > /tmp/viron_server.pid
+            sleep 2
+            echo "  ✓ Server restarted (PID: $NEW_PID)"
+        fi
+    fi
+done) &
+WATCHDOG_PID=$!
 
 # Check router status
 ROUTER_STATUS=$(curl -s http://localhost:5000/api/chat/status 2>/dev/null)
@@ -109,7 +128,8 @@ echo ""
 cleanup() {
     echo ""
     echo "🛑 Stopping VIRON..."
-    kill $FLASK_PID $WAKE_PID 2>/dev/null
+    kill $FLASK_PID $WAKE_PID $WATCHDOG_PID 2>/dev/null
+    rm -f /tmp/viron_server.pid
     exit
 }
 trap cleanup INT TERM

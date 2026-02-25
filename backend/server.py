@@ -80,6 +80,14 @@ config = load_config()
 app = Flask(__name__, static_folder=ROOT_DIR)
 CORS(app)
 
+# Global error handler — prevent unhandled exceptions from crashing the server
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    print(f"  ❌ UNHANDLED ERROR: {e}")
+    traceback.print_exc()
+    return jsonify({"error": str(e), "content": [{"type": "text", "text": "[confused] Something went wrong!"}]}), 500
+
 # ============ STUDENT EMOTION DETECTOR ============
 class StudentEmotionDetector:
     def __init__(self):
@@ -763,13 +771,22 @@ def text_to_speech():
             buf.seek(0)
             return buf
         
-        loop = asyncio.new_event_loop()
-        buf = loop.run_until_complete(gen())
-        loop.close()
-        audio_bytes = buf.read()
-        print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
-        return Response(audio_bytes, mimetype='audio/mpeg',
-                       headers={'Content-Disposition': 'inline'})
+        loop = None
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            buf = loop.run_until_complete(gen())
+            audio_bytes = buf.read()
+            print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
+            return Response(audio_bytes, mimetype='audio/mpeg',
+                           headers={'Content-Disposition': 'inline'})
+        finally:
+            if loop:
+                try:
+                    loop.close()
+                except:
+                    pass
+                asyncio.set_event_loop(None)
     except ImportError:
         print("⚠ edge-tts not installed, using gTTS (pip install edge-tts)")
     except Exception as e:
