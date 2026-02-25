@@ -374,12 +374,20 @@ function matchesWakeWord(text){
     "hayviron","hay viron","hayvironment","hay vironment",
     "hey environment","hey environ","hey virum","hey vironn",
     "hey fire on","hey tyron","hey myron","hey virus",
+    "imovie","imovie road","i movie","i movie road","imovie wrote",
+    "hey v","hey vi","hey vr on","hey v ron","hey bee run",
+    "hey be wrong","hey be run","hey be ron","heavy ron",
+    "have a run","have a ron","hey everyone","hey ev run",
     "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον",
     "χέι βίρον","χει βιρον","έι βίρον","ει βιρον","χεϊ βιρον",
     "χέι βάιρον","χει βαιρον","έι βαιρον","ε βιρον","εϊ βιρον"];
   for(const m of misrecognitions)if(lower.includes(m))return true;
   // Fuzzy regex: (hey/hi/hay/heavy/a/have) + (vir/byr/bir/fir/ron/iron)
   if(/(hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)/i.test(lower))return true;
+  // iMovie pattern: Chrome hearing "Hey VIRON" as "iMovie"
+  if(/\bimovie\b/i.test(lower))return true;
+  // "hey V..." pattern (partial recognition)
+  if(/^hey\s+v\b/i.test(lower))return true;
   // "Tegan" = Chrome hearing "Hey VIRON" with Greek accent
   if(/^(tegan|tigan|teegan|deghan|degan)\b/i.test(lower))return true;
   // Greek fuzzy: χέι/έι/ε/γεια + βιρ/βαιρ/βύρ
@@ -409,6 +417,8 @@ function extractAfterWake(text){
     "hayviron","hay viron","hayvironment","hay vironment",
     "hey environment","hey environ","hey virum","hey vironn",
     "hey fire on","hey tyron","hey myron","hey virus",
+    "imovie road","imovie","i movie road","i movie",
+    "hey v","hey vi","hey vr on","hey v ron",
     "γεια βιρον","γεια βαιρον","για βιρον","γεια βύρον",
     "χέι βίρον","χει βιρον","έι βίρον","ει βιρον","χεϊ βιρον",
     "χέι βάιρον","χει βαιρον","έι βαιρον","ε βιρον","εϊ βιρον"];
@@ -424,7 +434,9 @@ function extractAfterWake(text){
     /((?:hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(?:vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)\w*)/i,
     /((?:hey|hay|hi|heavy)\s+\S*(?:vir|byr|bir|ron|run|road|iro)\S*)/i,
     /((?:χέι|χει|έι|ει|γεια|για|ε)\s*(?:βιρ|βαιρ|βύρ|βίρ|μπαιρ)\S*)/i,
-    /((?:tegan|tigan|teegan|deghan|degan)\s*(?:is)?)/i
+    /((?:tegan|tigan|teegan|deghan|degan)\s*(?:is)?)/i,
+    /(imovie\s*(?:road|wrote)?)/i,
+    /(hey\s+v\b\S*)/i
   ];
   for(const pat of fuzzyPatterns){
     const match=lower.match(pat);
