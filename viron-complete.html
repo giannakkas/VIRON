@@ -730,11 +730,22 @@ function startCommandListening(){
           if(inConversation)setTimeout(startCommandListening,300);
           return;
         }
-        // Reject low confidence (raised threshold from 0.5 to 0.65)
+        // Reject low confidence speech
         if(confidence>0&&confidence<0.65){
           D('  🔇 Low confidence ('+confidence.toFixed(2)+'), ignoring: "'+speech+'"');
           if(inConversation)setTimeout(startCommandListening,300);
           return;
+        }
+        // When confidence=0.00 (Chrome gives no data, common in Greek mode):
+        // Reject if it doesn't look like intentional speech to VIRON
+        if(confidence===0&&wordCount>=3){
+          // Allow through if it contains question words or common intent patterns
+          const hasIntent=/\?|τι |πώς |πού |γιατί |πόσο |ποιο |what |how |why |where |when |who |can you|tell me|explain|πες μου|εξήγησε/i.test(speech);
+          if(!hasIntent){
+            D('  🔇 Zero confidence + no intent pattern ('+wordCount+' words), ignoring: "'+speech+'"');
+            if(inConversation)setTimeout(startCommandListening,300);
+            return;
+          }
         }
         // Reject single-character gibberish
         if(cleanSpeech.length<2){
