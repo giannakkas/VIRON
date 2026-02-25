@@ -13,6 +13,12 @@ import base64
 import urllib.request
 from pathlib import Path
 
+# Verify OpenCV has required features
+if not hasattr(cv2, 'FaceDetectorYN'):
+    raise ImportError(f"OpenCV {cv2.__version__} missing FaceDetectorYN. Need OpenCV 4.5.4+")
+if not hasattr(cv2, 'FaceRecognizerSF'):
+    raise ImportError(f"OpenCV {cv2.__version__} missing FaceRecognizerSF. Need OpenCV 4.5.4+")
+
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 FACES_DB = os.path.join(os.path.dirname(__file__), "faces_db.json")
 

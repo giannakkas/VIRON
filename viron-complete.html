@@ -1141,7 +1141,7 @@ function loadFacesList(){
     const regArea=document.getElementById('faceRegArea');
     
     if(!d.initialized){
-      statusEl.innerHTML='<span style="color:#ffaa00">⚠ Not initialized</span>';
+      statusEl.innerHTML='<span style="color:#ffaa00">⚠ Not initialized</span>' + (d.error ? '<br><span style="font-size:10px;color:#ff6666">'+d.error+'</span>' : '');
       setupArea.style.display='block';
       regArea.style.display='none';
       document.getElementById('facesList').innerHTML='';
@@ -1171,13 +1171,16 @@ function setupFaceRec(){
   btn.textContent='⏳ Downloading models...';
   btn.disabled=true;
   fetch('/api/faces/init',{method:'POST'})
-  .then(r=>r.json()).then(d=>{
-    btn.textContent=d.success?'✅ Ready!':'❌ '+d.message;
+  .then(r=>r.json().then(d=>({ok:r.ok,data:d})))
+  .then(({ok,data})=>{
+    btn.textContent=data.success?'✅ Ready!':'❌ '+data.message;
     btn.disabled=false;
-    if(d.success)setTimeout(loadFacesList,500);
+    if(data.success)setTimeout(loadFacesList,500);
+    else document.getElementById('faceRecStatus').innerHTML='<span style="color:#ff6666">'+data.message+'</span>';
   }).catch(e=>{
-    btn.textContent='❌ Error: '+e.message;
+    btn.textContent='❌ Error';
     btn.disabled=false;
+    document.getElementById('faceRecStatus').innerHTML='<span style="color:#ff6666">'+e+'</span>';
   });
 }
 

@@ -30,14 +30,22 @@ except ImportError:
     HAS_REQUESTS = False
 
 # Face recognition
+HAS_FACE_REC = False
+face_recognizer = None
+_face_rec_error = ""
 try:
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    # Add backend dir to path (handles running from different directories)
+    _backend_dir = os.path.dirname(os.path.abspath(__file__))
+    if _backend_dir not in sys.path:
+        sys.path.insert(0, _backend_dir)
     from viron_faces import face_recognizer
     HAS_FACE_REC = True
+    print("✅ Face recognition module loaded")
 except Exception as e:
-    HAS_FACE_REC = False
-    print(f"⚠ Face recognition module not available: {e}")
+    _face_rec_error = f"{type(e).__name__}: {e}"
+    print(f"⚠ Face recognition module not available: {_face_rec_error}")
+    import traceback
+    traceback.print_exc()
     print("⚠ requests not installed — AI proxy disabled")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -397,22 +405,64 @@ def stop_detection():
     return jsonify({"status": "stopped"})
 
 # ============ FACE RECOGNITION ============
+@app.route('/api/faces/debug', methods=['GET'])
+def face_debug():
+    """Debug face recognition import issues"""
+    info = {
+        "HAS_FACE_REC": HAS_FACE_REC,
+        "import_error": _face_rec_error,
+        "python_path": sys.path[:5],
+        "backend_dir": os.path.dirname(os.path.abspath(__file__)),
+        "viron_faces_exists": os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "viron_faces.py")),
+        "cv2_version": cv2.__version__ if HAS_CV2 else "not installed",
+        "has_FaceDetectorYN": hasattr(cv2, 'FaceDetectorYN') if HAS_CV2 else False,
+        "has_FaceRecognizerSF": hasattr(cv2, 'FaceRecognizerSF') if HAS_CV2 else False,
+    }
+    # Try live import
+    try:
+        bd = os.path.dirname(os.path.abspath(__file__))
+        if bd not in sys.path:
+            sys.path.insert(0, bd)
+        import importlib
+        mod = importlib.import_module("viron_faces")
+        info["live_import"] = "SUCCESS"
+        info["face_recognizer_type"] = str(type(mod.face_recognizer))
+    except Exception as e:
+        info["live_import"] = f"FAILED: {type(e).__name__}: {e}"
+    return jsonify(info)
+
 @app.route('/api/faces/status', methods=['GET'])
 def face_status():
     """Get face recognition status"""
     if not HAS_FACE_REC:
-        return jsonify({"initialized": False, "error": "Face recognition module not available"})
+        return jsonify({"initialized": False, "error": _face_rec_error or "Module not loaded"})
     return jsonify(face_recognizer.get_status())
 
 @app.route('/api/faces/init', methods=['POST'])
 def face_init():
     """Initialize/download face recognition models"""
+    global HAS_FACE_REC, face_recognizer, _face_rec_error
+    
+    # Try to import if not loaded yet
     if not HAS_FACE_REC:
-        return jsonify({"success": False, "message": "Face recognition module not available"}), 503
+        try:
+            bd = os.path.dirname(os.path.abspath(__file__))
+            if bd not in sys.path:
+                sys.path.insert(0, bd)
+            import importlib
+            mod = importlib.import_module("viron_faces")
+            face_recognizer = mod.face_recognizer
+            HAS_FACE_REC = True
+            _face_rec_error = ""
+            print("✅ Face recognition module loaded (retry)")
+        except Exception as e:
+            _face_rec_error = f"{type(e).__name__}: {e}"
+            return jsonify({"success": False, "message": f"Module error: {_face_rec_error}"}), 503
+    
     ok = face_recognizer.initialize()
     if ok:
         return jsonify({"success": True, "message": "Face recognition initialized!"})
-    return jsonify({"success": False, "message": "Failed to initialize. Check console for details."}), 500
+    return jsonify({"success": False, "message": "Failed to initialize. Models may not have downloaded."}), 500
 
 @app.route('/api/faces/register', methods=['POST'])
 def face_register():
