@@ -855,6 +855,115 @@ def student_achievements():
     return jsonify({"achievements": all_achievements, "earned_count": len(earned)})
 
 
+# ============ VOICE VERIFICATION ============
+try:
+    from voice_verify import voice_verifier
+    HAS_VOICE_VERIFY = voice_verifier.initialize()
+    if HAS_VOICE_VERIFY:
+        print("✅ Voice verification ready")
+except ImportError as e:
+    HAS_VOICE_VERIFY = False
+    print(f"⚠ Voice verification not available: {e}")
+
+
+@app.route('/api/voice/status', methods=['GET'])
+def voice_status():
+    """Get voice verification status."""
+    if not HAS_VOICE_VERIFY:
+        return jsonify({"initialized": False, "enabled": False, "profiles": {}, "profile_count": 0})
+    return jsonify(voice_verifier.get_status())
+
+
+@app.route('/api/voice/register', methods=['POST'])
+def voice_register():
+    """Register a voice sample for a student.
+    Accepts: multipart form with 'audio' file and 'name' field,
+    or JSON with 'name' and 'audio_base64' (base64 encoded audio).
+    """
+    if not HAS_VOICE_VERIFY:
+        return jsonify({"success": False, "message": "Voice verification not available"}), 503
+
+    name = None
+    audio_data = None
+    sample_rate = 16000
+
+    if request.content_type and 'multipart' in request.content_type:
+        name = request.form.get('name', '')
+        audio_file = request.files.get('audio')
+        if audio_file:
+            audio_data = audio_file.read()
+    else:
+        data = request.get_json() or {}
+        name = data.get('name', '')
+        audio_b64 = data.get('audio_base64', '')
+        sample_rate = data.get('sample_rate', 16000)
+        if audio_b64:
+            import base64
+            audio_data = base64.b64decode(audio_b64)
+
+    if not name:
+        return jsonify({"success": False, "message": "Name required"}), 400
+    if not audio_data:
+        return jsonify({"success": False, "message": "Audio data required"}), 400
+
+    result = voice_verifier.register_voice(name, audio_data, sample_rate)
+    return jsonify(result)
+
+
+@app.route('/api/voice/verify', methods=['POST'])
+def voice_verify_endpoint():
+    """Verify who is speaking from an audio sample.
+    Accepts: multipart form with 'audio' file,
+    or JSON with 'audio_base64' (base64 encoded audio).
+    """
+    if not HAS_VOICE_VERIFY:
+        return jsonify({"verified": True, "name": None, "confidence": 0.0, "reason": "not_available"})
+
+    audio_data = None
+    sample_rate = 16000
+
+    if request.content_type and 'multipart' in request.content_type:
+        audio_file = request.files.get('audio')
+        if audio_file:
+            audio_data = audio_file.read()
+    else:
+        data = request.get_json() or {}
+        audio_b64 = data.get('audio_base64', '')
+        sample_rate = data.get('sample_rate', 16000)
+        if audio_b64:
+            import base64
+            audio_data = base64.b64decode(audio_b64)
+
+    if not audio_data:
+        return jsonify({"verified": True, "name": None, "confidence": 0.0, "reason": "no_audio"})
+
+    result = voice_verifier.verify_speaker(audio_data, sample_rate)
+    return jsonify(result)
+
+
+@app.route('/api/voice/delete', methods=['POST'])
+def voice_delete():
+    """Delete a voice profile."""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name:
+        return jsonify({"success": False}), 400
+    if not HAS_VOICE_VERIFY:
+        return jsonify({"success": False}), 503
+    success = voice_verifier.delete_voice(name)
+    return jsonify({"success": success})
+
+
+@app.route('/api/voice/toggle', methods=['POST'])
+def voice_toggle():
+    """Enable/disable voice verification."""
+    data = request.get_json() or {}
+    if not HAS_VOICE_VERIFY:
+        return jsonify({"enabled": False}), 503
+    voice_verifier.enabled = data.get('enabled', True)
+    return jsonify({"enabled": voice_verifier.enabled})
+
+
 # ============ HARDWARE ============
 @app.route('/api/wifi/list', methods=['GET'])
 def wifi_list():

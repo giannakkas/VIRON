@@ -132,6 +132,28 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
     
     <!-- Step 3: Age -->
     <div id="setupStep3" class="setup-step" style="display:none">
+      <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">Let me learn your voice! 🎙️</label>
+      <p style="color:rgba(255,255,255,0.5);font-size:12px;margin:0 0 15px">Read the sentences below so I only listen to YOU</p>
+      <div id="voiceEnrollStatus" style="margin:10px 0">
+        <div id="voiceEnrollSamples" style="display:flex;gap:8px;justify-content:center;margin-bottom:12px">
+          <span class="voice-dot" id="vdot1">①</span>
+          <span class="voice-dot" id="vdot2">②</span>
+          <span class="voice-dot" id="vdot3">③</span>
+        </div>
+        <p id="voiceEnrollPrompt" style="color:#fff;font-size:15px;font-style:italic;margin:10px 0">"Hello VIRON, my name is <span id="voiceEnrollName"></span>"</p>
+        <div id="voiceEnrollMeter" style="width:80%;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;margin:10px auto;overflow:hidden">
+          <div id="voiceEnrollLevel" style="width:0%;height:100%;background:#00d4ff;border-radius:2px;transition:width 0.1s"></div>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        <button id="voiceEnrollBtn" onclick="voiceEnrollRecord()" style="padding:10px 20px;background:linear-gradient(135deg,#ff4444,#cc2222);border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer">🎙️ Hold to Record</button>
+        <button onclick="setupNext(4)" style="padding:10px 20px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:10px;color:rgba(255,255,255,0.6);font-size:14px;cursor:pointer">Skip →</button>
+      </div>
+      <p id="voiceEnrollMsg" style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:8px"></p>
+    </div>
+
+    <!-- Step 4: Age -->
+    <div id="setupStep4" class="setup-step" style="display:none">
       <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">How old are you?</label>
       <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button onclick="setupSetAge(6)" class="age-btn">6-8</button>
@@ -144,8 +166,8 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
       </div>
     </div>
     
-    <!-- Step 4: Language -->
-    <div id="setupStep4" class="setup-step" style="display:none">
+    <!-- Step 5: Language -->
+    <div id="setupStep5" class="setup-step" style="display:none">
       <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">Which language do you prefer?</label>
       <div style="display:flex;gap:10px;justify-content:center">
         <button onclick="setupSetLang('el')" style="padding:15px 25px;background:rgba(0,100,255,0.2);border:2px solid rgba(0,150,255,0.4);border-radius:12px;color:#fff;font-size:18px;cursor:pointer">🇬🇷 Ελληνικά</button>
@@ -153,8 +175,8 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
       </div>
     </div>
     
-    <!-- Step 5: WiFi (optional) -->
-    <div id="setupStep5" class="setup-step" style="display:none">
+    <!-- Step 6: WiFi (optional) -->
+    <div id="setupStep6" class="setup-step" style="display:none">
       <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">Connect to WiFi</label>
       <div id="setupWifiList" style="max-height:200px;overflow-y:auto;margin:10px 0"></div>
       <div id="setupWifiQR" style="margin:15px auto;display:none">
@@ -177,6 +199,10 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 .age-btn{padding:12px 18px;background:rgba(0,100,255,0.15);border:2px solid rgba(0,150,255,0.3);border-radius:12px;color:#fff;font-size:16px;cursor:pointer;transition:all 0.2s}
 .age-btn:hover,.age-btn.selected{background:rgba(0,150,255,0.3);border-color:#00d4ff}
+.voice-dot{display:inline-flex;width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.1);border:2px solid rgba(255,255,255,0.2);align-items:center;justify-content:center;color:rgba(255,255,255,0.4);font-size:14px;transition:all 0.3s}
+.voice-dot.done{background:rgba(0,255,136,0.2);border-color:#00ff88;color:#00ff88}
+.voice-dot.recording{background:rgba(255,68,68,0.3);border-color:#ff4444;color:#ff4444;animation:voicePulse 0.5s ease infinite alternate}
+@keyframes voicePulse{from{transform:scale(1);box-shadow:0 0 0 rgba(255,68,68,0)}to{transform:scale(1.1);box-shadow:0 0 12px rgba(255,68,68,0.4)}}
 </style>
 <div class="engagement-bar" id="engBar"><div class="eng-dot" id="engDot"></div><span class="eng-label" id="engLabel"></span></div>
 <div id="personName" style="position:fixed;top:40px;left:12px;font-size:14px;font-weight:bold;color:#00ff88;z-index:50;text-shadow:0 0 8px rgba(0,255,136,0.5)"></div>
@@ -755,6 +781,9 @@ function startCommandListening(){
   updateListenUI();
   document.getElementById("listenText").textContent='Listening...';
   
+  // Start voice recording for verification (if enabled)
+  startVoiceRecording();
+  
   let cmdRec=new SR();
   activeCmdRec=cmdRec; // Track globally
   cmdRec.continuous=false;
@@ -888,7 +917,22 @@ function startCommandListening(){
       cE("thinking");
       voiceState=VOICE_PROCESSING;
       updateListenUI();
-      processStudentSpeech(speech);
+      
+      // Voice verification gate
+      stopVoiceRecording();
+      if(voiceVerifyEnabled){
+        verifyVoice().then(vr=>{
+          if(vr.verified){
+            processStudentSpeech(speech);
+          }else{
+            D('  🔇 Voice NOT verified — rejected');
+            cE("confused");
+            say(isGreekMode()?'Δεν σε αναγνωρίζω. Μόνο εγγεγραμμένοι μαθητές μπορούν να μιλήσουν μαζί μου.':'I don\'t recognize your voice. Only registered students can talk to me.');
+          }
+        });
+      }else{
+        processStudentSpeech(speech);
+      }
     }
   };
   
@@ -1632,6 +1676,215 @@ document.getElementById('langSelect').value=vironLang;
 
 fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
 
+// ===== VOICE FINGERPRINT =====
+let voiceVerifyEnabled=false;
+let voiceMediaRecorder=null;
+let voiceAudioChunks=[];
+let voiceRecordingForVerify=false;
+const VOICE_PROMPTS=[
+  name=>`Hello VIRON, my name is ${name}`,
+  name=>`I love learning new things every day`,
+  name=>`VIRON is my favorite study buddy`,
+];
+
+async function checkVoiceVerifyStatus(){
+  try{
+    const r=await fetch('/api/voice/status');
+    const d=await r.json();
+    voiceVerifyEnabled=d.initialized&&d.enabled&&d.profile_count>0;
+    D('🎙️ Voice verify: '+(voiceVerifyEnabled?'ON ('+d.profile_count+' profiles)':'OFF'));
+    return d;
+  }catch{voiceVerifyEnabled=false;return{initialized:false}}
+}
+
+// --- Enrollment (setup wizard) ---
+let enrollRecording=false;
+let enrollRecorder=null;
+let enrollChunks=[];
+
+async function voiceEnrollRecord(){
+  const btn=document.getElementById('voiceEnrollBtn');
+  const msg=document.getElementById('voiceEnrollMsg');
+  
+  if(enrollRecording){
+    // Stop recording
+    enrollRecording=false;
+    btn.textContent='⏳ Processing...';
+    btn.style.background='rgba(255,255,255,0.1)';
+    if(enrollRecorder&&enrollRecorder.state==='recording'){
+      enrollRecorder.stop();
+    }
+    return;
+  }
+  
+  // Start recording
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:true, noiseSuppression:true, sampleRate:16000
+    }});
+    
+    enrollRecorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
+    enrollChunks=[];
+    
+    enrollRecorder.ondataavailable=e=>{
+      if(e.data.size>0)enrollChunks.push(e.data);
+    };
+    
+    enrollRecorder.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      if(enrollChunks.length===0){msg.textContent='No audio captured';return}
+      
+      const blob=new Blob(enrollChunks,{type:'audio/webm'});
+      D('  🎙️ Voice sample: '+Math.round(blob.size/1024)+'KB');
+      
+      // Convert to base64 and send
+      const reader=new FileReader();
+      reader.onload=async function(){
+        const base64=reader.result.split(',')[1];
+        try{
+          const r=await fetch('/api/voice/register',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name:setupData.name,audio_base64:base64,sample_rate:16000})
+          });
+          const d=await r.json();
+          
+          if(d.success){
+            setupData.voiceSamples=(setupData.voiceSamples||0)+1;
+            const n=setupData.voiceSamples;
+            
+            // Update dots
+            document.getElementById('vdot'+n).classList.remove('recording');
+            document.getElementById('vdot'+n).classList.add('done');
+            document.getElementById('vdot'+n).textContent='✓';
+            
+            if(n>=3){
+              // All samples collected!
+              msg.textContent='✅ Voice registered! VIRON will only listen to you.';
+              msg.style.color='#00ff88';
+              btn.textContent='✅ Done!';
+              btn.style.background='rgba(0,255,136,0.2)';
+              // Auto-advance after 1.5s
+              setTimeout(()=>setupNext(4),1500);
+            }else{
+              // Update prompt for next sample
+              const prompts=VOICE_PROMPTS;
+              document.getElementById('voiceEnrollPrompt').innerHTML=
+                '"'+prompts[n](setupData.name)+'"';
+              msg.textContent=`Sample ${n}/3 recorded! ${3-n} more to go.`;
+              msg.style.color='#00d4ff';
+              btn.textContent='🎙️ Record Next';
+              btn.style.background='linear-gradient(135deg,#ff4444,#cc2222)';
+            }
+          }else{
+            msg.textContent='⚠ '+d.message+' — Try again';
+            msg.style.color='#ffaa00';
+            btn.textContent='🎙️ Try Again';
+            btn.style.background='linear-gradient(135deg,#ff4444,#cc2222)';
+          }
+        }catch(e){
+          msg.textContent='⚠ Server error: '+e.message;
+          msg.style.color='#ffaa00';
+          btn.textContent='🎙️ Try Again';
+          btn.style.background='linear-gradient(135deg,#ff4444,#cc2222)';
+        }
+      };
+      reader.readAsDataURL(blob);
+    };
+    
+    enrollRecording=true;
+    enrollRecorder.start();
+    
+    const n=(setupData.voiceSamples||0)+1;
+    document.getElementById('vdot'+n).classList.add('recording');
+    btn.textContent='⏹️ Stop Recording';
+    btn.style.background='linear-gradient(135deg,#ff6666,#ff2222)';
+    msg.textContent='🔴 Recording... speak now!';
+    msg.style.color='#ff4444';
+    
+    // Show audio level meter
+    const ctx=new AudioContext();
+    const src=ctx.createMediaStreamSource(stream);
+    const analyser=ctx.createAnalyser();
+    analyser.fftSize=256;
+    src.connect(analyser);
+    const dataArr=new Uint8Array(analyser.frequencyBinCount);
+    const meter=document.getElementById('voiceEnrollLevel');
+    const meterLoop=()=>{
+      if(!enrollRecording){ctx.close();return}
+      analyser.getByteFrequencyData(dataArr);
+      const avg=dataArr.reduce((a,b)=>a+b,0)/dataArr.length;
+      meter.style.width=Math.min(100,avg*1.5)+'%';
+      requestAnimationFrame(meterLoop);
+    };
+    meterLoop();
+    
+    // Auto-stop after 5 seconds
+    setTimeout(()=>{
+      if(enrollRecording)voiceEnrollRecord();
+    },5000);
+    
+  }catch(e){
+    msg.textContent='⚠ Microphone access denied';
+    msg.style.color='#ff4444';
+    D('  ❌ Mic error: '+e);
+  }
+}
+
+// --- Runtime Verification ---
+// Start recording alongside speech recognition for verification
+function startVoiceRecording(){
+  if(!voiceVerifyEnabled)return;
+  try{
+    navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:16000}})
+    .then(stream=>{
+      voiceAudioChunks=[];
+      voiceMediaRecorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
+      voiceMediaRecorder.ondataavailable=e=>{if(e.data.size>0)voiceAudioChunks.push(e.data)};
+      voiceMediaRecorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop())};
+      voiceMediaRecorder.start();
+      voiceRecordingForVerify=true;
+      D('  🎙️ Voice recording started for verification');
+    }).catch(e=>D('  ⚠ Voice record error: '+e));
+  }catch(e){D('  ⚠ Voice record error: '+e)}
+}
+
+function stopVoiceRecording(){
+  if(voiceMediaRecorder&&voiceMediaRecorder.state==='recording'){
+    voiceMediaRecorder.stop();
+    voiceRecordingForVerify=false;
+  }
+}
+
+async function verifyVoice(){
+  if(!voiceVerifyEnabled||voiceAudioChunks.length===0)return{verified:true,reason:'skip'};
+  
+  const blob=new Blob(voiceAudioChunks,{type:'audio/webm'});
+  if(blob.size<500)return{verified:true,reason:'too_small'};
+  
+  return new Promise((resolve)=>{
+    const reader=new FileReader();
+    reader.onload=async()=>{
+      const base64=reader.result.split(',')[1];
+      try{
+        const r=await fetch('/api/voice/verify',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({audio_base64:base64,sample_rate:16000})
+        });
+        const d=await r.json();
+        D('  🎙️ Voice verify: '+(d.verified?'✅ '+d.name:'❌ rejected')+' ('+d.confidence+')');
+        resolve(d);
+      }catch(e){
+        D('  ⚠ Voice verify error: '+e);
+        resolve({verified:true,reason:'error'});
+      }
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Check voice verify status on boot
+setTimeout(checkVoiceVerifyStatus,3000);
+
 // ===== SETUP WIZARD =====
 let setupData={name:'',age:0,language:'el',registerFace:false,photoTaken:false};
 let setupCamInterval=null;
@@ -1645,8 +1898,13 @@ function setupNext(step){
     // Start camera preview
     setupStartCamPreview();
   }
+  if(step===3){
+    // Voice enrollment — show name in prompt
+    document.getElementById('voiceEnrollName').textContent=setupData.name||'...';
+    setupData.voiceSamples=0;
+  }
   // Hide all steps, show requested
-  for(let i=1;i<=5;i++){
+  for(let i=1;i<=6;i++){
     const el=document.getElementById('setupStep'+i);
     if(el)el.style.display=i===step?'block':'none';
   }
@@ -1697,14 +1955,14 @@ function setupSetAge(age){
   // Highlight selected button
   document.querySelectorAll('.age-btn').forEach(b=>b.classList.remove('selected'));
   event.target.classList.add('selected');
-  setTimeout(()=>setupNext(4),300);
+  setTimeout(()=>setupNext(5),300);
 }
 
 function setupSetLang(lang){
   setupData.language=lang;
-  // Load WiFi list for step 5
+  // Load WiFi list for step 6
   setupLoadWifi();
-  setupNext(5);
+  setupNext(6);
 }
 
 async function setupLoadWifi(){
