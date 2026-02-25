@@ -1,5 +1,6 @@
 # API keys - NEVER commit
 backend/config.json
+backend/.env
 ai-router/.env
 ai-router/viron_cache.db
 

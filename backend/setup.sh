@@ -22,7 +22,7 @@ sudo apt-get install -y -qq \
 
 # 3. Python packages
 echo "[3/7] Installing Python packages..."
-pip3 install flask flask-cors flask-socketio
+pip3 install flask flask-cors flask-socketio httpx python-dotenv
 
 # 4. Backend service
 echo "[4/7] Creating backend service..."

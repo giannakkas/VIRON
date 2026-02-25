@@ -30,11 +30,25 @@ apt-get install -y -qq python3-pip python3-opencv libopencv-dev \
 echo "  ✓ System packages installed"
 
 echo -e "${GREEN}[2/5] Installing Python packages...${NC}"
-pip3 install flask flask-cors flask-socketio requests --break-system-packages -q 2>/dev/null || \
-pip3 install flask flask-cors flask-socketio requests -q
+pip3 install flask flask-cors flask-socketio requests httpx python-dotenv --break-system-packages -q 2>/dev/null || \
+pip3 install flask flask-cors flask-socketio requests httpx python-dotenv -q
 echo "  ✓ Python packages installed"
 
-echo -e "${GREEN}[3/5] Setting up config...${NC}"
+echo -e "${GREEN}[3/7] Installing Ollama (local LLM for simple questions)...${NC}"
+if command -v ollama &> /dev/null; then
+    echo "  ✓ Ollama already installed"
+else
+    echo "  Installing Ollama..."
+    curl -fsSL https://ollama.com/install.sh | sh
+    echo "  ✓ Ollama installed"
+fi
+
+echo -e "${GREEN}[4/7] Pulling Ollama model (phi3)...${NC}"
+su - $ACTUAL_USER -c "ollama pull phi3" 2>/dev/null || \
+    echo "  ⚠ Could not pull phi3 — run 'ollama pull phi3' manually after setup"
+echo "  ✓ Ollama model ready"
+
+echo -e "${GREEN}[5/7] Setting up config...${NC}"
 CONFIG_FILE="$VIRON_DIR/backend/config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo ""
@@ -68,12 +82,12 @@ else
     echo "  ✓ Config already exists"
 fi
 
-echo -e "${GREEN}[4/5] Setting permissions...${NC}"
+echo -e "${GREEN}[6/7] Setting permissions...${NC}"
 chown -R $ACTUAL_USER:$ACTUAL_USER "$VIRON_DIR"
 chmod +x "$VIRON_DIR/run.sh" 2>/dev/null || true
 echo "  ✓ Permissions set"
 
-echo -e "${GREEN}[5/5] Testing camera...${NC}"
+echo -e "${GREEN}[7/7] Testing camera...${NC}"
 python3 -c "
 import cv2
 cap = cv2.VideoCapture(0)

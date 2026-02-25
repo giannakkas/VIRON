@@ -292,90 +292,122 @@ class StudentEmotionDetector:
 
 detector = StudentEmotionDetector()
 
-# ============ AI PROXY ============
+# ============ AI SMART ROUTER ============
+# Ollama for simple questions (greetings, facts, casual chat)
+# Claude Opus for complex questions (explanations, teaching, analysis)
+# Fallback chain: Claude → Gemini → ChatGPT → Ollama
+# Retry with exponential backoff on 529/overloaded errors
+
+import logging
+logging.basicConfig(level=logging.INFO)
+
+try:
+    from viron_ai_router import VironAIRouterSync, RouterConfig
+    _router_cfg = RouterConfig()
+    # Load API keys from config.json AND environment
+    _api_key = config.get("anthropic_api_key", "")
+    if not _api_key or _api_key == "YOUR_API_KEY_HERE":
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    _router_cfg.anthropic_api_key = _api_key
+    _router_cfg.claude_model = config.get("model", "claude-opus-4-0-20250514")
+    _router_cfg.google_api_key = os.environ.get("GOOGLE_API_KEY", "")
+    _router_cfg.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    _router_cfg.ollama_model = os.environ.get("OLLAMA_MODEL", "phi3")
+    ai_router = VironAIRouterSync(_router_cfg)
+    HAS_ROUTER = True
+    print(f"✅ AI Router loaded — Ollama ({_router_cfg.ollama_model}) + Claude ({_router_cfg.claude_model})")
+    if _router_cfg.google_api_key:
+        print(f"  ↳ Gemini fallback: {_router_cfg.gemini_model}")
+    if _router_cfg.openai_api_key:
+        print(f"  ↳ ChatGPT fallback: {_router_cfg.chatgpt_model}")
+except Exception as _router_err:
+    HAS_ROUTER = False
+    ai_router = None
+    print(f"⚠ AI Router not available: {_router_err}")
+    import traceback; traceback.print_exc()
+
 @app.route('/api/chat', methods=['POST'])
 def chat_proxy():
-    """Proxy to AI Router (port 8000) or direct to Anthropic as fallback."""
-    if not HAS_REQUESTS:
-        return jsonify({"error": "requests library not installed"}), 500
+    """
+    Smart AI chat endpoint.
+    Simple questions (greetings, facts) → Ollama (local, instant, free)
+    Complex questions (explain, teach, analyze) → Claude Opus (cloud, quality)
+    Fallback chain: Claude → Gemini → ChatGPT → Ollama
+    Retries on 529/overloaded with exponential backoff.
+    """
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data"}), 400
 
     user_msg = data.get("messages", [{}])[-1].get("content", "")
-    print(f"\n💬 CHAT REQUEST: '{user_msg}'")
+    system_prompt = data.get("system", "")
+    history = data.get("messages", [])[:-1]  # all except last (which is the user msg)
+    print(f"\n💬 CHAT: '{user_msg[:80]}'")
 
-    # Try AI Router first (port 8000)
-    try:
-        print(f"  → Trying AI Router (localhost:8000)...")
-        resp = http_requests.post("http://localhost:8000/chat",
-            json={
-                "message": user_msg,
-                "age_mode": data.get("age_mode", config.get("age_mode", "kids")),
-                "conversation_id": data.get("conversation_id", "default"),
-            }, timeout=40)  # 40s for Opus
-        print(f"  → AI Router status: {resp.status_code}")
-        if resp.status_code == 200:
-            router_data = resp.json()
-            reply = router_data.get("reply", "")
-            provider = router_data.get("provider", "unknown")
-            print(f"  → AI Router reply ({provider}): '{reply[:100]}'")
-            # Check if the reply is just an echo or error
-            is_echo = reply.lower().startswith("received:") or reply == user_msg
-            is_error = provider == "error" or not reply or len(reply) < 3
-            if not is_echo and not is_error:
+    # ── Smart Router (Ollama + Cloud with fallback) ──
+    if HAS_ROUTER and ai_router:
+        try:
+            reply, provider = ai_router.chat(
+                message=user_msg,
+                history=history,
+                system_prompt=system_prompt,
+            )
+            if reply and len(reply.strip()) > 2:
+                print(f"  ✅ {provider} | {ai_router.last_complexity} | conf:{ai_router.last_confidence:.2f}")
+                print(f"  → '{reply[:100]}'")
                 return jsonify({
                     "content": [{"type": "text", "text": reply}],
                     "provider": provider,
-                    "complexity": router_data.get("complexity", "unknown"),
-                    "emotion": router_data.get("emotion", "neutral"),
+                    "complexity": ai_router.last_complexity,
+                    "confidence": ai_router.last_confidence,
                 })
             else:
-                print(f"  ⚠ AI Router returned echo/error (provider={provider}), falling back")
-        else:
-            print(f"  ⚠ AI Router non-200: {resp.text[:200]}")
-    except Exception as e:
-        print(f"  ⚠ AI Router unavailable ({e}), falling back to direct API")
+                print(f"  ⚠ Router returned empty, falling back to direct API")
+        except Exception as e:
+            print(f"  ⚠ Router error: {e}, falling back to direct API")
 
-    # Fallback: direct to Anthropic
+    # ── Fallback: direct Anthropic API (if router fails completely) ──
+    if not HAS_REQUESTS:
+        return jsonify({
+            "content": [{"type": "text", "text": "[confused] My brain isn't connected!"}],
+            "provider": "none",
+        })
+
     api_key = config.get("anthropic_api_key", "")
     if not api_key or api_key == "YOUR_API_KEY_HERE":
-        # Try environment variable
-        import os
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        print("  ❌ No API key available!")
+        print("  ❌ No API key!")
         return jsonify({
-            "content": [{"type": "text", "text": "[confused] I can't think right now. My AI brain isn't connected. Please check the API keys!"}],
+            "content": [{"type": "text", "text": "[confused] No API key configured!"}],
             "provider": "none",
         })
     try:
-        print(f"  → Trying direct Anthropic API...")
-        model = config.get("model", "claude-opus-4-20250514")
+        print(f"  → Direct Anthropic API fallback...")
+        model = config.get("model", "claude-opus-4-0-20250514")
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
             json={"model": model, "max_tokens": data.get("max_tokens", 1500),
-                  "system": data.get("system", ""), "messages": data.get("messages", [])},
+                  "system": system_prompt, "messages": data.get("messages", [])},
             timeout=45)
-        print(f"  → Anthropic API status: {resp.status_code}")
-        
-        # If Opus overloaded, fall back to Sonnet
         if resp.status_code == 529 and "opus" in model:
-            print(f"  ⚠ Opus overloaded, falling back to Sonnet...")
-            fallback = "claude-sonnet-4-20250514"
+            print(f"  ⚠ Opus 529, trying Sonnet...")
             resp = http_requests.post("https://api.anthropic.com/v1/messages",
                 headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                json={"model": fallback, "max_tokens": data.get("max_tokens", 1500),
-                      "system": data.get("system", ""), "messages": data.get("messages", [])},
+                json={"model": "claude-sonnet-4-20250514", "max_tokens": data.get("max_tokens", 1500),
+                      "system": system_prompt, "messages": data.get("messages", [])},
                 timeout=30)
-            print(f"  → Sonnet fallback status: {resp.status_code}")
-        
-        if resp.status_code != 200:
-            print(f"  ❌ Anthropic error: {resp.text[:300]}")
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
-        print(f"  ❌ Anthropic API error: {e}")
+        print(f"  ❌ API error: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/chat/status', methods=['GET'])
+def chat_router_status():
+    """Debug: show AI router stats, provider status, and routing info."""
+    if HAS_ROUTER and ai_router:
+        return jsonify(ai_router.get_status())
+    return jsonify({"error": "Router not loaded"}), 500
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
