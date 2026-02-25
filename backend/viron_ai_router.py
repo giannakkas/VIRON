@@ -34,7 +34,7 @@ class RouterConfig:
     
     # Claude (primary cloud - for explanations)
     anthropic_api_key: str = ""
-    claude_model: str = "claude-opus-4-0-20250514"  # Opus for quality explanations
+    claude_model: str = "claude-opus-4-20250514"  # Opus for quality explanations
     
     # Gemini (fallback 1)
     google_api_key: str = ""
@@ -59,7 +59,7 @@ def load_config_from_env() -> RouterConfig:
         ollama_model=os.getenv("OLLAMA_MODEL", "phi3"),
         local_timeout=float(os.getenv("LOCAL_TIMEOUT", "30")),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-        claude_model=os.getenv("CLAUDE_MODEL", "claude-opus-4-0-20250514"),
+        claude_model=os.getenv("CLAUDE_MODEL", "claude-opus-4-20250514"),
         google_api_key=os.getenv("GOOGLE_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),

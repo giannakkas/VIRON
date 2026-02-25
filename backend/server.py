@@ -309,7 +309,7 @@ try:
     if not _api_key or _api_key == "YOUR_API_KEY_HERE":
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     _router_cfg.anthropic_api_key = _api_key
-    _router_cfg.claude_model = config.get("model", "claude-opus-4-0-20250514")
+    _router_cfg.claude_model = config.get("model", "claude-opus-4-20250514")
     _router_cfg.google_api_key = os.environ.get("GOOGLE_API_KEY", "")
     _router_cfg.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
     _router_cfg.ollama_model = os.environ.get("OLLAMA_MODEL", "phi3")
@@ -384,7 +384,7 @@ def chat_proxy():
         })
     try:
         print(f"  → Direct Anthropic API fallback...")
-        model = config.get("model", "claude-opus-4-0-20250514")
+        model = config.get("model", "claude-opus-4-20250514")
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
             json={"model": model, "max_tokens": data.get("max_tokens", 1500),
