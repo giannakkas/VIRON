@@ -119,6 +119,15 @@ class FaceRecognizer:
         # Return largest face
         return max(faces, key=lambda f: f[2] * f[3])
 
+    def _detect_all_face_bboxes(self, frame):
+        """Detect ALL faces in frame, return list of (x,y,w,h)"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        faces = self.face_cascade.detectMultiScale(gray, 1.1, 3, minSize=(60, 60))
+        if len(faces) == 0:
+            faces = self.face_cascade.detectMultiScale(gray, 1.05, 2, minSize=(40, 40))
+        return list(faces) if len(faces) > 0 else []
+
     def _get_face_crop(self, frame, bbox):
         """Crop and resize face to 112x112 for SFace"""
         x, y, w, h = bbox
@@ -250,6 +259,47 @@ class FaceRecognizer:
             self.current_confidence = 0.0
 
         return self.current_person, self.current_confidence
+
+    def recognize_all(self, frame):
+        """Recognize ALL faces in frame. Returns list of {name, confidence} dicts."""
+        if not self.initialized or not self.known_faces:
+            return []
+
+        bboxes = self._detect_all_face_bboxes(frame)
+        if not bboxes:
+            return []
+
+        results = []
+        seen_names = set()
+
+        for bbox in bboxes:
+            face_112 = self._get_face_crop(frame, bbox)
+            if face_112 is None:
+                continue
+            encoding = self._get_encoding(face_112)
+            if encoding is None:
+                continue
+
+            best_name = None
+            best_score = -1
+            for name, encodings in self.known_faces.items():
+                for known_enc in encodings:
+                    score = self._cosine_similarity(encoding, known_enc)
+                    if score > best_score:
+                        best_score = score
+                        best_name = name
+
+            if best_score > COSINE_THRESHOLD and best_name and best_name not in seen_names:
+                results.append({"name": best_name, "confidence": round(best_score, 3)})
+                seen_names.add(best_name)
+
+        # Update current_person to the highest-confidence match
+        if results:
+            best = max(results, key=lambda r: r["confidence"])
+            self.current_person = best["name"]
+            self.current_confidence = best["confidence"]
+
+        return results
 
     def delete_face(self, name):
         if name in self.known_faces:

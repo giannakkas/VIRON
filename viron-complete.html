@@ -100,6 +100,84 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <img src="/static/viron-logo.png" alt="VIRON">
   <div class="boot-text">TAP TO START</div>
 </div>
+
+<!-- SETUP WIZARD (first-time setup) -->
+<div id="setupWizard" style="display:none;position:fixed;inset:0;z-index:190;background:#000;overflow-y:auto">
+  <div style="max-width:400px;margin:0 auto;padding:30px 20px;text-align:center">
+    <img src="/static/viron-logo.png" alt="VIRON" style="width:120px;margin-bottom:10px">
+    <h2 style="color:#00d4ff;margin:0 0 5px">Welcome to VIRON!</h2>
+    <p style="color:rgba(255,255,255,0.5);font-size:13px;margin:0 0 25px">Let's get to know each other</p>
+    
+    <!-- Step 1: Name -->
+    <div id="setupStep1" class="setup-step">
+      <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">What's your name?</label>
+      <input id="setupName" type="text" placeholder="e.g. Μαρία / Maria" style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(0,200,255,0.3);background:rgba(255,255,255,0.08);color:#fff;font-size:16px;text-align:center;outline:none;box-sizing:border-box">
+      <div style="margin-top:15px">
+        <button onclick="setupNext(2)" style="padding:10px 30px;background:linear-gradient(135deg,#00d4ff,#0088cc);border:none;border-radius:10px;color:#fff;font-size:15px;cursor:pointer">Next →</button>
+      </div>
+    </div>
+    
+    <!-- Step 2: Photo -->
+    <div id="setupStep2" class="setup-step" style="display:none">
+      <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">Take a photo so I can recognize you!</label>
+      <div id="setupCameraPreview" style="width:200px;height:200px;border-radius:50%;overflow:hidden;margin:10px auto;border:3px solid rgba(0,200,255,0.4);background:#111">
+        <img id="setupCamImg" style="width:100%;height:100%;object-fit:cover">
+      </div>
+      <div style="margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        <button onclick="setupTakePhoto()" style="padding:10px 20px;background:linear-gradient(135deg,#00d4ff,#0088cc);border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer">📸 Take Photo</button>
+        <button onclick="setupNext(3)" style="padding:10px 20px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:10px;color:rgba(255,255,255,0.6);font-size:14px;cursor:pointer">Skip →</button>
+      </div>
+      <p id="setupPhotoStatus" style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:8px"></p>
+    </div>
+    
+    <!-- Step 3: Age -->
+    <div id="setupStep3" class="setup-step" style="display:none">
+      <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">How old are you?</label>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button onclick="setupSetAge(6)" class="age-btn">6-8</button>
+        <button onclick="setupSetAge(9)" class="age-btn">9-10</button>
+        <button onclick="setupSetAge(11)" class="age-btn">11-12</button>
+        <button onclick="setupSetAge(13)" class="age-btn">13-14</button>
+        <button onclick="setupSetAge(15)" class="age-btn">15-16</button>
+        <button onclick="setupSetAge(17)" class="age-btn">17-18</button>
+        <button onclick="setupSetAge(20)" class="age-btn">18+</button>
+      </div>
+    </div>
+    
+    <!-- Step 4: Language -->
+    <div id="setupStep4" class="setup-step" style="display:none">
+      <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">Which language do you prefer?</label>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button onclick="setupSetLang('el')" style="padding:15px 25px;background:rgba(0,100,255,0.2);border:2px solid rgba(0,150,255,0.4);border-radius:12px;color:#fff;font-size:18px;cursor:pointer">🇬🇷 Ελληνικά</button>
+        <button onclick="setupSetLang('en')" style="padding:15px 25px;background:rgba(0,100,255,0.2);border:2px solid rgba(0,150,255,0.4);border-radius:12px;color:#fff;font-size:18px;cursor:pointer">🇬🇧 English</button>
+      </div>
+    </div>
+    
+    <!-- Step 5: WiFi (optional) -->
+    <div id="setupStep5" class="setup-step" style="display:none">
+      <label style="color:#00d4ff;font-size:14px;display:block;margin-bottom:8px">Connect to WiFi</label>
+      <div id="setupWifiList" style="max-height:200px;overflow-y:auto;margin:10px 0"></div>
+      <div id="setupWifiQR" style="margin:15px auto;display:none">
+        <p style="color:rgba(255,255,255,0.5);font-size:12px">Scan to access VIRON from your phone:</p>
+        <img id="setupQRImg" style="width:150px;height:150px;border-radius:8px">
+      </div>
+      <div style="margin-top:10px">
+        <button onclick="setupFinish()" style="padding:10px 30px;background:linear-gradient(135deg,#00ff88,#00cc66);border:none;border-radius:10px;color:#000;font-size:15px;font-weight:bold;cursor:pointer">✅ Done — Start VIRON!</button>
+      </div>
+    </div>
+    
+    <!-- Skip all -->
+    <div style="margin-top:30px">
+      <button onclick="setupFinish()" style="background:none;border:none;color:rgba(255,255,255,0.3);font-size:13px;cursor:pointer;text-decoration:underline">Skip setup</button>
+    </div>
+  </div>
+</div>
+<style>
+.setup-step{animation:fadeIn 0.3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.age-btn{padding:12px 18px;background:rgba(0,100,255,0.15);border:2px solid rgba(0,150,255,0.3);border-radius:12px;color:#fff;font-size:16px;cursor:pointer;transition:all 0.2s}
+.age-btn:hover,.age-btn.selected{background:rgba(0,150,255,0.3);border-color:#00d4ff}
+</style>
 <div class="engagement-bar" id="engBar"><div class="eng-dot" id="engDot"></div><span class="eng-label" id="engLabel"></span></div>
 <div id="personName" style="position:fixed;top:40px;left:12px;font-size:14px;font-weight:bold;color:#00ff88;z-index:50;text-shadow:0 0 8px rgba(0,255,136,0.5)"></div>
 <div id="gamificationHud" style="position:fixed;top:58px;left:12px;z-index:50;display:none;font-size:12px;color:rgba(255,255,255,0.7)">
@@ -1217,6 +1295,7 @@ Be real. Be warm. Be their brilliant friend.`,
 
 // ===== STUDENT PROFILES & GAMIFICATION =====
 let lastRecognizedPerson=null;
+let greetedPersons=new Set(); // Track who we've already greeted this session
 let currentSessionId=null;
 let currentStudentName="";
 
@@ -1265,27 +1344,56 @@ function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').th
 // Show recognized person name
 const pn=document.getElementById("personName");
 if(d.recognized_person){pn.textContent=d.recognized_person;pn.style.color="#00ff88";
-// Greet new person on first recognition — with personalized context
-if(d.recognized_person!==lastRecognizedPerson&&!inConversation&&!isSpeaking){
-  lastRecognizedPerson=d.recognized_person;
-  // Start session and get personalized greeting
-  startStudentSession(d.recognized_person,d.emotion).then(ctx=>{
-    let g;
-    if(ctx&&ctx.is_new){
-      // Brand new student
-      g=isGreekMode()?`Γεια σου ${d.recognized_person}! Χαίρομαι που σε γνωρίζω! Είμαι ο VIRON!`:`Hey ${d.recognized_person}! Nice to meet you! I'm VIRON!`;
-    }else if(ctx&&ctx.days_away>3){
-      // Been away
-      g=isGreekMode()?`${d.recognized_person}! Πού ήσουν; Σε έψαχνα!`:`${d.recognized_person}! Where have you been? I missed you!`;
-    }else if(ctx&&ctx.streak>2){
-      // On a streak
-      g=isGreekMode()?`Γεια σου ${d.recognized_person}! ${ctx.streak} μέρες σερί! Συνεχίζουμε!`:`Hey ${d.recognized_person}! ${ctx.streak} day streak! Let's keep it going!`;
-    }else{
-      const greetings=isGreekMode()?[`Γεια σου ${d.recognized_person}!`,`Α, ${d.recognized_person}! Τι κάνεις;`,`Χαίρομαι που σε βλέπω ${d.recognized_person}!`]:[`Hey ${d.recognized_person}!`,`Hi ${d.recognized_person}!`,`Good to see you ${d.recognized_person}!`];
-      g=greetings[Math.floor(Math.random()*greetings.length)];
-    }
-    cE("happy");say(g);
-  });
+
+// Multi-face: greet ALL recognized persons
+const allPersons=d.recognized_persons||[];
+const primaryPerson=d.recognized_person;
+const newPersons=allPersons.length>0
+  ? allPersons.filter(p=>!greetedPersons.has(p.name)).map(p=>p.name)
+  : (primaryPerson&&!greetedPersons.has(primaryPerson)?[primaryPerson]:[]);
+
+if(newPersons.length>0&&!inConversation&&!isSpeaking){
+  // Start session for primary person
+  if(!currentStudentName){
+    currentStudentName=primaryPerson;
+    lastRecognizedPerson=primaryPerson;
+  }
+  
+  // Greet all new persons
+  newPersons.forEach(name=>greetedPersons.add(name));
+  
+  if(newPersons.length===1){
+    // Single new person
+    const name=newPersons[0];
+    startStudentSession(name,d.emotion).then(ctx=>{
+      let g;
+      if(ctx&&ctx.is_new){
+        g=isGreekMode()?`Γεια σου ${name}! Χαίρομαι που σε γνωρίζω! Είμαι ο VIRON!`:`Hey ${name}! Nice to meet you! I'm VIRON!`;
+      }else if(ctx&&ctx.days_away>3){
+        g=isGreekMode()?`${name}! Πού ήσουν; Σε έψαχνα!`:`${name}! Where have you been? I missed you!`;
+      }else if(ctx&&ctx.streak>2){
+        g=isGreekMode()?`Γεια σου ${name}! ${ctx.streak} μέρες σερί! Συνεχίζουμε!`:`Hey ${name}! ${ctx.streak} day streak! Let's keep it going!`;
+      }else{
+        const greetings=isGreekMode()?[`Γεια σου ${name}!`,`Α, ${name}! Τι κάνεις;`,`Χαίρομαι που σε βλέπω ${name}!`]:[`Hey ${name}!`,`Hi ${name}!`,`Good to see you ${name}!`];
+        g=greetings[Math.floor(Math.random()*greetings.length)];
+      }
+      cE("happy");say(g);
+    });
+  }else{
+    // Multiple new persons at once!
+    const names=newPersons.join(isGreekMode()?' και ':' and ');
+    const g=isGreekMode()
+      ?`Γεια σας ${names}! Τι κάνετε;`
+      :`Hey ${names}! Good to see you all!`;
+    // Start session for primary
+    startStudentSession(primaryPerson,d.emotion);
+    cE("excited");say(g);
+  }
+  
+  // Show face count
+  if(d.face_count>1){
+    pn.textContent=allPersons.map(p=>p.name).join(', ')+` (${d.face_count})`;
+  }
 }
 }else{pn.textContent="";if(lastRecognizedPerson){endStudentSession()}lastRecognizedPerson=null;document.getElementById("gamificationHud").style.display="none"}
 handleP(d)}).catch(()=>{})}
@@ -1479,20 +1587,172 @@ document.getElementById('langSelect').value=vironLang;
 
 fetch('/api/student/start-detection',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
 
-// Boot splash → require tap to unlock audio, then start
-const splash=document.getElementById('bootSplash');
-splash.addEventListener('click',function startViron(){
-  splash.classList.add('hidden');
-  setTimeout(()=>{splash.style.display='none'},1000);
+// ===== SETUP WIZARD =====
+let setupData={name:'',age:0,language:'el',registerFace:false,photoTaken:false};
+let setupCamInterval=null;
+
+function setupNext(step){
+  if(step===2){
+    // Validate name
+    const name=document.getElementById('setupName').value.trim();
+    if(!name){document.getElementById('setupName').style.borderColor='#ff4444';return}
+    setupData.name=name;
+    // Start camera preview
+    setupStartCamPreview();
+  }
+  // Hide all steps, show requested
+  for(let i=1;i<=5;i++){
+    const el=document.getElementById('setupStep'+i);
+    if(el)el.style.display=i===step?'block':'none';
+  }
+}
+
+function setupStartCamPreview(){
+  // Poll camera snapshot for preview
+  const img=document.getElementById('setupCamImg');
+  setupCamInterval=setInterval(()=>{
+    img.src='/api/faces/snapshot?t='+Date.now();
+  },500);
+}
+
+async function setupTakePhoto(){
+  document.getElementById('setupPhotoStatus').textContent='Registering face...';
+  try{
+    // Register face from current camera frame
+    const r=await fetch('/api/faces/register',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:setupData.name,from_camera:true})});
+    const d=await r.json();
+    if(d.success){
+      setupData.registerFace=true;
+      setupData.photoTaken=true;
+      document.getElementById('setupPhotoStatus').textContent='✅ Face registered!';
+      document.getElementById('setupPhotoStatus').style.color='#00ff88';
+      // Take 2 more samples for better recognition
+      setTimeout(async()=>{
+        await fetch('/api/faces/register',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name:setupData.name,from_camera:true})});
+      },1000);
+      setTimeout(async()=>{
+        await fetch('/api/faces/register',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name:setupData.name,from_camera:true})});
+        setupNext(3);
+      },2000);
+    }else{
+      document.getElementById('setupPhotoStatus').textContent='⚠ '+d.message+' — Try again or skip';
+      document.getElementById('setupPhotoStatus').style.color='#ffaa00';
+    }
+  }catch(e){
+    document.getElementById('setupPhotoStatus').textContent='⚠ Camera not ready — skip for now';
+    document.getElementById('setupPhotoStatus').style.color='#ffaa00';
+  }
+}
+
+function setupSetAge(age){
+  setupData.age=age;
+  // Highlight selected button
+  document.querySelectorAll('.age-btn').forEach(b=>b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  setTimeout(()=>setupNext(4),300);
+}
+
+function setupSetLang(lang){
+  setupData.language=lang;
+  // Load WiFi list for step 5
+  setupLoadWifi();
+  setupNext(5);
+}
+
+async function setupLoadWifi(){
+  try{
+    const r=await fetch('/api/wifi/list');
+    const nets=await r.json();
+    const list=document.getElementById('setupWifiList');
+    if(Array.isArray(nets)&&nets.length>0){
+      list.innerHTML=nets.slice(0,5).map(n=>
+        `<div style="padding:8px 12px;margin:4px 0;background:rgba(255,255,255,0.05);border-radius:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="setupConnectWifi('${n.ssid}')">
+          <span style="color:#fff">${n.ssid}</span>
+          <span style="color:rgba(255,255,255,0.4);font-size:12px">${n.signal}% ${n.security?'🔒':''}</span>
+        </div>`
+      ).join('');
+    }else{
+      list.innerHTML='<p style="color:rgba(255,255,255,0.4)">No WiFi networks found</p>';
+    }
+    // Show QR code
+    try{
+      document.getElementById('setupQRImg').src='/api/wifi/qr?t='+Date.now();
+      document.getElementById('setupWifiQR').style.display='block';
+    }catch{}
+  }catch{
+    document.getElementById('setupWifiList').innerHTML='<p style="color:rgba(255,255,255,0.4)">WiFi scan not available</p>';
+  }
+}
+
+async function setupConnectWifi(ssid){
+  const pw=prompt('Password for '+ssid+':');
+  if(pw===null)return;
+  try{
+    const r=await fetch('/api/wifi/connect',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ssid:ssid,password:pw})});
+    const d=await r.json();
+    if(d.status==='connected'){
+      alert('Connected to '+ssid+'!');
+      // Reload QR with new IP
+      setTimeout(()=>{document.getElementById('setupQRImg').src='/api/wifi/qr?t='+Date.now()},2000);
+    }else{
+      alert('Failed to connect. Check password.');
+    }
+  }catch{alert('Connection error')}
+}
+
+async function setupFinish(){
+  // Stop camera preview
+  if(setupCamInterval)clearInterval(setupCamInterval);
+  
+  // Save student profile
+  if(setupData.name){
+    try{
+      await fetch('/api/setup/register',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          name:setupData.name,
+          display_name:setupData.name,
+          age:setupData.age,
+          language:setupData.language,
+          register_face:false  // Already done in step 2
+        })});
+    }catch(e){D('Setup save error: '+e)}
+  }
+  
+  // Hide wizard
+  document.getElementById('setupWizard').style.display='none';
+  
+  // Set language from setup
+  if(setupData.language==='en'){
+    const langSel=document.querySelector('select');
+    if(langSel)langSel.value='en-US';
+  }
+  
+  // Start VIRON normally
+  startVironNormal();
+}
+
+function startVironNormal(){
   unlockAudio();
   
-  // Greet in selected language (audio now unlocked)
+  // Personalized greeting if we have a name
   setTimeout(()=>{
     cE("excited");
-    if(isGreekMode()){
-      say("Γεια! Είμαι ο VIRON!");
+    if(setupData.name){
+      if(setupData.language==='el'||isGreekMode()){
+        say(`Γεια σου ${setupData.name}! Είμαι ο VIRON, ο φίλος σου! Πες Hey VIRON για να μιλήσουμε!`);
+      }else{
+        say(`Hi ${setupData.name}! I'm VIRON, your study buddy! Say Hey VIRON to talk to me!`);
+      }
     }else{
-      say("Hi! I'm VIRON! Say Hey VIRON to talk to me!");
+      if(isGreekMode()){
+        say("Γεια! Είμαι ο VIRON!");
+      }else{
+        say("Hi! I'm VIRON! Say Hey VIRON to talk to me!");
+      }
     }
   },500);
   
@@ -1500,7 +1760,32 @@ splash.addEventListener('click',function startViron(){
   setTimeout(()=>{
     D('Starting always-on listening');
     startAlwaysListening();
-  },4000);
+  },5000);
+}
+
+// Boot splash → check setup, then start
+const splash=document.getElementById('bootSplash');
+splash.addEventListener('click',async function startViron(){
+  splash.classList.add('hidden');
+  setTimeout(()=>{splash.style.display='none'},1000);
+  unlockAudio();
+  
+  // Check if setup is needed
+  try{
+    const r=await fetch('/api/setup/status');
+    const status=await r.json();
+    
+    if(!status.setup_complete){
+      // Show setup wizard
+      document.getElementById('setupWizard').style.display='block';
+      return;
+    }
+  }catch(e){
+    D('Setup check failed: '+e+' — proceeding normally');
+  }
+  
+  // Setup already done — start normally
+  startVironNormal();
 },{once:true});
 
 // Keepalive: ensure always-on listening stays alive

@@ -100,7 +100,8 @@ class StudentEmotionDetector:
             "face_detected": False, "attention": "center", "blink_rate": 0,
             "mouth_open": False, "dominant_emotion": "neutral",
             "emotion_streak": 0, "yawn_count": 0,
-            "recognized_person": None, "recognition_confidence": 0
+            "recognized_person": None, "recognition_confidence": 0,
+            "recognized_persons": [], "face_count": 0
         }
         self.frame_count = 0
         self.last_frame = None
@@ -220,6 +221,14 @@ class StudentEmotionDetector:
             person, confidence = face_recognizer.recognize(frame)
             self.current_state["recognized_person"] = person
             self.current_state["recognition_confidence"] = round(confidence, 3)
+            # Multi-face: recognize ALL faces
+            try:
+                all_persons = face_recognizer.recognize_all(frame)
+                self.current_state["recognized_persons"] = all_persons
+                self.current_state["face_count"] = len(faces)
+            except:
+                self.current_state["recognized_persons"] = []
+                self.current_state["face_count"] = len(faces)
         
         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
         face_roi = gray[y:y+h, x:x+w]
@@ -879,10 +888,144 @@ def wifi_status():
         for line in r.stdout.strip().split('\n'):
             p = line.split(':')
             if len(p) >= 3 and p[1] == 'connected' and p[0].startswith('wl'):
-                return jsonify({"connected": True, "ssid": p[2]})
+                # Get IP address
+                ip_r = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
+                ip = ip_r.stdout.strip().split()[0] if ip_r.stdout.strip() else ""
+                return jsonify({"connected": True, "ssid": p[2], "ip": ip})
         return jsonify({"connected": False})
     except:
         return jsonify({"connected": False})
+
+
+@app.route('/api/wifi/qr', methods=['GET'])
+def wifi_qr():
+    """Generate a QR code PNG for WiFi connection to VIRON.
+    Mode 1 (default): QR code linking to VIRON's web interface (current IP)
+    Mode 2 (?type=hotspot): QR code to connect to VIRON's hotspot
+    Mode 3 (?type=wifi&ssid=X&password=Y): QR code with WiFi credentials"""
+    qr_type = request.args.get('type', 'url')
+    
+    try:
+        import qrcode
+        import io
+    except ImportError:
+        # Auto-install qrcode
+        try:
+            subprocess.run(['pip', 'install', 'qrcode[pil]', '--break-system-packages', '-q'],
+                           capture_output=True, timeout=30)
+            import qrcode
+            import io
+        except:
+            return jsonify({"error": "qrcode not available, install with: pip install qrcode[pil]"}), 500
+    
+    if qr_type == 'wifi':
+        # Standard WiFi QR code format
+        ssid = request.args.get('ssid', 'VIRON')
+        password = request.args.get('password', '')
+        security = 'WPA' if password else 'nopass'
+        qr_data = f"WIFI:T:{security};S:{ssid};P:{password};;"
+    elif qr_type == 'hotspot':
+        qr_data = "WIFI:T:WPA;S:VIRON-Setup;P:viron2024;;"
+    else:
+        # URL to VIRON's web interface
+        try:
+            ip_r = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
+            ip = ip_r.stdout.strip().split()[0] if ip_r.stdout.strip() else "127.0.0.1"
+        except:
+            ip = "127.0.0.1"
+        qr_data = f"http://{ip}:5000/viron-complete.html"
+    
+    qr = qrcode.QRCode(version=1, box_size=8, border=2)
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="white", back_color="black")
+    
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return Response(buf.read(), mimetype='image/png')
+
+
+@app.route('/api/wifi/hotspot/start', methods=['POST'])
+def wifi_hotspot_start():
+    """Create a WiFi hotspot so phones can connect to VIRON for setup."""
+    try:
+        # Create hotspot using nmcli
+        r = subprocess.run([
+            'nmcli', 'dev', 'wifi', 'hotspot',
+            'ifname', 'wlan0',
+            'ssid', 'VIRON-Setup',
+            'password', 'viron2024'
+        ], capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            return jsonify({"success": True, "ssid": "VIRON-Setup", "password": "viron2024",
+                            "message": "Connect to WiFi 'VIRON-Setup' with password 'viron2024'"})
+        return jsonify({"success": False, "error": r.stderr})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/wifi/hotspot/stop', methods=['POST'])
+def wifi_hotspot_stop():
+    """Stop the hotspot and reconnect to normal WiFi."""
+    try:
+        subprocess.run(['nmcli', 'con', 'down', 'Hotspot'], capture_output=True, timeout=10)
+        # Try to reconnect to previous WiFi
+        subprocess.run(['nmcli', 'con', 'up', '--ask'], capture_output=True, timeout=15)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ============ SETUP WIZARD ============
+@app.route('/api/setup/status', methods=['GET'])
+def setup_status():
+    """Check if initial setup has been completed."""
+    if HAS_PROFILES:
+        students = get_all_students()
+        return jsonify({
+            "setup_complete": len(students) > 0,
+            "student_count": len(students),
+            "has_faces": bool(HAS_FACE_REC and face_recognizer and face_recognizer.initialized and face_recognizer.list_faces()),
+        })
+    return jsonify({"setup_complete": False, "student_count": 0, "has_faces": False})
+
+
+@app.route('/api/setup/register', methods=['POST'])
+def setup_register_student():
+    """Register a new student during setup wizard."""
+    data = request.get_json() or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({"success": False, "error": "Name required"}), 400
+    
+    # Create student profile
+    if HAS_PROFILES:
+        student = get_or_create_student(name)
+        update_student(name,
+                       display_name=data.get('display_name', name),
+                       age=int(data.get('age', 0)),
+                       grade=data.get('grade', ''),
+                       language=data.get('language', 'el'))
+    
+    # Register face if photo provided
+    face_registered = False
+    if data.get('register_face') and HAS_FACE_REC and face_recognizer:
+        if data.get('photo_base64'):
+            # From uploaded photo
+            success, msg = face_recognizer.register_face_from_base64(data['photo_base64'], name)
+            face_registered = success
+        elif detector.last_frame is not None:
+            # From camera
+            success, msg = face_recognizer.register_face(detector.last_frame, name)
+            face_registered = success
+    
+    return jsonify({
+        "success": True,
+        "name": name,
+        "face_registered": face_registered,
+        "message": f"Welcome {name}!"
+    })
 
 @app.route('/api/battery', methods=['GET'])
 def battery_status():
