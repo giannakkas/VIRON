@@ -31,8 +31,9 @@ else
 fi
 
 # Pre-warm: load model into RAM so first response is instant
-echo "  🔥 Pre-warming $OLLAMA_MODEL into RAM..."
-curl -s http://localhost:11434/api/chat -d "{\"model\":\"$OLLAMA_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" > /dev/null 2>&1 &
+echo "  🔥 Pre-warming $OLLAMA_MODEL into RAM (first time takes ~20s)..."
+curl -s http://localhost:11434/api/chat -d "{\"model\":\"$OLLAMA_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" > /dev/null 2>&1
+echo "  ✓ $OLLAMA_MODEL loaded into RAM — responses will be fast now"
 
 # Check Flask config
 if [ ! -f "$SCRIPT_DIR/backend/config.json" ]; then

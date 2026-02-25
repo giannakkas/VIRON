@@ -52,7 +52,7 @@ class RouterConfig:
     ollama_model: str = "qwen2.5:3b"
 
     cloud_timeout: int = 45
-    local_timeout: int = 15
+    local_timeout: int = 45  # Needs to be high for first model load (then instant)
     max_retries: int = 2
     strategy: str = "best_one"
     confidence_gate: bool = True
@@ -69,7 +69,7 @@ class RouterConfig:
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
             cloud_timeout=int(os.getenv("CLOUD_TIMEOUT", "45")),
-            local_timeout=int(os.getenv("LOCAL_TIMEOUT", "15")),
+            local_timeout=int(os.getenv("LOCAL_TIMEOUT", "45")),
             max_retries=int(os.getenv("MAX_RETRIES", "2")),
             strategy=os.getenv("ROUTING_STRATEGY", "best_one"),
             confidence_gate=os.getenv("CONFIDENCE_GATE", "true").lower() == "true",
@@ -108,7 +108,7 @@ ROUTING_TABLE: Dict[Subject, List[str]] = {
     Subject.GEOGRAPHY:  ["gemini", "chatgpt", "claude"],
     Subject.CREATIVE:   ["claude", "chatgpt", "gemini"],
     Subject.GENERAL:    ["claude", "gemini", "chatgpt"],
-    Subject.GREETING:   ["ollama"],
+    Subject.GREETING:   ["gemini", "claude", "chatgpt"],  # Cloud fallback if Ollama fails
 }
 
 
@@ -294,9 +294,10 @@ Be warm, friendly, and helpful. You're their best friend."""
 
 
 def query_ollama(message: str, history: list, system_prompt: str, config: RouterConfig,
-                 subject: Subject = None) -> Tuple[str, bool]:
+                 subject: Subject = None, timeout_override: int = None) -> Tuple[str, bool]:
     """Query local Ollama — uses the primary model (stays in RAM for speed)."""
-    model = config.ollama_model  # ONE model, always loaded, instant response
+    model = config.ollama_model
+    timeout = timeout_override or config.local_timeout  # ONE model, always loaded, instant response
 
     messages = [{"role": "system", "content": OLLAMA_SYSTEM_PROMPT}]
     messages.extend(history[-4:])
@@ -310,7 +311,7 @@ def query_ollama(message: str, history: list, system_prompt: str, config: Router
             f"{config.ollama_url}/api/chat",
             json={"model": model, "messages": messages, "stream": False,
                   "options": {"num_predict": 200, "temperature": 0.5}},
-            timeout=config.local_timeout,
+            timeout=timeout,
         )
         elapsed = time.time() - start
         if resp.status_code == 200:
@@ -320,7 +321,7 @@ def query_ollama(message: str, history: list, system_prompt: str, config: Router
         logger.warning(f"Ollama HTTP {resp.status_code}")
         return "", False
     except requests.exceptions.Timeout:
-        logger.warning(f"Ollama timeout ({config.local_timeout}s)")
+        logger.warning(f"Ollama timeout ({timeout}s)")
         return "", False
     except Exception as e:
         logger.warning(f"Ollama error: {e}")
@@ -641,19 +642,35 @@ class VironAIRouterSync:
             self._stat(force_provider if ok else "none", subject)
             return (text, force_provider) if ok else ("", "none")
 
-        # Greetings → Ollama FAST (no confidence gate needed for "hi")
+        # Greetings → Ollama FAST (short timeout, cloud fallback if slow)
         if subject == Subject.GREETING:
-            text, ok = query_ollama(message, history, system_prompt, self.config, subject)
-            if ok:
-                self._stat("ollama", subject)
-                self.last_confidence = 0.95
-                return text, "ollama"
-            # Ollama dead → cloud for greeting
+            # Try Ollama with SHORT timeout — greetings must be instant
+            try:
+                start = time.time()
+                text, ok = query_ollama(message, history, system_prompt, self.config, subject)
+                elapsed = time.time() - start
+                if ok and text:
+                    self._stat("ollama", subject)
+                    self.last_confidence = 0.95
+                    logger.info(f"  ✅ Greeting via Ollama in {elapsed:.1f}s")
+                    return text, "ollama"
+                logger.info(f"  ⚠ Ollama failed for greeting ({elapsed:.1f}s), trying cloud")
+            except Exception as e:
+                logger.warning(f"  ⚠ Ollama error: {e}, trying cloud")
+
+            # Ollama failed/slow → cloud fallback (Gemini is fastest)
             if available:
-                text, provider = strategy_best_one(message, history, system_prompt, subject, self.config, available)
-                self._stat(provider, subject)
-                return text, provider
-            return "", "none"
+                for provider in ["gemini", "claude", "chatgpt"]:
+                    if provider in available:
+                        try:
+                            text, ok = PROVIDER_FNS[provider](message, history, system_prompt, self.config)
+                            if ok and text:
+                                self._stat(provider, subject)
+                                logger.info(f"  ✅ Greeting via {provider} (Ollama was down)")
+                                return text, provider
+                        except Exception:
+                            continue
+            return "[happy] Hey!", "fallback"
 
         # Route via strategy
         if not available:
