@@ -293,47 +293,51 @@ class StudentEmotionDetector:
 detector = StudentEmotionDetector()
 
 # ============ AI SMART ROUTER ============
-# Ollama for simple questions (greetings, facts, casual chat)
-# Claude Opus for complex questions (explanations, teaching, analysis)
-# Fallback chain: Claude → Gemini → ChatGPT → Ollama
-# Retry with exponential backoff on 529/overloaded errors
+# ============ AI BRAIN — Multi-LLM Orchestrator ============
+# Routes by SUBJECT to best AI: Math→ChatGPT, Greek→Gemini, Literature→Claude
+# 4 strategies: Turbo, Race, Check, Smart (consensus from all 3)
+# Student can switch mode by voice: "turbo mode", "smart mode" etc.
 
 import logging
 logging.basicConfig(level=logging.INFO)
 
 try:
     from viron_ai_router import VironAIRouterSync, RouterConfig
-    _router_cfg = RouterConfig()
-    # Load API keys from config.json AND environment
+    _router_cfg = RouterConfig.from_env()
+    # Also load API key from config.json
     _api_key = config.get("anthropic_api_key", "")
     if not _api_key or _api_key == "YOUR_API_KEY_HERE":
         _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     _router_cfg.anthropic_api_key = _api_key
     _router_cfg.claude_model = config.get("model", "claude-opus-4-20250514")
-    _router_cfg.google_api_key = os.environ.get("GOOGLE_API_KEY", "")
-    _router_cfg.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-    _router_cfg.ollama_model = os.environ.get("OLLAMA_MODEL", "phi3")
+    if not _router_cfg.google_api_key:
+        _router_cfg.google_api_key = os.environ.get("GOOGLE_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+    if not _router_cfg.openai_api_key:
+        _router_cfg.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
     ai_router = VironAIRouterSync(_router_cfg)
     HAS_ROUTER = True
-    print(f"✅ AI Router loaded — Ollama ({_router_cfg.ollama_model}) + Claude ({_router_cfg.claude_model})")
-    if _router_cfg.google_api_key:
-        print(f"  ↳ Gemini fallback: {_router_cfg.gemini_model}")
-    if _router_cfg.openai_api_key:
-        print(f"  ↳ ChatGPT fallback: {_router_cfg.chatgpt_model}")
+    _prov = []
+    _prov.append(f"Ollama ({_router_cfg.ollama_model})")
+    if _router_cfg.anthropic_api_key: _prov.append(f"Claude ({_router_cfg.claude_model})")
+    if _router_cfg.google_api_key: _prov.append(f"Gemini ({_router_cfg.gemini_model})")
+    if _router_cfg.openai_api_key: _prov.append(f"ChatGPT ({_router_cfg.chatgpt_model})")
+    print(f"✅ AI Brain loaded — {' + '.join(_prov)}")
+    print(f"  🎛️ Strategy: {_router_cfg.strategy} | Subject routing: Math→ChatGPT, Greek→Gemini, Literature→Claude")
 except Exception as _router_err:
     HAS_ROUTER = False
     ai_router = None
-    print(f"⚠ AI Router not available: {_router_err}")
+    print(f"⚠ AI Brain not available: {_router_err}")
     import traceback; traceback.print_exc()
 
 @app.route('/api/chat', methods=['POST'])
 def chat_proxy():
     """
-    Smart AI chat endpoint.
-    Simple questions (greetings, facts) → Ollama (local, instant, free)
-    Complex questions (explain, teach, analyze) → Claude Opus (cloud, quality)
-    Fallback chain: Claude → Gemini → ChatGPT → Ollama
-    Retries on 529/overloaded with exponential backoff.
+    Smart AI chat endpoint — VIRON Brain.
+    Routes by SUBJECT to the best AI:
+      Math/Science/Code → ChatGPT | Greek/Translation → Gemini | Literature/History → Claude
+    Strategies: Turbo (1 AI), Race (2 AIs), Check (verify), Smart (all 3 + merge)
+    Voice commands: "turbo mode", "race mode", "check mode", "smart mode"
+    Fallback: cloud → Ollama (offline)
     """
     data = request.get_json()
     if not data:
@@ -344,7 +348,7 @@ def chat_proxy():
     history = data.get("messages", [])[:-1]  # all except last (which is the user msg)
     print(f"\n💬 CHAT: '{user_msg[:80]}'")
 
-    # ── Smart Router (Ollama + Cloud with fallback) ──
+    # ── Smart Router (Subject-based multi-LLM routing) ──
     if HAS_ROUTER and ai_router:
         try:
             reply, provider = ai_router.chat(
@@ -353,12 +357,14 @@ def chat_proxy():
                 system_prompt=system_prompt,
             )
             if reply and len(reply.strip()) > 2:
-                print(f"  ✅ {provider} | {ai_router.last_complexity} | conf:{ai_router.last_confidence:.2f}")
-                print(f"  → '{reply[:100]}'")
+                print(f"  ✅ {provider} | 📚 {ai_router.last_subject} | 🎛️ {ai_router.last_strategy} | 🌐 {ai_router.last_language} | conf:{ai_router.last_confidence:.2f}")
+                print(f"  → '{reply[:120]}'")
                 return jsonify({
                     "content": [{"type": "text", "text": reply}],
                     "provider": provider,
-                    "complexity": ai_router.last_complexity,
+                    "subject": ai_router.last_subject,
+                    "strategy": ai_router.last_strategy,
+                    "language": ai_router.last_language,
                     "confidence": ai_router.last_confidence,
                 })
             else:
