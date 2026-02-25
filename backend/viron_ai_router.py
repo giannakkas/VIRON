@@ -268,7 +268,7 @@ class ConfidenceGate:
 # SYNC AI PROVIDER QUERIES (using requests — no asyncio!)
 # ═══════════════════════════════════════════════════════════════════
 
-# Short system prompt for Ollama (phi3 can't handle the massive frontend prompt)
+# Short system prompt for Ollama (small models can't handle the massive frontend prompt)
 OLLAMA_SYSTEM_PROMPT = """You are VIRON, a friendly male AI companion robot for students. 
 RULES: If the student speaks Greek, reply in Greek. If English, reply in English.
 Start every response with [emotion] tag like [happy] or [excited].
@@ -276,17 +276,64 @@ Keep responses SHORT (1-3 sentences for chat, longer for explanations).
 Be warm, friendly, and helpful. You're their best friend."""
 
 
-def query_ollama(message: str, history: list, system_prompt: str, config: RouterConfig) -> Tuple[str, bool]:
-    """Query local Ollama with simplified prompt for speed."""
+# ── Local Model Routing ──
+# Different models have different strengths — route locally too!
+# Ollama auto-swaps models in memory as needed.
+LOCAL_MODEL_TABLE = {
+    # Qwen 2.5 — best for Greek, translation, creative, general
+    "qwen2.5:3b": [Subject.GREEK_LANG, Subject.TRANSLATION, Subject.CREATIVE,
+                    Subject.GENERAL, Subject.GREETING, Subject.GEOGRAPHY,
+                    Subject.LITERATURE, Subject.HISTORY, Subject.ENGLISH],
+    # Phi-3 — best for math, science, coding, logic
+    "phi3": [Subject.MATH, Subject.SCIENCE, Subject.CODING],
+}
+
+
+def _pick_local_model(subject: Subject, config: RouterConfig) -> str:
+    """Pick the best local model for this subject. Falls back to default."""
+    # Check which models are actually available
+    available_models = set()
+    try:
+        resp = requests.get(f"{config.ollama_url}/api/tags", timeout=5)
+        if resp.status_code == 200:
+            for m in resp.json().get("models", []):
+                name = m.get("name", "")
+                available_models.add(name)
+                # Also add without :latest suffix
+                if ":" in name:
+                    available_models.add(name.split(":")[0])
+    except:
+        pass
+
+    if not available_models:
+        return config.ollama_model  # Can't check, use default
+
+    # Find the best model for this subject
+    for model, subjects in LOCAL_MODEL_TABLE.items():
+        if subject in subjects:
+            # Check if this model is available
+            base = model.split(":")[0]
+            if model in available_models or base in available_models:
+                return model
+
+    return config.ollama_model  # Default
+
+
+def query_ollama(message: str, history: list, system_prompt: str, config: RouterConfig,
+                 subject: Subject = None) -> Tuple[str, bool]:
+    """Query local Ollama with best model for the subject."""
+    model = _pick_local_model(subject, config) if subject else config.ollama_model
+
     messages = [{"role": "system", "content": OLLAMA_SYSTEM_PROMPT}]
-    # Only send last 4 history messages to keep context small
     messages.extend(history[-4:])
     messages.append({"role": "user", "content": message})
+
+    logger.info(f"🦙 Ollama: {model} (subject: {subject.value if subject else 'none'})")
 
     try:
         resp = requests.post(
             f"{config.ollama_url}/api/chat",
-            json={"model": config.ollama_model, "messages": messages, "stream": False,
+            json={"model": model, "messages": messages, "stream": False,
                   "options": {"num_predict": 300, "temperature": 0.5}},
             timeout=config.local_timeout,
         )
@@ -296,7 +343,7 @@ def query_ollama(message: str, history: list, system_prompt: str, config: Router
         logger.warning(f"Ollama HTTP {resp.status_code}")
         return "", False
     except requests.exceptions.Timeout:
-        logger.warning(f"Ollama timeout ({config.local_timeout}s)")
+        logger.warning(f"Ollama timeout ({config.local_timeout}s) — model: {model}")
         return "", False
     except Exception as e:
         logger.warning(f"Ollama error: {e}")
@@ -432,7 +479,7 @@ def strategy_best_one(msg, hist, sys_p, subject, config, available):
         logger.warning(f"{provider} failed for {subject.value}")
 
     # Fallback to Ollama
-    text, ok = query_ollama(msg, hist, sys_p, config)
+    text, ok = query_ollama(msg, hist, sys_p, config, subject)
     return (text, "ollama") if ok else ("", "none")
 
 
@@ -466,7 +513,7 @@ def strategy_verify(msg, hist, sys_p, subject, config, available):
     ranking = ROUTING_TABLE.get(subject, ["claude", "gemini", "chatgpt"])
     ranked = [p for p in ranking if p in available]
     if not ranked:
-        text, ok = query_ollama(msg, hist, sys_p, config)
+        text, ok = query_ollama(msg, hist, sys_p, config, subject)
         return (text, "ollama") if ok else ("", "none")
 
     # Primary answer
@@ -519,7 +566,7 @@ def strategy_consensus(msg, hist, sys_p, subject, config, available):
                 pass
 
     if not successful:
-        text, ok = query_ollama(msg, hist, sys_p, config)
+        text, ok = query_ollama(msg, hist, sys_p, config, subject)
         return (text, "ollama") if ok else ("", "none")
 
     if len(successful) == 1:
@@ -619,7 +666,7 @@ class VironAIRouterSync:
 
         # Greetings → Ollama first
         if subject == Subject.GREETING:
-            text, ok = query_ollama(message, history, system_prompt, self.config)
+            text, ok = query_ollama(message, history, system_prompt, self.config, subject)
             if ok:
                 if self.config.confidence_gate:
                     confident, score = ConfidenceGate.check(text)
@@ -641,7 +688,7 @@ class VironAIRouterSync:
 
         # Route via strategy
         if not available:
-            text, ok = query_ollama(message, history, system_prompt, self.config)
+            text, ok = query_ollama(message, history, system_prompt, self.config, subject)
             self._stat("ollama" if ok else "none", subject)
             return (text, "ollama") if ok else ("", "none")
 
@@ -651,7 +698,7 @@ class VironAIRouterSync:
         self._stat(provider, subject)
 
         if not text:
-            text, ok = query_ollama(message, history, system_prompt, self.config)
+            text, ok = query_ollama(message, history, system_prompt, self.config, subject)
             if ok:
                 self._stat("ollama", subject)
                 return text, "ollama"
@@ -665,6 +712,15 @@ class VironAIRouterSync:
         self.stats["by_subject"][subject.value] = self.stats["by_subject"].get(subject.value, 0) + 1
 
     def get_status(self):
+        # Check which local models are available
+        local_models = []
+        try:
+            resp = requests.get(f"{self.config.ollama_url}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                local_models = [m.get("name", "") for m in resp.json().get("models", [])]
+        except:
+            pass
+
         return {
             "strategy": self.strategy.value,
             "last": {
@@ -672,7 +728,9 @@ class VironAIRouterSync:
                 "provider": self.last_provider, "confidence": round(self.last_confidence, 2),
             },
             "providers": {
-                "ollama": {"configured": True, "model": self.config.ollama_model},
+                "ollama": {"configured": True, "default_model": self.config.ollama_model,
+                           "available_models": local_models,
+                           "model_routing": {m: [s.value for s in subs] for m, subs in LOCAL_MODEL_TABLE.items()}},
                 "claude": {"configured": bool(self.config.anthropic_api_key), "model": self.config.claude_model},
                 "gemini": {"configured": bool(self.config.google_api_key), "model": self.config.gemini_model},
                 "chatgpt": {"configured": bool(self.config.openai_api_key), "model": self.config.chatgpt_model},
