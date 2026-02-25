@@ -95,6 +95,7 @@ class StudentEmotionDetector:
             "recognized_person": None, "recognition_confidence": 0
         }
         self.frame_count = 0
+        self.last_frame = None
         self.emotion_history = []
         self.streak_emotion = "neutral"
         self.streak_count = 0
@@ -166,6 +167,7 @@ class StudentEmotionDetector:
             if not ret:
                 time.sleep(0.1)
                 continue
+            self.last_frame = frame.copy()  # Store for face registration
             self.frame_count += 1
             if self.frame_count % 3 != 0:
                 continue
@@ -486,15 +488,12 @@ def face_register():
         success, message = face_recognizer.register_face_from_base64(image_b64, name)
         return jsonify({"success": success, "message": message})
     
-    # Option 2: Capture from camera
-    if detector.cap and detector.cap.isOpened():
-        ret, frame = detector.cap.read()
-        if ret:
-            success, message = face_recognizer.register_face(frame, name)
-            return jsonify({"success": success, "message": message})
-        return jsonify({"success": False, "message": "Could not read camera frame"}), 500
+    # Option 2: Capture from camera (use latest frame from emotion detector)
+    if detector.last_frame is not None:
+        success, message = face_recognizer.register_face(detector.last_frame, name)
+        return jsonify({"success": success, "message": message})
     
-    return jsonify({"success": False, "message": "No image provided and camera not available"}), 400
+    return jsonify({"success": False, "message": "No image provided and no camera frame available"}), 400
 
 @app.route('/api/faces/register-multi', methods=['POST'])
 def face_register_multi():
@@ -513,17 +512,17 @@ def face_register_multi():
     if not name:
         return jsonify({"success": False, "message": "Name is required"}), 400
     
-    if not (detector.cap and detector.cap.isOpened()):
-        return jsonify({"success": False, "message": "Camera not available"}), 503
+    if detector.last_frame is None:
+        return jsonify({"success": False, "message": "Camera not capturing frames yet"}), 503
     
     registered = 0
     errors = []
     for i in range(count):
-        ret, frame = detector.cap.read()
-        if not ret:
-            errors.append(f"Frame {i+1}: could not read")
+        frame = detector.last_frame
+        if frame is None:
+            errors.append(f"Frame {i+1}: no frame")
             continue
-        success, msg = face_recognizer.register_face(frame, name)
+        success, msg = face_recognizer.register_face(frame.copy(), name)
         if success:
             registered += 1
         else:
@@ -559,12 +558,9 @@ def face_delete():
 @app.route('/api/faces/snapshot', methods=['GET'])
 def face_snapshot():
     """Get a camera snapshot as JPEG (for registration preview)"""
-    if not (detector.cap and detector.cap.isOpened()):
-        return jsonify({"error": "Camera not available"}), 503
-    ret, frame = detector.cap.read()
-    if not ret:
-        return jsonify({"error": "Could not read frame"}), 500
-    _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if detector.last_frame is None:
+        return jsonify({"error": "No camera frame available"}), 503
+    _, jpeg = cv2.imencode('.jpg', detector.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
 # ============ HARDWARE ============
