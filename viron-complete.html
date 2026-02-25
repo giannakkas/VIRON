@@ -113,8 +113,12 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <div class="setting-group"><h3>🔋 Battery</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:8px"><div style="display:flex;justify-content:space-between"><label>🔋</label><span style="color:rgba(0,200,255,0.8)" id="bp">78%</span></div><div class="battery-bar"><div class="battery-fill" id="bf" style="width:78%;background:linear-gradient(90deg,#00e0ff,#00ff88)"></div><span class="battery-text" id="bt">78%</span></div></div></div>
   <div class="setting-group"><h3>🤖 AI</h3><div class="setting-item"><label>📷 Emotion Detection</label><button class="toggle on" onclick="this.classList.toggle('on');emotionDetectionOn=this.classList.contains('on')"></button></div><div class="setting-item"><label>🎭 Proactive Care</label><button class="toggle on" onclick="this.classList.toggle('on');proactiveEnabled=this.classList.contains('on')"></button></div></div>
   <div class="setting-group"><h3>👤 Face Recognition</h3>
+    <div id="faceRecStatus" style="margin-bottom:8px;font-size:12px;color:rgba(255,255,255,0.4)"></div>
     <div id="facesList" style="margin-bottom:10px"></div>
-    <div class="setting-item" style="flex-direction:column;gap:8px">
+    <div id="faceSetupArea" style="display:none;margin-bottom:10px">
+      <button class="sbtn" onclick="setupFaceRec()" id="setupFaceBtn" style="width:100%;padding:8px;font-size:13px;background:rgba(0,180,255,0.15);color:#00b4ff;border:1px solid rgba(0,180,255,0.3);border-radius:8px;cursor:pointer">📥 Download Models & Setup</button>
+    </div>
+    <div id="faceRegArea" class="setting-item" style="flex-direction:column;gap:8px">
       <div style="display:flex;gap:8px;width:100%">
         <input type="text" id="faceNameInput" placeholder="Person's name..." style="flex:1;background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px">
         <button class="sbtn" onclick="registerFace()" style="padding:6px 14px;font-size:12px;background:rgba(0,180,255,0.15);color:#00b4ff;border:1px solid rgba(0,180,255,0.3);border-radius:8px;cursor:pointer">📸 Register</button>
@@ -1130,11 +1134,51 @@ let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").clas
 
 // ===== FACE RECOGNITION =====
 function loadFacesList(){
-  fetch('/api/faces/list').then(r=>r.json()).then(d=>{
+  // Check status first
+  fetch('/api/faces/status').then(r=>r.json()).then(d=>{
+    const statusEl=document.getElementById('faceRecStatus');
+    const setupArea=document.getElementById('faceSetupArea');
+    const regArea=document.getElementById('faceRegArea');
+    
+    if(!d.initialized){
+      statusEl.innerHTML='<span style="color:#ffaa00">⚠ Not initialized</span>';
+      setupArea.style.display='block';
+      regArea.style.display='none';
+      document.getElementById('facesList').innerHTML='';
+      return;
+    }
+    
+    statusEl.innerHTML='<span style="color:#00ff88">✅ Active</span>' + 
+      (d.current_person ? ` — Seeing: <b style="color:#00ff88">${d.current_person}</b>` : '');
+    setupArea.style.display='none';
+    regArea.style.display='flex';
+    
+    // Load faces list
+    const faces=d.known_faces||{};
     const el=document.getElementById('facesList');
-    if(!d.faces||Object.keys(d.faces).length===0){el.innerHTML='<div style="font-size:12px;color:rgba(255,255,255,0.3);padding:4px 0">No faces registered</div>';return}
-    el.innerHTML=Object.entries(d.faces).map(([name,count])=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span style="font-size:13px;color:#e0f0ff">👤 ${name} <span style="color:rgba(255,255,255,0.3)">(${count} samples)</span></span><button onclick="deleteFace('${name}')" style="background:none;border:none;color:rgba(255,80,80,0.6);cursor:pointer;font-size:11px;padding:2px 6px">✕</button></div>`).join('');
-  }).catch(()=>{})
+    if(Object.keys(faces).length===0){
+      el.innerHTML='<div style="font-size:12px;color:rgba(255,255,255,0.3);padding:4px 0">No faces registered yet</div>';
+      return;
+    }
+    el.innerHTML=Object.entries(faces).map(([name,count])=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span style="font-size:13px;color:#e0f0ff">👤 ${name} <span style="color:rgba(255,255,255,0.3)">(${count} samples)</span></span><button onclick="deleteFace('${name}')" style="background:none;border:none;color:rgba(255,80,80,0.6);cursor:pointer;font-size:11px;padding:2px 6px">✕</button></div>`).join('');
+  }).catch(e=>{
+    document.getElementById('faceRecStatus').innerHTML='<span style="color:#ff6666">❌ Error connecting</span>';
+  });
+}
+
+function setupFaceRec(){
+  const btn=document.getElementById('setupFaceBtn');
+  btn.textContent='⏳ Downloading models...';
+  btn.disabled=true;
+  fetch('/api/faces/init',{method:'POST'})
+  .then(r=>r.json()).then(d=>{
+    btn.textContent=d.success?'✅ Ready!':'❌ '+d.message;
+    btn.disabled=false;
+    if(d.success)setTimeout(loadFacesList,500);
+  }).catch(e=>{
+    btn.textContent='❌ Error: '+e.message;
+    btn.disabled=false;
+  });
 }
 
 function registerFace(){

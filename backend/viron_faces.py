@@ -10,14 +10,19 @@ import json
 import os
 import time
 import base64
+import urllib.request
 from pathlib import Path
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 FACES_DB = os.path.join(os.path.dirname(__file__), "faces_db.json")
 
-# Model files (must be downloaded via setup_models.sh)
+# Model files
 DETECTOR_MODEL = os.path.join(MODELS_DIR, "face_detection_yunet_2023mar.onnx")
 RECOGNIZER_MODEL = os.path.join(MODELS_DIR, "face_recognition_sface_2021dec.onnx")
+
+# Download URLs
+DETECTOR_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+RECOGNIZER_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
 
 # Recognition thresholds
 COSINE_THRESHOLD = 0.363  # OpenCV default for SFace cosine similarity
@@ -36,16 +41,36 @@ class FaceRecognizer:
         self.consecutive_matches = {}  # name -> count (need 3 consecutive matches)
         self.initialized = False
         
+    def _download_model(self, url, dest):
+        """Download a model file if missing"""
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        print(f"  📥 Downloading {os.path.basename(dest)}...")
+        try:
+            urllib.request.urlretrieve(url, dest)
+            size = os.path.getsize(dest)
+            if size > 100000:
+                print(f"  ✅ Downloaded ({size // 1024}KB)")
+                return True
+            else:
+                print(f"  ⚠ File too small ({size} bytes), download may have failed")
+                os.remove(dest)
+                return False
+        except Exception as e:
+            print(f"  ⚠ Download failed: {e}")
+            return False
+    
     def initialize(self):
         """Load models and face database"""
-        if not os.path.exists(DETECTOR_MODEL):
-            print(f"⚠ Face detector model not found: {DETECTOR_MODEL}")
-            print("  Run: bash backend/setup_models.sh")
-            return False
-        if not os.path.exists(RECOGNIZER_MODEL):
-            print(f"⚠ Face recognizer model not found: {RECOGNIZER_MODEL}")
-            print("  Run: bash backend/setup_models.sh")
-            return False
+        # Auto-download models if missing
+        if not os.path.exists(DETECTOR_MODEL) or os.path.getsize(DETECTOR_MODEL) < 100000:
+            if not self._download_model(DETECTOR_URL, DETECTOR_MODEL):
+                print(f"⚠ Face detector model not found. Run: bash backend/setup_models.sh")
+                return False
+        
+        if not os.path.exists(RECOGNIZER_MODEL) or os.path.getsize(RECOGNIZER_MODEL) < 100000:
+            if not self._download_model(RECOGNIZER_URL, RECOGNIZER_MODEL):
+                print(f"⚠ Face recognizer model not found. Run: bash backend/setup_models.sh")
+                return False
             
         try:
             # Initialize face detector (YuNet)

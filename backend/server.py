@@ -31,11 +31,11 @@ except ImportError:
 
 # Face recognition
 try:
-    from face_recognition import face_recognizer
+    from viron_faces import face_recognizer
     HAS_FACE_REC = True
-except ImportError:
+except Exception as e:
     HAS_FACE_REC = False
-    print("⚠ Face recognition module not available")
+    print(f"⚠ Face recognition module not available: {e}")
     print("⚠ requests not installed — AI proxy disabled")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -399,8 +399,18 @@ def stop_detection():
 def face_status():
     """Get face recognition status"""
     if not HAS_FACE_REC:
-        return jsonify({"initialized": False, "error": "Face recognition not available"})
+        return jsonify({"initialized": False, "error": "Face recognition module not available"})
     return jsonify(face_recognizer.get_status())
+
+@app.route('/api/faces/init', methods=['POST'])
+def face_init():
+    """Initialize/download face recognition models"""
+    if not HAS_FACE_REC:
+        return jsonify({"success": False, "message": "Face recognition module not available"}), 503
+    ok = face_recognizer.initialize()
+    if ok:
+        return jsonify({"success": True, "message": "Face recognition initialized!"})
+    return jsonify({"success": False, "message": "Failed to initialize. Check console for details."}), 500
 
 @app.route('/api/faces/register', methods=['POST'])
 def face_register():
@@ -409,7 +419,9 @@ def face_register():
         return jsonify({"success": False, "message": "Face recognition not available"}), 503
     
     if not face_recognizer.initialized:
-        face_recognizer.initialize()
+        # Try to auto-initialize
+        if not face_recognizer.initialize():
+            return jsonify({"success": False, "message": "Models not ready. Click 'Setup' first."}), 503
     
     data = request.json
     name = data.get("name", "").strip()
@@ -435,8 +447,12 @@ def face_register():
 @app.route('/api/faces/register-multi', methods=['POST'])
 def face_register_multi():
     """Register multiple samples of a face (better accuracy)"""
-    if not HAS_FACE_REC or not face_recognizer.initialized:
-        return jsonify({"success": False, "message": "Face recognition not initialized"}), 503
+    if not HAS_FACE_REC:
+        return jsonify({"success": False, "message": "Face recognition not available"}), 503
+    
+    if not face_recognizer.initialized:
+        if not face_recognizer.initialize():
+            return jsonify({"success": False, "message": "Models not ready. Click 'Setup' to download them."}), 503
     
     data = request.json
     name = data.get("name", "").strip()
