@@ -902,6 +902,6 @@ if __name__ == '__main__':
         detector.start(config.get("camera_index", 0))
     if HAS_SOCKETIO:
         socketio = SocketIO(app, cors_allowed_origins="*")
-        socketio.run(app, host='0.0.0.0', port=port, debug=False)
+        socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
     else:
         app.run(host='0.0.0.0', port=port, debug=False)
