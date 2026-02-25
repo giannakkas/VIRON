@@ -276,7 +276,7 @@ function stopSpeaking(){
   isSpeaking=false;
 }
 
-function say(text){
+function say(text,speed){
   if(!synth){D('  say: no synth!');return}
   // STOP any current speech first — ONE voice at a time
   stopSpeaking();
@@ -295,13 +295,13 @@ function say(text){
     .replace(/[\u{200D}\u{20E3}\u{FE0F}]/gu,'') // joiners
     .replace(/\s+/g,' ').trim();
   
-  D('  say: "'+clean.substring(0,80)+'..." greek='+isGr(clean));
+  D('  say: "'+clean.substring(0,80)+'..." greek='+isGr(clean)+' speed='+(speed||'normal'));
   
   if(!clean){D('  say: empty after cleanup');stopT();startWakeListener();return}
   
   // ALL speech → server edge-tts (male voice) with browser fallback
   const lang=isGr(clean)?'el':'en';
-  sayServerTTS(clean,lang);
+  sayServerTTS(clean,lang,speed||'normal');
 }
 
 // Server TTS (edge-tts male voice) — works for ALL languages
@@ -317,9 +317,9 @@ document.addEventListener('click',unlockAudio,{once:false});
 document.addEventListener('touchstart',unlockAudio,{once:false});
 document.addEventListener('keydown',unlockAudio,{once:false});
 
-function sayServerTTS(text,lang){
-  D('  sayServerTTS('+lang+'): "'+text.substring(0,60)+'"');
-  fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:lang||'en'})})
+function sayServerTTS(text,lang,speed){
+  D('  sayServerTTS('+lang+', speed='+(speed||'normal')+'): "'+text.substring(0,60)+'"');
+  fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:lang||'en',speed:speed||'normal'})})
   .then(r=>{
     D('  TTS response: '+r.status);
     if(!r.ok)throw new Error('HTTP '+r.status);
@@ -343,7 +343,7 @@ function sayServerTTS(text,lang){
     u.lang=lang==='el'?'el-GR':'en-US';
     if(lang!=='el'&&enV)u.voice=enV;
     if(lang==='el'&&gkV)u.voice=gkV;
-    u.rate=0.9;u.pitch=0.85;
+    u.rate=speed==='slow'?0.75:speed==='fast'?1.1:0.9;u.pitch=0.85;
     u.onstart=()=>{startT()};
     u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,600)};
     u.onerror=()=>{stopT();setTimeout(startWakeListener,600)};
@@ -924,14 +924,20 @@ function processStudentSpeech(text){
   
   // INSTANT GREETING: common greetings get canned response (no AI roundtrip)
   const lower=text.toLowerCase().trim();
+  // Normalize: strip accents for matching (Chrome returns varying accents)
+  const norm=lower.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
   const INSTANT_GREETINGS={
-    // Greek greetings
-    'τι κάνεις':['[happy] Μια χαρά! Εσύ;','[happy] Καλά είμαι! Τι γίνεται;','[happy] Ωραία! Εσύ πώς είσαι;','[happy] Τέλεια! Πες μου τα νέα σου!'],
+    // Greek greetings (accent-stripped keys)
+    'τι κανεις':['[happy] Μια χαρά! Εσύ;','[happy] Καλά είμαι! Τι γίνεται;','[happy] Ωραία! Εσύ πώς είσαι;','[happy] Τέλεια! Πες μου τα νέα σου!'],
+    'τι κανεισ':['[happy] Μια χαρά! Εσύ;','[happy] Καλά είμαι! Τι γίνεται;','[happy] Ωραία! Εσύ πώς είσαι;'],
     'γεια':['[happy] Γεια σου!','[happy] Γεια! Τι κάνεις;','[happy] Ε, γεια! Χαίρομαι που σε βλέπω!'],
     'γεια σου':['[happy] Γεια σου! Πώς είσαι;','[happy] Γεια! Τι νέα;','[happy] Χαίρομαι! Τι κάνεις;'],
-    'καλημέρα':['[happy] Καλημέρα! Πώς ξύπνησες;','[happy] Καλημέρα! Έτοιμος για μάθημα;','[happy] Καλημέρα! Τι ωραία μέρα!'],
-    'καλησπέρα':['[happy] Καλησπέρα! Τι κάνεις;','[happy] Καλησπέρα! Πώς πέρασες;','[happy] Καλησπέρα! Πες μου τι θες!'],
-    'ευχαριστώ':['[happy] Παρακαλώ!','[happy] Τίποτα! Εδώ είμαι!','[happy] Με χαρά!'],
+    'καλημερα':['[happy] Καλημέρα! Πώς ξύπνησες;','[happy] Καλημέρα! Έτοιμος για μάθημα;','[happy] Καλημέρα! Τι ωραία μέρα!'],
+    'καλησπερα':['[happy] Καλησπέρα! Τι κάνεις;','[happy] Καλησπέρα! Πώς πέρασες;','[happy] Καλησπέρα! Πες μου τι θες!'],
+    'ευχαριστω':['[happy] Παρακαλώ!','[happy] Τίποτα! Εδώ είμαι!','[happy] Με χαρά!'],
+    'τι γινεται':['[happy] Όλα καλά! Εσύ;','[happy] Μια χαρά! Τα λέμε;','[happy] Καλά πάμε! Εσύ;'],
+    'τι λεει':['[happy] Εδώ είμαστε! Εσύ;','[happy] Καλά! Τι κάνεις;'],
+    'τι νεα':['[happy] Εδώ, σε περιμένω! Εσύ;','[happy] Τα ίδια! Εσένα;'],
     // English greetings
     'hi':['[happy] Hey there!','[happy] Hi! What\'s up?','[happy] Hey! How are you?'],
     'hello':['[happy] Hello! How can I help?','[happy] Hey! Good to see you!','[happy] Hello there!'],
@@ -942,12 +948,14 @@ function processStudentSpeech(text){
     'thanks':['[happy] You\'re welcome!','[happy] No problem!','[happy] Anytime!'],
     'thank you':['[happy] You\'re welcome!','[happy] Happy to help!','[happy] My pleasure!'],
     'bye':['[happy] Bye! See you soon!','[happy] Take care!','[happy] Goodbye! Have a great time!'],
+    'whats up':['[happy] Not much! You?','[happy] Hey! What\'s going on?'],
+    "what's up":['[happy] Not much! You?','[happy] All good! What about you?'],
   };
   
-  if(INSTANT_GREETINGS[lower]){
-    const responses=INSTANT_GREETINGS[lower];
+  if(INSTANT_GREETINGS[norm]){
+    const responses=INSTANT_GREETINGS[norm];
     const reply=responses[Math.floor(Math.random()*responses.length)];
-    D('  ⚡ Instant greeting: "'+reply+'"');
+    D('  ⚡ Instant greeting: "'+reply+'" (matched: "'+norm+'")');
     msgs.push({role:"user",content:text});
     msgs.push({role:"assistant",content:reply});
     handleAIResponse(reply);
@@ -1081,8 +1089,8 @@ Be real. Be warm. Be their brilliant friend.`,
       const fullNarration=narrationParts.join(". ")||"Κοίτα στον πίνακα!";
       
       // Open whiteboard and narrate simultaneously
-      setTimeout(()=>openWB(wb.t,wb.s),800);
-      setTimeout(()=>say(fullNarration),1200);
+      setTimeout(()=>openWB(wb.t,wb.s),600);
+      setTimeout(()=>say(fullNarration,'slow'),800);  // Slow speed for teaching
     }
     else{msgs.push({role:"assistant",content:c});say(c)}
   }catch(e){D('  ❌ sendMessage ERROR: '+e.message);cE("confused");say(isGreekMode()?"Ωχ! Κάτι πήγε στραβά.":"Oops! Something went wrong.")}

@@ -741,16 +741,21 @@ def text_to_speech():
         return jsonify({"error": "No text"}), 400
     text = data['text']
     lang = data.get('lang', 'el')
+    speed = data.get('speed', 'normal')  # 'normal', 'slow', 'fast'
+    
+    # Speed presets: normal for chat, slow for whiteboard teaching
+    rate_map = {'slow': '-5%', 'normal': '+10%', 'fast': '+18%'}
+    tts_rate = rate_map.get(speed, '+10%')
     
     # Try edge-tts first (has male Greek voice)
     try:
         import edge_tts, asyncio, io
         # Male voices: el-GR-NestorasNeural (Greek), en-GB-RyanNeural (soft British male)
         voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
-        print(f"🎙️ edge-tts: voice={voice}, text='{text[:50]}'")
+        print(f"🎙️ edge-tts: voice={voice}, rate={tts_rate}, text='{text[:50]}'")
         
         async def gen():
-            communicate = edge_tts.Communicate(text, voice, rate="+18%", pitch="-10Hz")
+            communicate = edge_tts.Communicate(text, voice, rate=tts_rate, pitch="-10Hz")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
