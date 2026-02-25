@@ -28,6 +28,14 @@ try:
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
+
+# Face recognition
+try:
+    from face_recognition import face_recognizer
+    HAS_FACE_REC = True
+except ImportError:
+    HAS_FACE_REC = False
+    print("⚠ Face recognition module not available")
     print("⚠ requests not installed — AI proxy disabled")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,7 +81,8 @@ class StudentEmotionDetector:
             "emotion": "neutral", "confidence": 0, "engagement_score": 100,
             "face_detected": False, "attention": "center", "blink_rate": 0,
             "mouth_open": False, "dominant_emotion": "neutral",
-            "emotion_streak": 0, "yawn_count": 0
+            "emotion_streak": 0, "yawn_count": 0,
+            "recognized_person": None, "recognition_confidence": 0
         }
         self.frame_count = 0
         self.emotion_history = []
@@ -129,6 +138,11 @@ class StudentEmotionDetector:
         self.thread = threading.Thread(target=self._detection_loop, daemon=True)
         self.thread.start()
         print(f"📷 Emotion detection started (camera {camera_index})")
+        
+        # Initialize face recognition
+        if HAS_FACE_REC:
+            face_recognizer.initialize()
+        
         return True
 
     def stop(self):
@@ -163,6 +177,13 @@ class StudentEmotionDetector:
             return
         self.last_face_time = time.time()
         self.current_state["face_detected"] = True
+        
+        # Face recognition (periodically check who's in front)
+        if HAS_FACE_REC and face_recognizer.initialized:
+            person, confidence = face_recognizer.recognize(frame)
+            self.current_state["recognized_person"] = person
+            self.current_state["recognition_confidence"] = round(confidence, 3)
+        
         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
         face_roi = gray[y:y+h, x:x+w]
         fw = frame.shape[1]
@@ -372,6 +393,111 @@ def start_detection():
 def stop_detection():
     detector.stop()
     return jsonify({"status": "stopped"})
+
+# ============ FACE RECOGNITION ============
+@app.route('/api/faces/status', methods=['GET'])
+def face_status():
+    """Get face recognition status"""
+    if not HAS_FACE_REC:
+        return jsonify({"initialized": False, "error": "Face recognition not available"})
+    return jsonify(face_recognizer.get_status())
+
+@app.route('/api/faces/register', methods=['POST'])
+def face_register():
+    """Register a face from camera or uploaded image"""
+    if not HAS_FACE_REC:
+        return jsonify({"success": False, "message": "Face recognition not available"}), 503
+    
+    if not face_recognizer.initialized:
+        face_recognizer.initialize()
+    
+    data = request.json
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"success": False, "message": "Name is required"}), 400
+    
+    # Option 1: Image provided as base64
+    image_b64 = data.get("image")
+    if image_b64:
+        success, message = face_recognizer.register_face_from_base64(image_b64, name)
+        return jsonify({"success": success, "message": message})
+    
+    # Option 2: Capture from camera
+    if detector.cap and detector.cap.isOpened():
+        ret, frame = detector.cap.read()
+        if ret:
+            success, message = face_recognizer.register_face(frame, name)
+            return jsonify({"success": success, "message": message})
+        return jsonify({"success": False, "message": "Could not read camera frame"}), 500
+    
+    return jsonify({"success": False, "message": "No image provided and camera not available"}), 400
+
+@app.route('/api/faces/register-multi', methods=['POST'])
+def face_register_multi():
+    """Register multiple samples of a face (better accuracy)"""
+    if not HAS_FACE_REC or not face_recognizer.initialized:
+        return jsonify({"success": False, "message": "Face recognition not initialized"}), 503
+    
+    data = request.json
+    name = data.get("name", "").strip()
+    count = data.get("count", 5)  # Number of samples to take
+    
+    if not name:
+        return jsonify({"success": False, "message": "Name is required"}), 400
+    
+    if not (detector.cap and detector.cap.isOpened()):
+        return jsonify({"success": False, "message": "Camera not available"}), 503
+    
+    registered = 0
+    errors = []
+    for i in range(count):
+        ret, frame = detector.cap.read()
+        if not ret:
+            errors.append(f"Frame {i+1}: could not read")
+            continue
+        success, msg = face_recognizer.register_face(frame, name)
+        if success:
+            registered += 1
+        else:
+            errors.append(f"Frame {i+1}: {msg}")
+        time.sleep(0.3)  # Brief delay between captures
+    
+    return jsonify({
+        "success": registered > 0,
+        "message": f"Registered {registered}/{count} samples for {name}",
+        "registered": registered,
+        "errors": errors
+    })
+
+@app.route('/api/faces/list', methods=['GET'])
+def face_list():
+    """List all registered faces"""
+    if not HAS_FACE_REC:
+        return jsonify({"faces": {}})
+    return jsonify({"faces": face_recognizer.list_faces()})
+
+@app.route('/api/faces/delete', methods=['POST'])
+def face_delete():
+    """Delete a registered face"""
+    if not HAS_FACE_REC:
+        return jsonify({"success": False, "message": "Face recognition not available"})
+    data = request.json
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"success": False, "message": "Name required"}), 400
+    success, message = face_recognizer.delete_face(name)
+    return jsonify({"success": success, "message": message})
+
+@app.route('/api/faces/snapshot', methods=['GET'])
+def face_snapshot():
+    """Get a camera snapshot as JPEG (for registration preview)"""
+    if not (detector.cap and detector.cap.isOpened()):
+        return jsonify({"error": "Camera not available"}), 503
+    ret, frame = detector.cap.read()
+    if not ret:
+        return jsonify({"error": "Could not read frame"}), 500
+    _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
 # ============ HARDWARE ============
 @app.route('/api/wifi/list', methods=['GET'])

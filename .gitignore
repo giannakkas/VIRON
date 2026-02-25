@@ -3,6 +3,12 @@ backend/config.json
 ai-router/.env
 ai-router/viron_cache.db
 
+# Face recognition models (download via setup_models.sh)
+backend/models/*.onnx
+
+# Face database (personal data)
+backend/faces_db.json
+
 # Python
 __pycache__/
 *.pyc
