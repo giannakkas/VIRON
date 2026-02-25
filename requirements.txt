@@ -1,0 +1,26 @@
+# VIRON — Python Dependencies
+# Install: pip3 install -r requirements.txt
+
+# === Web Server ===
+flask>=3.0
+flask-cors
+flask-socketio
+
+# === AI / LLM ===
+requests            # HTTP calls to Claude, Gemini, ChatGPT APIs
+# ollama             # Local LLM (install separately: curl -fsSL https://ollama.ai/install.sh | sh)
+
+# === Computer Vision ===
+opencv-python-headless>=4.8   # Use opencv-python if you need GUI (imshow)
+numpy>=1.24
+insightface>=0.7              # Face recognition (auto-downloads models)
+onnxruntime>=1.16             # ONNX inference for face models
+
+# === Voice ===
+gTTS>=2.5                     # Google Text-to-Speech
+edge-tts>=6.1                 # Microsoft Edge TTS (better quality)
+resemblyzer>=0.1.3            # Voice fingerprint / speaker verification
+
+# === Utilities ===
+qrcode[pil]>=7.4              # QR code generation (WiFi setup)
+Pillow>=10.0                  # Image processing

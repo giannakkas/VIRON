@@ -241,6 +241,26 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
       <div id="faceStatus" style="font-size:11px;color:rgba(255,255,255,0.4)">Look at camera and click Register</div>
     </div>
   </div>
+  <div class="setting-group"><h3>🎙️ Voice Fingerprint</h3>
+    <div id="voiceStatus" style="margin-bottom:8px;font-size:12px;color:rgba(255,255,255,0.4)">Checking...</div>
+    <div id="voiceProfilesList" style="margin-bottom:10px"></div>
+    <div id="voiceTrainArea" style="margin-bottom:10px">
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input type="text" id="voiceNameInput" placeholder="Name (e.g. Chris)" style="flex:1;background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px">
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center;margin-bottom:8px">
+        <span class="voice-dot" id="sdot1">①</span>
+        <span class="voice-dot" id="sdot2">②</span>
+        <span class="voice-dot" id="sdot3">③</span>
+      </div>
+      <div style="width:100%;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;margin-bottom:8px;overflow:hidden">
+        <div id="settingsVoiceLevel" style="width:0%;height:100%;background:#00d4ff;border-radius:2px;transition:width 0.1s"></div>
+      </div>
+      <button class="sbtn" id="settingsVoiceBtn" onclick="settingsVoiceRecord()" style="width:100%;padding:8px;font-size:13px;background:rgba(255,68,68,0.15);color:#ff6666;border:1px solid rgba(255,68,68,0.3);border-radius:8px;cursor:pointer">🎙️ Record Voice Sample</button>
+      <div id="settingsVoiceMsg" style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:6px;text-align:center">Record 3 samples so VIRON only listens to you</div>
+    </div>
+    <div class="setting-item"><label>🔒 Voice Lock</label><button class="toggle" id="voiceLockToggle" onclick="toggleVoiceLock(this)"></button></div>
+  </div>
   <div class="setting-group"><h3>ℹ️ System</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:4px"><div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:rgba(255,255,255,0.3)">Device</span><span style="font-size:12px;color:#c0d8e8">VIRON v1.0</span></div><div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:rgba(255,255,255,0.3)">Uptime</span><span style="font-size:12px;color:#c0d8e8" id="ut">0h 0m</span></div></div>
   <button class="sbtn danger" onclick="if(confirm('Restart?'))location.reload()">🔁 Restart</button>
   <button class="sbtn danger" onclick="if(!confirm('Shutdown?'))return;cE('sleepy');toggleSettings();document.body.style.transition='opacity 2s';document.body.style.opacity='0';setTimeout(()=>{fetch('/api/system/shutdown',{method:'POST'}).catch(()=>{});document.body.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100vh;color:rgba(255,255,255,0.2);font-size:14px\'>VIRON is off.</div>';document.body.style.opacity='1'},2500)">⏻ Shutdown</button></div>
@@ -1585,7 +1605,7 @@ function parseWB(t){
 }
 
 // ===== SETTINGS =====
-let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO);if(sO)loadFacesList()}
+let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO);if(sO){loadFacesList();loadVoiceSettings()}}
 
 // ===== FACE RECOGNITION =====
 function loadFacesList(){
@@ -1884,6 +1904,174 @@ async function verifyVoice(){
 
 // Check voice verify status on boot
 setTimeout(checkVoiceVerifyStatus,3000);
+
+// --- Settings panel voice training ---
+let settingsVoiceSamples=0;
+let settingsRecording=false;
+let settingsRecorder=null;
+let settingsRecChunks=[];
+
+function loadVoiceSettings(){
+  fetch('/api/voice/status').then(r=>r.json()).then(d=>{
+    const st=document.getElementById('voiceStatus');
+    const list=document.getElementById('voiceProfilesList');
+    const toggle=document.getElementById('voiceLockToggle');
+    
+    if(!d.initialized){
+      st.textContent='⚠ Voice verification not available (install resemblyzer)';
+      st.style.color='#ffaa00';
+      return;
+    }
+    
+    // Update toggle
+    if(d.enabled&&d.profile_count>0)toggle.classList.add('on');
+    else toggle.classList.remove('on');
+    
+    // Show profiles
+    const profiles=d.profiles||{};
+    const names=Object.keys(profiles);
+    if(names.length>0){
+      st.textContent=`✅ ${names.length} voice(s) registered`;
+      st.style.color='#00ff88';
+      list.innerHTML=names.map(n=>
+        `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;margin:4px 0;background:rgba(255,255,255,0.05);border-radius:8px">
+          <span style="color:#e0f0ff;font-size:13px">🎙️ ${n} <span style="color:rgba(255,255,255,0.3)">(${profiles[n]} samples)</span></span>
+          <button onclick="deleteVoiceProfile('${n}')" style="background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px">✕ Remove</button>
+        </div>`
+      ).join('');
+      // Pre-fill name input with first profile
+      document.getElementById('voiceNameInput').value=names[0];
+    }else{
+      st.textContent='No voice profiles — anyone can talk to VIRON';
+      st.style.color='rgba(255,255,255,0.4)';
+      list.innerHTML='';
+    }
+    
+    // Reset dots
+    settingsVoiceSamples=0;
+    for(let i=1;i<=3;i++){
+      const dot=document.getElementById('sdot'+i);
+      dot.classList.remove('done','recording');
+      dot.textContent=['①','②','③'][i-1];
+    }
+  }).catch(()=>{
+    document.getElementById('voiceStatus').textContent='⚠ Server not responding';
+  });
+}
+
+async function settingsVoiceRecord(){
+  const btn=document.getElementById('settingsVoiceBtn');
+  const msg=document.getElementById('settingsVoiceMsg');
+  const nameInput=document.getElementById('voiceNameInput');
+  const name=nameInput.value.trim();
+  
+  if(!name){nameInput.style.borderColor='#ff4444';msg.textContent='Enter a name first!';msg.style.color='#ff4444';return}
+  nameInput.style.borderColor='rgba(255,255,255,0.15)';
+  
+  if(settingsRecording){
+    settingsRecording=false;
+    btn.textContent='⏳ Processing...';
+    if(settingsRecorder&&settingsRecorder.state==='recording')settingsRecorder.stop();
+    return;
+  }
+  
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:16000}});
+    settingsRecorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
+    settingsRecChunks=[];
+    
+    settingsRecorder.ondataavailable=e=>{if(e.data.size>0)settingsRecChunks.push(e.data)};
+    
+    settingsRecorder.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      if(settingsRecChunks.length===0){msg.textContent='No audio captured';return}
+      
+      const blob=new Blob(settingsRecChunks,{type:'audio/webm'});
+      const reader=new FileReader();
+      reader.onload=async()=>{
+        const base64=reader.result.split(',')[1];
+        try{
+          const r=await fetch('/api/voice/register',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name:name,audio_base64:base64,sample_rate:16000})
+          });
+          const d=await r.json();
+          if(d.success){
+            settingsVoiceSamples++;
+            const n=settingsVoiceSamples;
+            document.getElementById('sdot'+n).classList.remove('recording');
+            document.getElementById('sdot'+n).classList.add('done');
+            document.getElementById('sdot'+n).textContent='✓';
+            
+            if(n>=3){
+              msg.textContent='✅ Voice registered! Voice lock is now active.';
+              msg.style.color='#00ff88';
+              btn.textContent='✅ Done!';
+              btn.style.background='rgba(0,255,136,0.15)';
+              btn.style.color='#00ff88';
+              btn.style.borderColor='rgba(0,255,136,0.3)';
+              document.getElementById('voiceLockToggle').classList.add('on');
+              // Refresh status
+              setTimeout(()=>{loadVoiceSettings();checkVoiceVerifyStatus()},1000);
+            }else{
+              msg.textContent=`Sample ${n}/3 done! ${3-n} more.`;
+              msg.style.color='#00d4ff';
+              btn.textContent='🎙️ Record Next Sample';
+              btn.style.background='rgba(255,68,68,0.15)';
+              btn.style.color='#ff6666';
+              btn.style.borderColor='rgba(255,68,68,0.3)';
+            }
+          }else{
+            msg.textContent='⚠ '+d.message;msg.style.color='#ffaa00';
+            btn.textContent='🎙️ Try Again';
+          }
+        }catch(e){msg.textContent='⚠ Error: '+e.message;msg.style.color='#ff4444';btn.textContent='🎙️ Try Again'}
+      };
+      reader.readAsDataURL(blob);
+    };
+    
+    settingsRecording=true;
+    settingsRecorder.start();
+    const n=settingsVoiceSamples+1;
+    if(n<=3)document.getElementById('sdot'+n).classList.add('recording');
+    btn.textContent='⏹️ Stop Recording';
+    btn.style.background='rgba(255,68,68,0.3)';
+    msg.textContent='🔴 Recording... speak now! (say anything)';
+    msg.style.color='#ff4444';
+    
+    // Audio level meter
+    const ctx=new AudioContext();
+    const src=ctx.createMediaStreamSource(stream);
+    const analyser=ctx.createAnalyser();
+    analyser.fftSize=256;src.connect(analyser);
+    const dataArr=new Uint8Array(analyser.frequencyBinCount);
+    const meter=document.getElementById('settingsVoiceLevel');
+    const loop=()=>{
+      if(!settingsRecording){ctx.close();return}
+      analyser.getByteFrequencyData(dataArr);
+      meter.style.width=Math.min(100,dataArr.reduce((a,b)=>a+b,0)/dataArr.length*1.5)+'%';
+      requestAnimationFrame(loop);
+    };loop();
+    
+    // Auto-stop after 4 seconds
+    setTimeout(()=>{if(settingsRecording)settingsVoiceRecord()},4000);
+  }catch(e){
+    msg.textContent='⚠ Microphone denied';msg.style.color='#ff4444';
+  }
+}
+
+function deleteVoiceProfile(name){
+  if(!confirm('Remove voice profile for '+name+'?'))return;
+  fetch('/api/voice/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:name})}).then(()=>{loadVoiceSettings();checkVoiceVerifyStatus()});
+}
+
+function toggleVoiceLock(btn){
+  btn.classList.toggle('on');
+  const enabled=btn.classList.contains('on');
+  fetch('/api/voice/toggle',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enabled:enabled})}).then(()=>checkVoiceVerifyStatus());
+}
 
 // ===== SETUP WIZARD =====
 let setupData={name:'',age:0,language:'el',registerFace:false,photoTaken:false};
