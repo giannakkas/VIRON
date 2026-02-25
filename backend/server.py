@@ -55,7 +55,7 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 DEFAULT_CONFIG = {
     "anthropic_api_key": "YOUR_API_KEY_HERE",
     "model": "claude-opus-4-20250514",
-    "camera_index": 0,
+    "camera_index": 4,
     "volume": 75,
     "brightness": 80,
     "emotion_detection": True,
