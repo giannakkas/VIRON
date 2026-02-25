@@ -267,7 +267,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <button class="sbtn danger" onclick="if(!confirm('Shutdown?'))return;cE('sleepy');toggleSettings();document.body.style.transition='opacity 2s';document.body.style.opacity='0';setTimeout(()=>{fetch('/api/system/shutdown',{method:'POST'}).catch(()=>{});document.body.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100vh;color:rgba(255,255,255,0.2);font-size:14px\'>VIRON is off.</div>';document.body.style.opacity='1'},2500)">⏻ Shutdown</button></div>
   <div style="text-align:center;color:rgba(255,255,255,0.15);font-size:11px;margin-top:20px">VIRON AI Companion • v1.0</div>
 </div>
-<div class="wb-overlay" id="wb" onclick="if(wbO&&!wbPresenting)closeWB()"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div><div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:13px;color:#999;font-style:italic">Say "OK" or tap anywhere to close</div></div>
+<div class="wb-overlay" id="wb" onclick="if(wbO&&!wbPresenting)closeWB()"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" id="wbCloseBtn" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div><div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:13px;color:#999;font-style:italic" id="wbCloseHint">Say "OK" or tap anywhere to close</div></div>
 <div class="yt-container" id="ytC"><div class="yt-header"><span class="yt-title" id="ytT">♪</span><button class="yt-close" onclick="document.getElementById('ytP').src='';document.getElementById('ytC').classList.remove('visible')">✕</button></div><iframe id="ytP" width="280" height="158" src="" allow="autoplay;encrypted-media" allowfullscreen style="border:none;border-radius:10px"></iframe></div>
 <div class="listen-indicator wake" id="listenInd">
   <div class="listen-bars"><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div></div>
@@ -1388,7 +1388,7 @@ Be real. Be warm. Be their brilliant friend.`,
       
       // Open whiteboard and narrate simultaneously
       setTimeout(()=>openWB(wb.t,wb.s),600);
-      setTimeout(()=>say(fullNarration,'slow'),800);  // Slow speed for teaching
+      setTimeout(()=>say(fullNarration),800);  // Normal speed for teaching
     }
     else{msgs.push({role:"assistant",content:c});say(c)}
   }catch(e){D('  ❌ sendMessage ERROR: '+e.message);cE("confused");say(isGreekMode()?"Ωχ! Κάτι πήγε στραβά.":"Oops! Something went wrong.")}
@@ -1520,6 +1520,8 @@ function openWB(t,steps){
   stopAllRecognition();
   
   document.getElementById("wbt").textContent=t;
+  document.getElementById("wbCloseHint").textContent=isGreekMode()?'Πες "OK" ή πάτα οπουδήποτε για να κλείσεις':'Say "OK" or tap anywhere to close';
+  document.getElementById("wbCloseBtn").textContent=isGreekMode()?'✕ Πίσω':'✕ Back';
   const c=document.getElementById("wbc");c.innerHTML="";
   
   // Create all step elements (hidden)
@@ -1541,7 +1543,7 @@ function openWB(t,steps){
   setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
   
   // Animate steps one by one
-  const stepDelay=3000;
+  const stepDelay=2000;
   stepEls.forEach((s,i)=>{
     setTimeout(()=>{s.el.classList.add("visible")},1200+i*stepDelay);
   });
@@ -1606,7 +1608,7 @@ function parseWB(t){
 }
 
 // ===== SETTINGS =====
-let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO);if(sO){loadFacesList();loadVoiceSettings()}}
+let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO);if(sO){loadFacesList();loadVoiceSettings()}else{if(settingsRecording){settingsRecording=false;if(settingsRecorder&&settingsRecorder.state==='recording')try{settingsRecorder.stop()}catch{}};}}
 
 // ===== FACE RECOGNITION =====
 function loadFacesList(){
@@ -1823,15 +1825,15 @@ async function voiceEnrollRecord(){
     msg.style.color='#ff4444';
     
     // Show audio level meter
-    const ctx=new AudioContext();
-    const src=ctx.createMediaStreamSource(stream);
-    const analyser=ctx.createAnalyser();
+    let enrollAudioCtx=new AudioContext();
+    const src=enrollAudioCtx.createMediaStreamSource(stream);
+    const analyser=enrollAudioCtx.createAnalyser();
     analyser.fftSize=256;
     src.connect(analyser);
     const dataArr=new Uint8Array(analyser.frequencyBinCount);
     const meter=document.getElementById('voiceEnrollLevel');
     const meterLoop=()=>{
-      if(!enrollRecording){ctx.close();return}
+      if(!enrollRecording){try{enrollAudioCtx.close()}catch{};return}
       analyser.getByteFrequencyData(dataArr);
       const avg=dataArr.reduce((a,b)=>a+b,0)/dataArr.length;
       meter.style.width=Math.min(100,avg*1.5)+'%';
@@ -1853,31 +1855,46 @@ async function voiceEnrollRecord(){
 
 // --- Runtime Verification ---
 // Start recording alongside speech recognition for verification
+let voiceRecStream=null;
 function startVoiceRecording(){
   if(!voiceVerifyEnabled)return;
-  try{
-    navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:16000}})
-    .then(stream=>{
-      voiceAudioChunks=[];
-      voiceMediaRecorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
-      voiceMediaRecorder.ondataavailable=e=>{if(e.data.size>0)voiceAudioChunks.push(e.data)};
-      voiceMediaRecorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop())};
-      voiceMediaRecorder.start();
-      voiceRecordingForVerify=true;
-      D('  🎙️ Voice recording started for verification');
-    }).catch(e=>D('  ⚠ Voice record error: '+e));
-  }catch(e){D('  ⚠ Voice record error: '+e)}
+  // Don't open a new mic stream if one is already active
+  if(voiceMediaRecorder&&voiceMediaRecorder.state==='recording')return;
+  
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:16000}})
+  .then(stream=>{
+    voiceRecStream=stream;
+    voiceAudioChunks=[];
+    voiceMediaRecorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
+    voiceMediaRecorder.ondataavailable=e=>{if(e.data.size>0)voiceAudioChunks.push(e.data)};
+    voiceMediaRecorder.onstop=()=>{
+      // Always clean up the stream
+      if(voiceRecStream){voiceRecStream.getTracks().forEach(t=>t.stop());voiceRecStream=null}
+    };
+    voiceMediaRecorder.start();
+    voiceRecordingForVerify=true;
+    D('  🎙️ Voice recording started for verification');
+  }).catch(e=>{
+    D('  ⚠ Voice record skipped (mic busy): '+e.message);
+    voiceRecordingForVerify=false;
+  });
 }
 
 function stopVoiceRecording(){
+  voiceRecordingForVerify=false;
   if(voiceMediaRecorder&&voiceMediaRecorder.state==='recording'){
-    voiceMediaRecorder.stop();
-    voiceRecordingForVerify=false;
+    try{voiceMediaRecorder.stop()}catch(e){D('  ⚠ Voice stop error: '+e)}
   }
+  // Fallback cleanup if onstop didn't fire
+  setTimeout(()=>{
+    if(voiceRecStream){voiceRecStream.getTracks().forEach(t=>t.stop());voiceRecStream=null}
+  },500);
 }
 
 async function verifyVoice(){
-  if(!voiceVerifyEnabled||voiceAudioChunks.length===0)return{verified:true,reason:'skip'};
+  if(!voiceVerifyEnabled||voiceAudioChunks.length===0){
+    return{verified:true,reason:'skip'};
+  }
   
   const blob=new Blob(voiceAudioChunks,{type:'audio/webm'});
   if(blob.size<500)return{verified:true,reason:'too_small'};
@@ -1899,6 +1916,7 @@ async function verifyVoice(){
         resolve({verified:true,reason:'error'});
       }
     };
+    reader.onerror=()=>resolve({verified:true,reason:'read_error'});
     reader.readAsDataURL(blob);
   });
 }
@@ -1965,6 +1983,13 @@ async function settingsVoiceRecord(){
   const msg=document.getElementById('settingsVoiceMsg');
   const nameInput=document.getElementById('voiceNameInput');
   const name=nameInput.value.trim();
+  
+  // Guard: if already done (3 samples), don't record again
+  if(settingsVoiceSamples>=3){
+    msg.textContent='✅ Already registered! Remove profile to re-record.';
+    msg.style.color='#00ff88';
+    return;
+  }
   
   if(!name){nameInput.style.borderColor='#ff4444';msg.textContent='Enter a name first!';msg.style.color='#ff4444';return}
   nameInput.style.borderColor='rgba(255,255,255,0.15)';
@@ -2041,14 +2066,14 @@ async function settingsVoiceRecord(){
     msg.style.color='#ff4444';
     
     // Audio level meter
-    const ctx=new AudioContext();
-    const src=ctx.createMediaStreamSource(stream);
-    const analyser=ctx.createAnalyser();
+    let settingsAudioCtx=new AudioContext();
+    const src=settingsAudioCtx.createMediaStreamSource(stream);
+    const analyser=settingsAudioCtx.createAnalyser();
     analyser.fftSize=256;src.connect(analyser);
     const dataArr=new Uint8Array(analyser.frequencyBinCount);
     const meter=document.getElementById('settingsVoiceLevel');
     const loop=()=>{
-      if(!settingsRecording){ctx.close();return}
+      if(!settingsRecording){try{settingsAudioCtx.close()}catch{};return}
       analyser.getByteFrequencyData(dataArr);
       meter.style.width=Math.min(100,dataArr.reduce((a,b)=>a+b,0)/dataArr.length*1.5)+'%';
       requestAnimationFrame(loop);

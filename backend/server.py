@@ -1255,7 +1255,7 @@ def text_to_speech():
     speed = data.get('speed', 'normal')  # 'normal', 'slow', 'fast'
     
     # Speed presets: normal for chat, slow for whiteboard teaching
-    rate_map = {'slow': '-5%', 'normal': '+10%', 'fast': '+18%'}
+    rate_map = {'slow': '+5%', 'normal': '+10%', 'fast': '+18%'}
     tts_rate = rate_map.get(speed, '+10%')
     
     # Try edge-tts first (has male Greek voice)
