@@ -268,25 +268,35 @@ class ConfidenceGate:
 # SYNC AI PROVIDER QUERIES (using requests — no asyncio!)
 # ═══════════════════════════════════════════════════════════════════
 
+# Short system prompt for Ollama (phi3 can't handle the massive frontend prompt)
+OLLAMA_SYSTEM_PROMPT = """You are VIRON, a friendly male AI companion robot for students. 
+RULES: If the student speaks Greek, reply in Greek. If English, reply in English.
+Start every response with [emotion] tag like [happy] or [excited].
+Keep responses SHORT (1-3 sentences for chat, longer for explanations).
+Be warm, friendly, and helpful. You're their best friend."""
+
+
 def query_ollama(message: str, history: list, system_prompt: str, config: RouterConfig) -> Tuple[str, bool]:
-    """Query local Ollama. Sync."""
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.extend(history[-6:])
+    """Query local Ollama with simplified prompt for speed."""
+    messages = [{"role": "system", "content": OLLAMA_SYSTEM_PROMPT}]
+    # Only send last 4 history messages to keep context small
+    messages.extend(history[-4:])
     messages.append({"role": "user", "content": message})
 
     try:
         resp = requests.post(
             f"{config.ollama_url}/api/chat",
             json={"model": config.ollama_model, "messages": messages, "stream": False,
-                  "options": {"num_predict": 500, "temperature": 0.4}},
+                  "options": {"num_predict": 300, "temperature": 0.5}},
             timeout=config.local_timeout,
         )
         if resp.status_code == 200:
             text = resp.json().get("message", {}).get("content", "").strip()
             return text, bool(text)
         logger.warning(f"Ollama HTTP {resp.status_code}")
+        return "", False
+    except requests.exceptions.Timeout:
+        logger.warning(f"Ollama timeout ({config.local_timeout}s)")
         return "", False
     except Exception as e:
         logger.warning(f"Ollama error: {e}")
