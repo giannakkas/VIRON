@@ -263,6 +263,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   </div>
   <div class="setting-group"><h3>ℹ️ System</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:4px"><div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:rgba(255,255,255,0.3)">Device</span><span style="font-size:12px;color:#c0d8e8">VIRON v1.0</span></div><div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:rgba(255,255,255,0.3)">Uptime</span><span style="font-size:12px;color:#c0d8e8" id="ut">0h 0m</span></div></div>
   <button class="sbtn danger" onclick="if(confirm('Restart?'))location.reload()">🔁 Restart</button>
+  <button class="sbtn danger" onclick="resetViron()" style="background:rgba(255,100,0,0.15);color:#ff8800;border-color:rgba(255,100,0,0.3)">🗑️ Reset VIRON</button>
   <button class="sbtn danger" onclick="if(!confirm('Shutdown?'))return;cE('sleepy');toggleSettings();document.body.style.transition='opacity 2s';document.body.style.opacity='0';setTimeout(()=>{fetch('/api/system/shutdown',{method:'POST'}).catch(()=>{});document.body.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100vh;color:rgba(255,255,255,0.2);font-size:14px\'>VIRON is off.</div>';document.body.style.opacity='1'},2500)">⏻ Shutdown</button></div>
   <div style="text-align:center;color:rgba(255,255,255,0.15);font-size:11px;margin-top:20px">VIRON AI Companion • v1.0</div>
 </div>
@@ -2071,6 +2072,25 @@ function toggleVoiceLock(btn){
   const enabled=btn.classList.contains('on');
   fetch('/api/voice/toggle',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({enabled:enabled})}).then(()=>checkVoiceVerifyStatus());
+}
+
+async function resetViron(){
+  if(!confirm('⚠️ This will delete ALL data:\n\n• Student profiles & points\n• Face recognition\n• Voice fingerprints\n\nVIRON will restart with the setup wizard.\n\nContinue?'))return;
+  if(!confirm('Are you sure? This cannot be undone.'))return;
+  
+  try{
+    const r=await fetch('/api/setup/reset',{method:'POST'});
+    const d=await r.json();
+    if(d.success){
+      toggleSettings();
+      cE("sad");
+      say(isGreekMode()?'Θα σε ξεχάσω... Τα λέμε σύντομα!':'I\'ll forget everything... See you soon!');
+      setTimeout(()=>{location.reload()},4000);
+    }else{
+      alert('Reset partially failed: '+JSON.stringify(d.errors));
+      location.reload();
+    }
+  }catch(e){alert('Reset error: '+e.message)}
 }
 
 // ===== SETUP WIZARD =====

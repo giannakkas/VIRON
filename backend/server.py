@@ -1136,6 +1136,61 @@ def setup_register_student():
         "message": f"Welcome {name}!"
     })
 
+
+@app.route('/api/setup/reset', methods=['POST'])
+def setup_reset():
+    """Reset VIRON — clear all student data, faces, and voice profiles.
+    Next startup will show the setup wizard again."""
+    errors = []
+
+    # 1. Clear student profiles database
+    if HAS_PROFILES:
+        try:
+            import sqlite3 as _sql
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viron_students.db")
+            if os.path.exists(db_path):
+                conn = _sql.connect(db_path)
+                for table in ['students', 'sessions', 'interactions', 'quiz_results', 'homework_scans', 'subject_progress']:
+                    try:
+                        conn.execute(f"DELETE FROM {table}")
+                    except:
+                        pass
+                conn.commit()
+                conn.close()
+                print("🗑️ Reset: Student database cleared")
+        except Exception as e:
+            errors.append(f"students: {e}")
+
+    # 2. Clear face recognition data
+    if HAS_FACE_REC and face_recognizer:
+        try:
+            names = face_recognizer.list_faces()
+            for name in list(names):
+                face_recognizer.delete_face(name)
+            print(f"🗑️ Reset: {len(names)} face(s) deleted")
+        except Exception as e:
+            errors.append(f"faces: {e}")
+
+    # 3. Clear voice profiles
+    if HAS_VOICE_VERIFY:
+        try:
+            names = list(voice_verifier.voice_profiles.keys())
+            for name in names:
+                voice_verifier.delete_voice(name)
+            voice_verifier.enabled = False
+            print(f"🗑️ Reset: {len(names)} voice profile(s) deleted")
+        except Exception as e:
+            errors.append(f"voice: {e}")
+
+    if errors:
+        print(f"⚠ Reset errors: {errors}")
+
+    return jsonify({
+        "success": len(errors) == 0,
+        "message": "VIRON reset complete. Restart to run setup wizard.",
+        "errors": errors
+    })
+
 @app.route('/api/battery', methods=['GET'])
 def battery_status():
     for path in ['/sys/class/power_supply/BAT0/capacity', '/sys/class/power_supply/BAT1/capacity']:
