@@ -335,7 +335,7 @@ def query_claude(message: str, history: list, system_prompt: str, config: Router
 
     messages = list(history[-10:])
     messages.append({"role": "user", "content": message})
-    payload = {"model": config.claude_model, "max_tokens": 2000, "messages": messages}
+    payload = {"model": config.claude_model, "max_tokens": 3000, "messages": messages}
     if system_prompt:
         payload["system"] = system_prompt
     headers = {
@@ -391,7 +391,7 @@ def query_gemini(message: str, history: list, system_prompt: str, config: Router
     try:
         resp = requests.post(
             url,
-            json={"contents": contents, "generationConfig": {"maxOutputTokens": 2000, "temperature": 0.4}},
+            json={"contents": contents, "generationConfig": {"maxOutputTokens": 3000, "temperature": 0.4}},
             timeout=config.cloud_timeout,
         )
         if resp.status_code == 200:
@@ -419,7 +419,7 @@ def query_chatgpt(message: str, history: list, system_prompt: str, config: Route
     try:
         resp = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            json={"model": config.chatgpt_model, "messages": messages, "max_tokens": 2000, "temperature": 0.4},
+            json={"model": config.chatgpt_model, "messages": messages, "max_tokens": 3000, "temperature": 0.4},
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.openai_api_key}"},
             timeout=config.cloud_timeout,
         )

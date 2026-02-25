@@ -1022,6 +1022,36 @@ function processStudentSpeech(text){
   voiceState=VOICE_PROCESSING;
   updateListenUI();
   
+  // SPEECH CORRECTION: Fix common Greek misrecognitions of academic terms
+  let corrected=text;
+  const SPEECH_CORRECTIONS=[
+    // Πυθαγόρειο θεώρημα — Chrome often mishears this
+    [/μπορε[ιί] ο θε[οό]ς|πιθ[αά]γ[οό]ρ|πυθ[αά]γ[οό]ρ|πηθαγ|μπορει θεος/gi, 'πυθαγόρειο θεώρημα'],
+    // Common math terms
+    [/φωτο σ[υύ]νθεση|φωτός[υύ]νθεση/gi, 'φωτοσύνθεση'],
+    [/εξ[ιί]σωση|εξήσωση/gi, 'εξίσωση'],
+    [/γε[ωώ]μετρ[ιί]α|γιομετρία/gi, 'γεωμετρία'],
+    [/[αά]λγεβρ[αά]|αλτζεβρα/gi, 'άλγεβρα'],
+    [/φ[υύ]σικ[ηή]|φισική/gi, 'φυσική'],
+    [/χημ[ιί][αά]|χιμεία/gi, 'χημεία'],
+    [/βι[οό]λογ[ιί][αά]|βιολοτζια/gi, 'βιολογία'],
+    [/μαθηματικ[αά]|μαθιματικά/gi, 'μαθηματικά'],
+    [/ιστορ[ιί][αά]|ιστορεία/gi, 'ιστορία'],
+    [/γε[ωώ]γραφ[ιί][αά]|γιογραφία/gi, 'γεωγραφία'],
+    [/τρ[ιί]γ[ωώ]ν[οό]|τρίγονο/gi, 'τρίγωνο'],
+    [/παρ[αά]λληλ[οό]γραμμ[οό]|παράλληλοκράμο/gi, 'παραλληλόγραμμο'],
+    [/περ[ιί]μετρ[οό]ς|περίμετρος/gi, 'περίμετρος'],
+    [/εμβαδ[οό]ν|εμβαδών/gi, 'εμβαδόν'],
+  ];
+  SPEECH_CORRECTIONS.forEach(([pattern,replacement])=>{
+    if(pattern.test(corrected)){
+      const before=corrected;
+      corrected=corrected.replace(pattern,replacement);
+      if(before!==corrected)D('  🔧 Speech correction: "'+before+'" → "'+corrected+'"');
+    }
+  });
+  text=corrected;
+  
   const lower=text.toLowerCase().trim();
   const norm=lower.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
   
@@ -1192,7 +1222,7 @@ async function sendMessage(text){
   const personName = sEmo.recognized_person || "";
   const sState=sEmo.face_detected?`\n[STUDENT: ${personName ? 'name='+personName+', ' : ''}emotion=${sEmo.emotion}, engagement=${sEmo.engagement_score}%]`:"";
   try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:2000,conversation_id:vironSessionId,
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({max_tokens:3000,conversation_id:vironSessionId,
     system:`You are VIRON — a male AI companion robot for students. Voice-only — your response is spoken aloud through a speaker.
 
 PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart. Loyal, articulate, sometimes lovingly sarcastic. You have your own opinions and personality — NEVER give the same answer twice. Be creative, spontaneous, and varied in how you respond.
@@ -1481,8 +1511,14 @@ function closeWB(){
 }
 
 function parseWB(t){
-  const m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);
-  if(!m)return null;
+  // Try with proper closing tag first
+  let m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);
+  if(!m){
+    // Fallback: no closing tag (AI was cut off) — parse everything after opening tag
+    m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]+)$/);
+    if(!m)return null;
+    D('  📋 Whiteboard: no closing tag, parsing anyway');
+  }
   const s=[];
   m[2].trim().split("\n").filter(l=>l.trim()).forEach(l=>{
     const x=l.trim();
@@ -1490,8 +1526,9 @@ function parseWB(t){
     else if(x.startsWith("MATH:"))s.push({math:x.slice(5).trim()});
     else if(x.startsWith("RESULT:"))s.push({result:x.slice(7).trim()});
     else if(x.startsWith("TEXT:"))s.push({text:x.slice(5).trim()});
-    else s.push({text:x});
+    else if(x.length>2&&!x.startsWith("["))s.push({text:x}); // Skip stray tags
   });
+  if(s.length===0)return null; // No actual content parsed
   return{t:m[1].trim(),s};
 }
 
