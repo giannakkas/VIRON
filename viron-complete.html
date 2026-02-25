@@ -717,11 +717,31 @@ function startCommandListening(){
       let speech=finalText.trim();
       D('  🎤 Final: "'+speech+'" (confidence='+confidence.toFixed(2)+')');
       
-      // NOISE FILTER: reject low-confidence speech (skip during whiteboard — just need 'ok')
-      if(!wbO&&confidence>0&&confidence<0.5){
-        D('  🔇 Low confidence ('+confidence.toFixed(2)+'), ignoring');
-        if(inConversation||wbO)setTimeout(startCommandListening,300);
-        return;
+      // NOISE FILTER: reject ambient sounds, low-confidence, and gibberish
+      const NOISE_WORDS=/^(the|a|an|i|um|uh|hmm|mm|oh|ah|ha|huh|mhm|yeah|and|but|so|like|just|it|is|in|on|to|at|do|of|that|this|you|he|she|we|they|was|for|are|as|with|his|my|not|be|her|one|our|out|day|had|has|all|been|if|who|will|no|up|about|their|them|what|would|can|said|each|which|she|or|an|la|da|de|le|el|en|se|na|τα|τη|τον|μια|με|σε|θα|δε|αν|από|στο)$/i;
+      const cleanSpeech=speech.replace(/[^a-zA-Zα-ωά-ώΑ-ΩΆ-Ώ\s]/g,'').trim();
+      const wordCount=cleanSpeech.split(/\s+/).filter(w=>w.length>0).length;
+      
+      // Skip during whiteboard — just need 'ok'
+      if(!wbO){
+        // Reject very short single noise words
+        if(wordCount<=1&&NOISE_WORDS.test(cleanSpeech)){
+          D('  🔇 Noise word: "'+speech+'", ignoring');
+          if(inConversation)setTimeout(startCommandListening,300);
+          return;
+        }
+        // Reject low confidence (raised threshold from 0.5 to 0.65)
+        if(confidence>0&&confidence<0.65){
+          D('  🔇 Low confidence ('+confidence.toFixed(2)+'), ignoring: "'+speech+'"');
+          if(inConversation)setTimeout(startCommandListening,300);
+          return;
+        }
+        // Reject single-character gibberish
+        if(cleanSpeech.length<2){
+          D('  🔇 Too short, ignoring');
+          if(inConversation)setTimeout(startCommandListening,300);
+          return;
+        }
       }
       
       // WHITEBOARD MODE: only accept close commands, ignore everything else
@@ -901,9 +921,51 @@ function processStudentSpeech(text){
   D('>>> processStudentSpeech: "'+text+'"');
   voiceState=VOICE_PROCESSING;
   updateListenUI();
+  
+  // INSTANT GREETING: common greetings get canned response (no AI roundtrip)
+  const lower=text.toLowerCase().trim();
+  const INSTANT_GREETINGS={
+    // Greek greetings
+    'τι κάνεις':['[happy] Μια χαρά! Εσύ;','[happy] Καλά είμαι! Τι γίνεται;','[happy] Ωραία! Εσύ πώς είσαι;','[happy] Τέλεια! Πες μου τα νέα σου!'],
+    'γεια':['[happy] Γεια σου!','[happy] Γεια! Τι κάνεις;','[happy] Ε, γεια! Χαίρομαι που σε βλέπω!'],
+    'γεια σου':['[happy] Γεια σου! Πώς είσαι;','[happy] Γεια! Τι νέα;','[happy] Χαίρομαι! Τι κάνεις;'],
+    'καλημέρα':['[happy] Καλημέρα! Πώς ξύπνησες;','[happy] Καλημέρα! Έτοιμος για μάθημα;','[happy] Καλημέρα! Τι ωραία μέρα!'],
+    'καλησπέρα':['[happy] Καλησπέρα! Τι κάνεις;','[happy] Καλησπέρα! Πώς πέρασες;','[happy] Καλησπέρα! Πες μου τι θες!'],
+    'ευχαριστώ':['[happy] Παρακαλώ!','[happy] Τίποτα! Εδώ είμαι!','[happy] Με χαρά!'],
+    // English greetings
+    'hi':['[happy] Hey there!','[happy] Hi! What\'s up?','[happy] Hey! How are you?'],
+    'hello':['[happy] Hello! How can I help?','[happy] Hey! Good to see you!','[happy] Hello there!'],
+    'hey':['[happy] Hey! What\'s going on?','[happy] Hey there!','[happy] Hi!'],
+    'how are you':['[happy] I\'m great! How about you?','[happy] Doing well! What\'s up?','[happy] Fantastic! And you?'],
+    'good morning':['[happy] Good morning! Ready for a great day?','[happy] Morning! How did you sleep?'],
+    'good evening':['[happy] Good evening! How was your day?','[happy] Evening! What\'s on your mind?'],
+    'thanks':['[happy] You\'re welcome!','[happy] No problem!','[happy] Anytime!'],
+    'thank you':['[happy] You\'re welcome!','[happy] Happy to help!','[happy] My pleasure!'],
+    'bye':['[happy] Bye! See you soon!','[happy] Take care!','[happy] Goodbye! Have a great time!'],
+  };
+  
+  if(INSTANT_GREETINGS[lower]){
+    const responses=INSTANT_GREETINGS[lower];
+    const reply=responses[Math.floor(Math.random()*responses.length)];
+    D('  ⚡ Instant greeting: "'+reply+'"');
+    msgs.push({role:"user",content:text});
+    msgs.push({role:"assistant",content:reply});
+    handleAIResponse(reply);
+    return;
+  }
+  
   cE("thinking");
   clearTimeout(conversationTimer); // Pause conversation timer during API call
   sendMessage(text);
+}
+
+// Handle an AI response string (emotion parsing + TTS) — used by both sendMessage and instant greetings
+function handleAIResponse(t){
+  let em=t.match(/^\[(?:emotion_?(?:name)?:)?(\w+)\]/);
+  if(em&&E[em[1]])cE(em[1]);
+  let c=t.replace(/^\[(?:emotion_?(?:name)?:)?\w+\]\s*/,"");
+  say(c);
+  loading=false;
 }
 
 // Face tap activation - always works as backup

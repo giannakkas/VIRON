@@ -647,7 +647,8 @@ class VironAIRouterSync:
             # Try Ollama with SHORT timeout — greetings must be instant
             try:
                 start = time.time()
-                text, ok = query_ollama(message, history, system_prompt, self.config, subject)
+                text, ok = query_ollama(message, history, system_prompt, self.config,
+                                        subject, timeout_override=8)  # 8s max for greetings
                 elapsed = time.time() - start
                 if ok and text:
                     self._stat("ollama", subject)
