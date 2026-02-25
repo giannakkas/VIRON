@@ -1203,7 +1203,6 @@ function registerFace(){
     if(d.success){document.getElementById('faceNameInput').value='';loadFacesList();
       say(isGreekMode()?`Χαίρομαι που σε γνωρίζω ${name}!`:`Nice to meet you ${name}!`);cE("happy")}
   }).catch(e=>{st.textContent='Error: '+e.message;st.style.color='#ff6666'})
-  }).catch(e=>{st.textContent='Error: '+e.message;st.style.color='#ff6666'})
 }
 
 function deleteFace(name){

@@ -1,7 +1,7 @@
 """
 VIRON Face Recognition Module
-Uses OpenCV FaceDetectorYN + FaceRecognizerSF for face detection and recognition.
-Stores face encodings in a JSON file for persistence.
+Uses Haar Cascade for detection + SFace for recognition.
+Compatible with OpenCV 4.5.4+
 """
 
 import cv2
@@ -10,103 +10,72 @@ import json
 import os
 import time
 import base64
-import urllib.request
 from pathlib import Path
 
-# Verify OpenCV has required features
-if not hasattr(cv2, 'FaceDetectorYN'):
-    raise ImportError(f"OpenCV {cv2.__version__} missing FaceDetectorYN. Need OpenCV 4.5.4+")
-if not hasattr(cv2, 'FaceRecognizerSF'):
-    raise ImportError(f"OpenCV {cv2.__version__} missing FaceRecognizerSF. Need OpenCV 4.5.4+")
-
-MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
-FACES_DB = os.path.join(os.path.dirname(__file__), "faces_db.json")
-
-# Model files
-DETECTOR_MODEL = os.path.join(MODELS_DIR, "face_detection_yunet_2023mar.onnx")
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+FACES_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faces_db.json")
 RECOGNIZER_MODEL = os.path.join(MODELS_DIR, "face_recognition_sface_2021dec.onnx")
 
-# Download URLs
-DETECTOR_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-RECOGNIZER_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
-
-# Recognition thresholds
-COSINE_THRESHOLD = 0.363  # OpenCV default for SFace cosine similarity
-L2_THRESHOLD = 1.128      # OpenCV default for SFace L2 distance
+COSINE_THRESHOLD = 0.363
 
 
 class FaceRecognizer:
     def __init__(self):
-        self.detector = None
+        self.face_cascade = None
         self.recognizer = None
-        self.known_faces = {}  # name -> list of encodings (numpy arrays)
+        self.known_faces = {}
         self.current_person = None
         self.current_confidence = 0.0
         self.last_recognition_time = 0
-        self.recognition_interval = 1.0  # Check every 1 second (not every frame)
-        self.consecutive_matches = {}  # name -> count (need 3 consecutive matches)
+        self.recognition_interval = 1.5
+        self.consecutive_matches = {}
         self.initialized = False
-        
-    def _download_model(self, url, dest):
-        """Download a model file if missing"""
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        print(f"  📥 Downloading {os.path.basename(dest)}...")
-        try:
-            urllib.request.urlretrieve(url, dest)
-            size = os.path.getsize(dest)
-            if size > 100000:
-                print(f"  ✅ Downloaded ({size // 1024}KB)")
-                return True
-            else:
-                print(f"  ⚠ File too small ({size} bytes), download may have failed")
-                os.remove(dest)
-                return False
-        except Exception as e:
-            print(f"  ⚠ Download failed: {e}")
-            return False
-    
+
     def initialize(self):
-        """Load models and face database"""
-        # Auto-download models if missing
-        if not os.path.exists(DETECTOR_MODEL) or os.path.getsize(DETECTOR_MODEL) < 100000:
-            if not self._download_model(DETECTOR_URL, DETECTOR_MODEL):
-                print(f"⚠ Face detector model not found. Run: bash backend/setup_models.sh")
-                return False
-        
-        if not os.path.exists(RECOGNIZER_MODEL) or os.path.getsize(RECOGNIZER_MODEL) < 100000:
-            if not self._download_model(RECOGNIZER_URL, RECOGNIZER_MODEL):
-                print(f"⚠ Face recognizer model not found. Run: bash backend/setup_models.sh")
-                return False
-            
+        """Load cascade + SFace recognizer"""
+        # Load Haar cascade (always available)
         try:
-            # Initialize face detector (YuNet)
-            self.detector = cv2.FaceDetectorYN.create(
-                DETECTOR_MODEL,
-                "",
-                (640, 480),  # Will be updated per frame
-                0.5,         # Score threshold (lowered for better detection)
-                0.3,         # NMS threshold
-                5000         # Top K
-            )
+            cascade_path = None
+            if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+                cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            else:
+                for p in ['/usr/share/opencv4/haarcascades/',
+                          '/usr/share/opencv/haarcascades/',
+                          '/usr/local/share/opencv4/haarcascades/']:
+                    if os.path.exists(p + 'haarcascade_frontalface_default.xml'):
+                        cascade_path = p + 'haarcascade_frontalface_default.xml'
+                        break
             
-            # Initialize face recognizer (SFace)
-            self.recognizer = cv2.FaceRecognizerSF.create(
-                RECOGNIZER_MODEL, ""
-            )
+            if not cascade_path or not os.path.exists(cascade_path):
+                print("⚠ Haar cascade not found")
+                return False
             
-            # Load saved faces
-            self._load_faces()
-            
-            self.initialized = True
-            print(f"👤 Face recognition initialized ({len(self.known_faces)} known faces)")
-            return True
-            
+            self.face_cascade = cv2.CascadeClassifier(cascade_path)
+            print(f"  ✅ Face cascade loaded")
         except Exception as e:
-            print(f"⚠ Face recognition init error: {e}")
+            print(f"⚠ Cascade error: {e}")
             return False
-    
+
+        # Load SFace recognizer
+        if not os.path.exists(RECOGNIZER_MODEL) or os.path.getsize(RECOGNIZER_MODEL) < 100000:
+            print(f"⚠ SFace model not found or too small: {RECOGNIZER_MODEL}")
+            print("  Download from: https://github.com/opencv/opencv_zoo/blob/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx")
+            return False
+
+        try:
+            self.recognizer = cv2.FaceRecognizerSF.create(RECOGNIZER_MODEL, "")
+            print(f"  ✅ SFace recognizer loaded")
+        except Exception as e:
+            print(f"⚠ SFace init error: {e}")
+            print("  OpenCV version:", cv2.__version__)
+            return False
+
+        self._load_faces()
+        self.initialized = True
+        print(f"👤 Face recognition initialized ({len(self.known_faces)} known faces)")
+        return True
+
     def _load_faces(self):
-        """Load face encodings from JSON file"""
         if not os.path.exists(FACES_DB):
             self.known_faces = {}
             return
@@ -123,145 +92,151 @@ class FaceRecognizer:
         except Exception as e:
             print(f"  ⚠ Error loading faces: {e}")
             self.known_faces = {}
-    
+
     def _save_faces(self):
-        """Save face encodings to JSON file"""
         data = {}
         for name, encodings in self.known_faces.items():
             data[name] = [
                 base64.b64encode(enc.tobytes()).decode('ascii')
                 for enc in encodings
             ]
+        os.makedirs(os.path.dirname(FACES_DB), exist_ok=True)
         with open(FACES_DB, 'w') as f:
             json.dump(data, f)
         print(f"  💾 Saved {len(self.known_faces)} faces to {FACES_DB}")
-    
-    def detect_faces(self, frame):
-        """Detect faces in frame, return face data array"""
-        if not self.initialized or self.detector is None:
-            print("  detect_faces: not initialized")
+
+    def _detect_face_bbox(self, frame):
+        """Detect face using Haar cascade, return (x,y,w,h) or None"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5, minSize=(80, 80))
+        if len(faces) == 0:
             return None
+        # Return largest face
+        return max(faces, key=lambda f: f[2] * f[3])
+
+    def _get_face_crop(self, frame, bbox):
+        """Crop and resize face to 112x112 for SFace"""
+        x, y, w, h = bbox
+        # Add padding (20%)
+        pad = int(max(w, h) * 0.2)
+        fh, fw = frame.shape[:2]
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(fw, x + w + pad)
+        y2 = min(fh, y + h + pad)
+        face_crop = frame[y1:y2, x1:x2]
+        if face_crop.size == 0:
+            return None
+        face_resized = cv2.resize(face_crop, (112, 112))
+        return face_resized
+
+    def _get_encoding(self, face_112):
+        """Get SFace encoding from 112x112 face image"""
         try:
-            h, w = frame.shape[:2]
-            self.detector.setInputSize((w, h))
-            _, faces = self.detector.detect(frame)
-            if faces is not None:
-                print(f"  detect_faces: found {len(faces)} face(s) in {w}x{h} frame")
-            else:
-                print(f"  detect_faces: no faces in {w}x{h} frame")
-            return faces
-        except Exception as e:
-            print(f"  detect_faces ERROR: {e}")
-            return None
-    
-    def get_encoding(self, frame, face):
-        """Get face encoding (feature vector) for a detected face"""
-        if not self.initialized or self.recognizer is None:
-            return None
-        try:
-            aligned = self.recognizer.alignCrop(frame, face)
-            encoding = self.recognizer.feature(aligned)
+            blob = cv2.dnn.blobFromImage(face_112, 1.0, (112, 112),
+                                          (0, 0, 0), swapRB=False, crop=False)
+            self.recognizer.model.setInput(blob)
+            encoding = self.recognizer.model.forward()
             return encoding.flatten()
+        except AttributeError:
+            # Newer OpenCV: use feature() with proper input
+            try:
+                encoding = self.recognizer.feature(face_112)
+                return encoding.flatten()
+            except Exception as e:
+                print(f"  ⚠ Encoding error: {e}")
+                return None
         except Exception as e:
             print(f"  ⚠ Encoding error: {e}")
             return None
-    
+
     def register_face(self, frame, name):
         """Register a face from a camera frame"""
         if not self.initialized:
-            return False, "Face recognition not initialized"
-        
-        print(f"  register: frame {frame.shape}, dtype={frame.dtype}")
-        faces = self.detect_faces(frame)
-        if faces is None or len(faces) == 0:
+            return False, "Not initialized"
+
+        bbox = self._detect_face_bbox(frame)
+        if bbox is None:
             return False, f"No face detected ({frame.shape[1]}x{frame.shape[0]})"
-        
-        if len(faces) > 1:
-            return False, "Multiple faces detected — only one person should be in frame"
-        
-        face = faces[0]
-        encoding = self.get_encoding(frame, face)
+
+        face_112 = self._get_face_crop(frame, bbox)
+        if face_112 is None:
+            return False, "Could not crop face"
+
+        encoding = self._get_encoding(face_112)
         if encoding is None:
-            return False, "Could not generate face encoding"
-        
-        # Add to known faces
+            return False, "Could not compute encoding"
+
         if name not in self.known_faces:
             self.known_faces[name] = []
-        
         self.known_faces[name].append(encoding)
         self._save_faces()
-        
+
         count = len(self.known_faces[name])
-        return True, f"Face registered for {name} ({count} sample{'s' if count > 1 else ''})"
-    
+        print(f"  ✅ Registered face for {name} ({count} samples)")
+        return True, f"Face registered for {name} ({count} samples)"
+
     def register_face_from_base64(self, image_b64, name):
-        """Register a face from a base64-encoded image"""
         if not self.initialized:
-            return False, "Face recognition not initialized"
-        
+            return False, "Not initialized"
         try:
-            # Decode base64 image
-            img_data = base64.b64decode(image_b64.split(',')[-1])  # Handle data:image/... prefix
+            img_data = base64.b64decode(image_b64.split(',')[-1])
             np_arr = np.frombuffer(img_data, np.uint8)
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if frame is None:
                 return False, "Could not decode image"
             return self.register_face(frame, name)
         except Exception as e:
-            return False, f"Error: {str(e)}"
-    
+            return False, f"Error: {e}"
+
+    def _cosine_similarity(self, a, b):
+        """Compute cosine similarity between two vectors"""
+        dot = np.dot(a, b)
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0
+        return dot / (norm_a * norm_b)
+
     def recognize(self, frame):
-        """Recognize faces in frame. Returns (name, confidence) or (None, 0)"""
+        """Recognize face in frame. Returns (name, confidence) or (None, 0)"""
         if not self.initialized or not self.known_faces:
             return None, 0.0
-        
-        # Rate limit recognition (expensive operation)
+
         now = time.time()
         if now - self.last_recognition_time < self.recognition_interval:
             return self.current_person, self.current_confidence
         self.last_recognition_time = now
-        
-        faces = self.detect_faces(frame)
-        if faces is None or len(faces) == 0:
-            # No face — clear after a few seconds
+
+        bbox = self._detect_face_bbox(frame)
+        if bbox is None:
             self.consecutive_matches = {}
-            if now - self.last_recognition_time > 3:
-                self.current_person = None
-                self.current_confidence = 0.0
             return self.current_person, self.current_confidence
-        
-        # Use largest face (closest person)
-        face = max(faces, key=lambda f: f[2] * f[3])
-        encoding = self.get_encoding(frame, face)
+
+        face_112 = self._get_face_crop(frame, bbox)
+        if face_112 is None:
+            return self.current_person, self.current_confidence
+
+        encoding = self._get_encoding(face_112)
         if encoding is None:
             return self.current_person, self.current_confidence
-        
-        # Compare against all known faces
+
         best_name = None
         best_score = -1
-        
+
         for name, encodings in self.known_faces.items():
             for known_enc in encodings:
-                # Cosine similarity (higher = more similar, max 1.0)
-                score = self.recognizer.match(
-                    encoding.reshape(1, -1),
-                    known_enc.reshape(1, -1),
-                    cv2.FaceRecognizerSF_FR_COSINE
-                )
+                score = self._cosine_similarity(encoding, known_enc)
                 if score > best_score:
                     best_score = score
                     best_name = name
-        
-        # Check if match is good enough
+
         if best_score > COSINE_THRESHOLD and best_name:
-            # Increment consecutive match counter
             self.consecutive_matches[best_name] = self.consecutive_matches.get(best_name, 0) + 1
-            # Reset others
             for n in list(self.consecutive_matches.keys()):
                 if n != best_name:
                     self.consecutive_matches[n] = 0
-            
-            # Need 2+ consecutive matches to confirm identity
             if self.consecutive_matches[best_name] >= 2:
                 self.current_person = best_name
                 self.current_confidence = best_score
@@ -269,26 +244,20 @@ class FaceRecognizer:
             self.consecutive_matches = {}
             self.current_person = None
             self.current_confidence = 0.0
-        
+
         return self.current_person, self.current_confidence
-    
+
     def delete_face(self, name):
-        """Remove a registered face"""
         if name in self.known_faces:
             del self.known_faces[name]
             self._save_faces()
-            return True, f"Deleted face: {name}"
-        return False, f"Face not found: {name}"
-    
+            return True, f"Deleted: {name}"
+        return False, f"Not found: {name}"
+
     def list_faces(self):
-        """List all registered faces"""
-        return {
-            name: len(encodings) 
-            for name, encodings in self.known_faces.items()
-        }
-    
+        return {name: len(encs) for name, encs in self.known_faces.items()}
+
     def get_status(self):
-        """Get current recognition status"""
         return {
             "initialized": self.initialized,
             "current_person": self.current_person,
@@ -297,5 +266,4 @@ class FaceRecognizer:
         }
 
 
-# Singleton instance
 face_recognizer = FaceRecognizer()
