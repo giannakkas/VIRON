@@ -84,7 +84,7 @@ class FaceRecognizer:
                 DETECTOR_MODEL,
                 "",
                 (640, 480),  # Will be updated per frame
-                0.7,         # Score threshold
+                0.5,         # Score threshold (lowered for better detection)
                 0.3,         # NMS threshold
                 5000         # Top K
             )
@@ -139,11 +139,20 @@ class FaceRecognizer:
     def detect_faces(self, frame):
         """Detect faces in frame, return face data array"""
         if not self.initialized or self.detector is None:
+            print("  detect_faces: not initialized")
             return None
-        h, w = frame.shape[:2]
-        self.detector.setInputSize((w, h))
-        _, faces = self.detector.detect(frame)
-        return faces
+        try:
+            h, w = frame.shape[:2]
+            self.detector.setInputSize((w, h))
+            _, faces = self.detector.detect(frame)
+            if faces is not None:
+                print(f"  detect_faces: found {len(faces)} face(s) in {w}x{h} frame")
+            else:
+                print(f"  detect_faces: no faces in {w}x{h} frame")
+            return faces
+        except Exception as e:
+            print(f"  detect_faces ERROR: {e}")
+            return None
     
     def get_encoding(self, frame, face):
         """Get face encoding (feature vector) for a detected face"""
@@ -162,9 +171,10 @@ class FaceRecognizer:
         if not self.initialized:
             return False, "Face recognition not initialized"
         
+        print(f"  register: frame {frame.shape}, dtype={frame.dtype}")
         faces = self.detect_faces(frame)
         if faces is None or len(faces) == 0:
-            return False, "No face detected in frame"
+            return False, f"No face detected ({frame.shape[1]}x{frame.shape[0]})"
         
         if len(faces) > 1:
             return False, "Multiple faces detected — only one person should be in frame"

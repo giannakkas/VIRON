@@ -1192,11 +1192,17 @@ function registerFace(){
   
   // Take 5 samples for better accuracy
   fetch('/api/faces/register-multi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,count:5})})
-  .then(r=>r.json()).then(d=>{
-    st.textContent=d.message;
+  .then(r=>{
+    if(!r.ok)return r.text().then(t=>{throw new Error(`Server ${r.status}: ${t.substring(0,200)}`)});
+    return r.json();
+  }).then(d=>{
+    let msg=d.message;
+    if(d.errors&&d.errors.length>0)msg+='\n'+d.errors[0]; // Show first error detail
+    st.textContent=msg;
     st.style.color=d.success?'#00ff88':'#ff6666';
     if(d.success){document.getElementById('faceNameInput').value='';loadFacesList();
       say(isGreekMode()?`Χαίρομαι που σε γνωρίζω ${name}!`:`Nice to meet you ${name}!`);cE("happy")}
+  }).catch(e=>{st.textContent='Error: '+e.message;st.style.color='#ff6666'})
   }).catch(e=>{st.textContent='Error: '+e.message;st.style.color='#ff6666'})
 }
 

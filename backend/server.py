@@ -539,11 +539,14 @@ def face_register_multi():
         if frame is None:
             errors.append(f"Frame {i+1}: no frame")
             continue
-        success, msg = face_recognizer.register_face(frame.copy(), name)
-        if success:
-            registered += 1
-        else:
-            errors.append(f"Frame {i+1}: {msg}")
+        try:
+            success, msg = face_recognizer.register_face(frame.copy(), name)
+            if success:
+                registered += 1
+            else:
+                errors.append(f"Frame {i+1}: {msg}")
+        except Exception as e:
+            errors.append(f"Frame {i+1}: {type(e).__name__}: {e}")
         time.sleep(0.3)  # Brief delay between captures
     
     return jsonify({
