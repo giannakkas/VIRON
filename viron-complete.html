@@ -458,6 +458,9 @@ function matchesWakeWord(text){
     "hey iron","hey violin","hey viral","hey viren","hey vyron",
     "have iran","have iron","hey iran","hey irene","hey vr","hey v run",
     "a viron","a byron","hey brian","hey bryan",
+    "play viral","play viron","play byron","play iron","play vyron",
+    "please viral","please viron","please play","please byron",
+    "plei viron","plei viral","pray viral","pray viron",
     "tegan","tegan is","t gun","tigan","tea gun","tik on","tick on",
     "heavy wrong","heavy round","hey around","hey brown",
     "hayviron","hay viron","hayvironment","hay vironment",
@@ -472,7 +475,7 @@ function matchesWakeWord(text){
     "χέι βάιρον","χει βαιρον","έι βαιρον","ε βιρον","εϊ βιρον"];
   for(const m of misrecognitions)if(lower.includes(m))return true;
   // Fuzzy regex: (hey/hi/hay/heavy/a/have) + (vir/byr/bir/fir/ron/iron)
-  if(/(hey|hi|hay|heavy|have|hei|a)\s*\w{0,3}(vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron)/i.test(lower))return true;
+  if(/(hey|hi|hay|heavy|have|hei|a|play|please|pray|plei)\s*\w{0,3}(vir|byr|bir|fir|vyr|iron|viron|byron|myron|tyron|viral)/i.test(lower))return true;
   // iMovie pattern: Chrome hearing "Hey VIRON" as "iMovie"
   if(/\bimovie\b/i.test(lower))return true;
   // "hey V..." pattern (partial recognition)
