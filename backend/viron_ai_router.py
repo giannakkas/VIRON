@@ -49,11 +49,11 @@ class RouterConfig:
     claude_model: str = "claude-opus-4-20250514"
     chatgpt_model: str = "gpt-4o-mini"
     gemini_model: str = "gemini-2.0-flash"
-    ollama_model: str = "phi3"
+    ollama_model: str = "qwen2.5:3b"
 
-    cloud_timeout: int = 60
-    local_timeout: int = 30
-    max_retries: int = 3
+    cloud_timeout: int = 45
+    local_timeout: int = 15
+    max_retries: int = 2
     strategy: str = "best_one"
     confidence_gate: bool = True
 
@@ -67,10 +67,10 @@ class RouterConfig:
             claude_model=os.getenv("CLAUDE_MODEL", "claude-opus-4-20250514"),
             chatgpt_model=os.getenv("CHATGPT_MODEL", "gpt-4o-mini"),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-            ollama_model=os.getenv("OLLAMA_MODEL", "phi3"),
-            cloud_timeout=int(os.getenv("CLOUD_TIMEOUT", "60")),
-            local_timeout=int(os.getenv("LOCAL_TIMEOUT", "30")),
-            max_retries=int(os.getenv("MAX_RETRIES", "3")),
+            ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+            cloud_timeout=int(os.getenv("CLOUD_TIMEOUT", "45")),
+            local_timeout=int(os.getenv("LOCAL_TIMEOUT", "15")),
+            max_retries=int(os.getenv("MAX_RETRIES", "2")),
             strategy=os.getenv("ROUTING_STRATEGY", "best_one"),
             confidence_gate=os.getenv("CONFIDENCE_GATE", "true").lower() == "true",
         )
@@ -276,74 +276,51 @@ Keep responses SHORT (1-3 sentences for chat, longer for explanations).
 Be warm, friendly, and helpful. You're their best friend."""
 
 
-# ── Local Model Routing ──
-# Different models have different strengths — route locally too!
-# Ollama auto-swaps models in memory as needed.
-LOCAL_MODEL_TABLE = {
-    # Qwen 2.5 — best for Greek, translation, creative, general
-    "qwen2.5:3b": [Subject.GREEK_LANG, Subject.TRANSLATION, Subject.CREATIVE,
-                    Subject.GENERAL, Subject.GREETING, Subject.GEOGRAPHY,
-                    Subject.LITERATURE, Subject.HISTORY, Subject.ENGLISH],
-    # Phi-3 — best for math, science, coding, logic
-    "phi3": [Subject.MATH, Subject.SCIENCE, Subject.CODING],
-}
-
-
-def _pick_local_model(subject: Subject, config: RouterConfig) -> str:
-    """Pick the best local model for this subject. Falls back to default."""
-    # Check which models are actually available
-    available_models = set()
-    try:
-        resp = requests.get(f"{config.ollama_url}/api/tags", timeout=5)
-        if resp.status_code == 200:
-            for m in resp.json().get("models", []):
-                name = m.get("name", "")
-                available_models.add(name)
-                # Also add without :latest suffix
-                if ":" in name:
-                    available_models.add(name.split(":")[0])
-    except:
-        pass
-
-    if not available_models:
-        return config.ollama_model  # Can't check, use default
-
-    # Find the best model for this subject
-    for model, subjects in LOCAL_MODEL_TABLE.items():
-        if subject in subjects:
-            # Check if this model is available
-            base = model.split(":")[0]
-            if model in available_models or base in available_models:
-                return model
-
-    return config.ollama_model  # Default
+# ── Local Model Strategy ──
+# SPEED IS KING. Ollama can only keep 1 model in RAM at a time.
+# Swapping models takes 3-8 seconds — unacceptable for a tutor.
+#
+# Strategy: ONE primary model handles all local queries (stays in RAM = instant).
+# Cloud AIs handle complex questions (they're smarter anyway).
+#
+# Recommended models (pick ONE as primary):
+#   qwen2.5:3b   — Best overall: great Greek, good English, decent math (~2GB)
+#   phi3          — Best math/logic, weaker Greek (~2.2GB)  
+#   llama3.2:3b   — Best English reasoning, OK Greek (~2GB)
+#   gemma2:2b     — Fastest loading, smallest, decent quality (~1.6GB)
+#
+# The PRIMARY model is what's set in OLLAMA_MODEL env var (default: qwen2.5:3b)
+# It stays loaded in RAM → responses in 1-3 seconds instead of 8-12.
 
 
 def query_ollama(message: str, history: list, system_prompt: str, config: RouterConfig,
                  subject: Subject = None) -> Tuple[str, bool]:
-    """Query local Ollama with best model for the subject."""
-    model = _pick_local_model(subject, config) if subject else config.ollama_model
+    """Query local Ollama — uses the primary model (stays in RAM for speed)."""
+    model = config.ollama_model  # ONE model, always loaded, instant response
 
     messages = [{"role": "system", "content": OLLAMA_SYSTEM_PROMPT}]
     messages.extend(history[-4:])
     messages.append({"role": "user", "content": message})
 
-    logger.info(f"🦙 Ollama: {model} (subject: {subject.value if subject else 'none'})")
+    logger.info(f"🦙 Ollama: {model}")
 
     try:
+        start = time.time()
         resp = requests.post(
             f"{config.ollama_url}/api/chat",
             json={"model": model, "messages": messages, "stream": False,
-                  "options": {"num_predict": 300, "temperature": 0.5}},
+                  "options": {"num_predict": 200, "temperature": 0.5}},
             timeout=config.local_timeout,
         )
+        elapsed = time.time() - start
         if resp.status_code == 200:
             text = resp.json().get("message", {}).get("content", "").strip()
+            logger.info(f"  🦙 {model} responded in {elapsed:.1f}s ({len(text)} chars)")
             return text, bool(text)
         logger.warning(f"Ollama HTTP {resp.status_code}")
         return "", False
     except requests.exceptions.Timeout:
-        logger.warning(f"Ollama timeout ({config.local_timeout}s) — model: {model}")
+        logger.warning(f"Ollama timeout ({config.local_timeout}s)")
         return "", False
     except Exception as e:
         logger.warning(f"Ollama error: {e}")
@@ -664,20 +641,12 @@ class VironAIRouterSync:
             self._stat(force_provider if ok else "none", subject)
             return (text, force_provider) if ok else ("", "none")
 
-        # Greetings → Ollama first
+        # Greetings → Ollama FAST (no confidence gate needed for "hi")
         if subject == Subject.GREETING:
             text, ok = query_ollama(message, history, system_prompt, self.config, subject)
             if ok:
-                if self.config.confidence_gate:
-                    confident, score = ConfidenceGate.check(text)
-                    self.last_confidence = score
-                    if not confident and available:
-                        logger.info(f"⬆️ Escalating (confidence={score:.2f})")
-                        self.stats["escalations"] += 1
-                        text, provider = strategy_best_one(message, history, system_prompt, subject, self.config, available)
-                        self._stat(provider, subject)
-                        return text, provider
                 self._stat("ollama", subject)
+                self.last_confidence = 0.95
                 return text, "ollama"
             # Ollama dead → cloud for greeting
             if available:
@@ -712,15 +681,6 @@ class VironAIRouterSync:
         self.stats["by_subject"][subject.value] = self.stats["by_subject"].get(subject.value, 0) + 1
 
     def get_status(self):
-        # Check which local models are available
-        local_models = []
-        try:
-            resp = requests.get(f"{self.config.ollama_url}/api/tags", timeout=5)
-            if resp.status_code == 200:
-                local_models = [m.get("name", "") for m in resp.json().get("models", [])]
-        except:
-            pass
-
         return {
             "strategy": self.strategy.value,
             "last": {
@@ -728,9 +688,7 @@ class VironAIRouterSync:
                 "provider": self.last_provider, "confidence": round(self.last_confidence, 2),
             },
             "providers": {
-                "ollama": {"configured": True, "default_model": self.config.ollama_model,
-                           "available_models": local_models,
-                           "model_routing": {m: [s.value for s in subs] for m, subs in LOCAL_MODEL_TABLE.items()}},
+                "ollama": {"configured": True, "model": self.config.ollama_model},
                 "claude": {"configured": bool(self.config.anthropic_api_key), "model": self.config.claude_model},
                 "gemini": {"configured": bool(self.config.google_api_key), "model": self.config.gemini_model},
                 "chatgpt": {"configured": bool(self.config.openai_api_key), "model": self.config.chatgpt_model},

@@ -20,14 +20,19 @@ else
     fi
 fi
 
-# Check if phi3 model is available
-if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "phi3"; then
-    echo "  ✓ phi3 model ready"
+# Check if primary model is available
+OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "${OLLAMA_MODEL%%:*}"; then
+    echo "  ✓ $OLLAMA_MODEL ready"
 else
-    echo "  ⚠ phi3 model not found. Pulling..."
-    ollama pull phi3 &
-    echo "    (downloading in background — simple questions use cloud until done)"
+    echo "  ⚠ $OLLAMA_MODEL not found. Pulling..."
+    ollama pull "$OLLAMA_MODEL"
+    echo "  ✓ $OLLAMA_MODEL downloaded"
 fi
+
+# Pre-warm: load model into RAM so first response is instant
+echo "  🔥 Pre-warming $OLLAMA_MODEL into RAM..."
+curl -s http://localhost:11434/api/chat -d "{\"model\":\"$OLLAMA_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" > /dev/null 2>&1 &
 
 # Check Flask config
 if [ ! -f "$SCRIPT_DIR/backend/config.json" ]; then
@@ -91,7 +96,8 @@ if [ -n "$WAKE_PID" ]; then
 echo "  🎤 Wake:     ws://localhost:9000"
 fi
 echo ""
-echo "  Routing: Simple → Ollama | Complex → Claude Opus"
+echo "  Routing: Greetings → Ollama ($OLLAMA_MODEL) | Subject-based cloud"
+echo "  Cloud:   Math→ChatGPT | Greek→Gemini | Literature→Claude"
 echo "  Fallback: Claude → Gemini → ChatGPT → Ollama"
 echo "  ═══════════════════════════════════════════════"
 echo ""
