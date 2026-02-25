@@ -31,6 +31,8 @@ except ImportError:
 
 # Face recognition
 try:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from viron_faces import face_recognizer
     HAS_FACE_REC = True
 except Exception as e:
