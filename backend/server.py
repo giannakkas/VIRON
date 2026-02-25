@@ -354,7 +354,20 @@ def chat_proxy():
     user_msg = data.get("messages", [{}])[-1].get("content", "")
     system_prompt = data.get("system", "")
     history = data.get("messages", [])[:-1]  # all except last (which is the user msg)
+    conversation_id = data.get("conversation_id", "")
     print(f"\n💬 CHAT: '{user_msg[:80]}'")
+
+    # ── Inject student memory into system prompt ──
+    student_name = ""
+    if HAS_PROFILES and detector.current_state.get("recognized_person"):
+        student_name = detector.current_state["recognized_person"]
+        try:
+            ctx = get_student_context(student_name)
+            if ctx:
+                system_prompt += f"\n\n{ctx}"
+                print(f"  👤 Student context injected for: {student_name}")
+        except Exception as e:
+            print(f"  ⚠ Student context error: {e}")
 
     # ── Smart Router (Subject-based multi-LLM routing) ──
     if HAS_ROUTER and ai_router:
@@ -367,6 +380,28 @@ def chat_proxy():
             if reply and len(reply.strip()) > 2:
                 print(f"  ✅ {provider} | 📚 {ai_router.last_subject} | 🎛️ {ai_router.last_strategy} | 🌐 {ai_router.last_language} | conf:{ai_router.last_confidence:.2f}")
                 print(f"  → '{reply[:120]}'")
+                
+                # Log interaction for points (non-blocking)
+                subject_str = ai_router.last_subject or "general"
+                lang_str = ai_router.last_language or "el"
+                if HAS_PROFILES and student_name:
+                    try:
+                        points_result = log_interaction(
+                            student_name=student_name,
+                            type="question",
+                            subject=subject_str,
+                            language=lang_str,
+                            question=user_msg[:500],
+                            answer=reply[:500],
+                            emotion=detector.current_state.get("emotion", ""),
+                        )
+                        print(f"  🎮 +{points_result['points_earned']}pts → {points_result['total_points']} total")
+                        if points_result.get("new_achievements"):
+                            for ach in points_result["new_achievements"]:
+                                print(f"  🏆 NEW: {ach['icon']} {ach['name_en']}")
+                    except Exception as e:
+                        print(f"  ⚠ Points error: {e}")
+                
                 return jsonify({
                     "content": [{"type": "text", "text": reply}],
                     "provider": provider,
@@ -649,6 +684,167 @@ def face_snapshot():
         return jsonify({"error": "No camera frame available"}), 503
     _, jpeg = cv2.imencode('.jpg', detector.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
+
+
+# ============ STUDENT PROFILES & GAMIFICATION ============
+try:
+    from student_profiles import (
+        get_or_create_student, get_student_profile, get_all_students,
+        update_student, start_session, end_session, log_interaction,
+        save_quiz_result, get_quiz_history, log_homework,
+        get_student_context, get_greeting_context, get_leaderboard,
+        get_level, ACHIEVEMENTS, POINTS
+    )
+    HAS_PROFILES = True
+    print("✅ Student profiles loaded")
+except ImportError as e:
+    HAS_PROFILES = False
+    print(f"⚠ Student profiles not available: {e}")
+
+
+@app.route('/api/student/profile', methods=['GET'])
+def student_profile_get():
+    """Get student profile by name."""
+    name = request.args.get('name', '')
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+    if not HAS_PROFILES:
+        return jsonify({"error": "Profiles not available"}), 503
+    profile = get_student_profile(name)
+    if not profile:
+        return jsonify({"error": "Student not found"}), 404
+    return jsonify(profile)
+
+
+@app.route('/api/student/profile', methods=['POST'])
+def student_profile_update():
+    """Update student profile fields."""
+    data = request.get_json()
+    name = data.get('name', '')
+    if not name or not HAS_PROFILES:
+        return jsonify({"error": "Name required"}), 400
+    updates = {k: v for k, v in data.items() if k != 'name'}
+    success = update_student(name, **updates)
+    return jsonify({"success": success})
+
+
+@app.route('/api/student/profiles', methods=['GET'])
+def student_profiles_list():
+    """List all student profiles."""
+    if not HAS_PROFILES:
+        return jsonify([])
+    return jsonify(get_all_students())
+
+
+@app.route('/api/student/session/start', methods=['POST'])
+def session_start():
+    """Start a study session for a student."""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name or not HAS_PROFILES:
+        return jsonify({"error": "Name required"}), 400
+    mood = data.get('mood', '')
+    session_id = start_session(name, mood)
+    context = get_greeting_context(name)
+    return jsonify({"session_id": session_id, "greeting_context": context})
+
+
+@app.route('/api/student/session/end', methods=['POST'])
+def session_end():
+    """End a study session."""
+    data = request.get_json() or {}
+    session_id = data.get('session_id')
+    if not session_id or not HAS_PROFILES:
+        return jsonify({"error": "Session ID required"}), 400
+    end_session(session_id, data.get('mood', ''))
+    return jsonify({"success": True})
+
+
+@app.route('/api/student/interaction', methods=['POST'])
+def log_student_interaction():
+    """Log a question/quiz/homework interaction and get points."""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name or not HAS_PROFILES:
+        return jsonify({"points_earned": 0})
+    result = log_interaction(
+        student_name=name,
+        session_id=data.get('session_id'),
+        type=data.get('type', 'question'),
+        subject=data.get('subject', 'general'),
+        language=data.get('language', 'el'),
+        question=data.get('question', ''),
+        answer=data.get('answer', ''),
+        was_correct=data.get('was_correct', -1),
+        emotion=data.get('emotion', ''),
+    )
+    return jsonify(result)
+
+
+@app.route('/api/student/quiz/save', methods=['POST'])
+def save_quiz():
+    """Save a completed quiz result."""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name or not HAS_PROFILES:
+        return jsonify({"error": "Name required"}), 400
+    result = save_quiz_result(
+        student_name=name,
+        session_id=data.get('session_id'),
+        subject=data.get('subject', ''),
+        difficulty=data.get('difficulty', 'normal'),
+        total_questions=data.get('total_questions', 0),
+        correct_answers=data.get('correct_answers', 0),
+        questions_json=data.get('questions', []),
+        time_taken=data.get('time_taken_seconds', 0),
+    )
+    return jsonify(result)
+
+
+@app.route('/api/student/quiz/history', methods=['GET'])
+def quiz_history():
+    """Get quiz history for a student."""
+    name = request.args.get('name', '')
+    if not name or not HAS_PROFILES:
+        return jsonify([])
+    return jsonify(get_quiz_history(name))
+
+
+@app.route('/api/student/leaderboard', methods=['GET'])
+def leaderboard():
+    """Get the top students leaderboard."""
+    if not HAS_PROFILES:
+        return jsonify([])
+    limit = int(request.args.get('limit', 10))
+    return jsonify(get_leaderboard(limit))
+
+
+@app.route('/api/student/context', methods=['GET'])
+def student_context():
+    """Get AI context string for a student (injected into system prompt)."""
+    name = request.args.get('name', '')
+    if not name or not HAS_PROFILES:
+        return jsonify({"context": ""})
+    return jsonify({"context": get_student_context(name)})
+
+
+@app.route('/api/student/achievements', methods=['GET'])
+def student_achievements():
+    """Get all available achievements and student's earned ones."""
+    name = request.args.get('name', '')
+    all_achievements = []
+    earned = []
+    if HAS_PROFILES and name:
+        profile = get_student_profile(name)
+        if profile:
+            earned = profile.get("achievements", [])
+    for aid, info in ACHIEVEMENTS.items():
+        all_achievements.append({
+            "id": aid, **info,
+            "earned": aid in earned,
+        })
+    return jsonify({"achievements": all_achievements, "earned_count": len(earned)})
+
 
 # ============ HARDWARE ============
 @app.route('/api/wifi/list', methods=['GET'])

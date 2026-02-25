@@ -102,6 +102,17 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 </div>
 <div class="engagement-bar" id="engBar"><div class="eng-dot" id="engDot"></div><span class="eng-label" id="engLabel"></span></div>
 <div id="personName" style="position:fixed;top:40px;left:12px;font-size:14px;font-weight:bold;color:#00ff88;z-index:50;text-shadow:0 0 8px rgba(0,255,136,0.5)"></div>
+<div id="gamificationHud" style="position:fixed;top:58px;left:12px;z-index:50;display:none;font-size:12px;color:rgba(255,255,255,0.7)">
+  <div id="hudLevel" style="color:#00d4ff;font-weight:bold;text-shadow:0 0 8px rgba(0,212,255,0.4)"></div>
+  <div style="display:flex;gap:12px;margin-top:2px">
+    <span id="hudPoints" title="Points">⭐ 0</span>
+    <span id="hudStreak" title="Streak">🔥 0</span>
+  </div>
+  <div id="hudAchievement" style="display:none;margin-top:4px;padding:4px 8px;background:rgba(255,215,0,0.2);border:1px solid rgba(255,215,0,0.4);border-radius:8px;color:#ffd700;font-weight:bold;animation:achievePulse 2s ease-in-out"></div>
+</div>
+<style>
+@keyframes achievePulse{0%{transform:scale(0.8);opacity:0}20%{transform:scale(1.1);opacity:1}80%{transform:scale(1);opacity:1}100%{transform:scale(1);opacity:0}}
+</style>
 <button class="hamburger" id="hb" onclick="toggleSettings()"><span></span><span></span><span></span></button>
 <div class="settings-overlay" id="so" onclick="toggleSettings()"></div>
 <div class="settings-panel" id="sp">
@@ -933,10 +944,55 @@ function processStudentSpeech(text){
   voiceState=VOICE_PROCESSING;
   updateListenUI();
   
-  // INSTANT GREETING: common greetings get canned response (no AI roundtrip)
   const lower=text.toLowerCase().trim();
-  // Normalize: strip accents for matching (Chrome returns varying accents)
   const norm=lower.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+  
+  // SPECIAL COMMANDS: quiz, homework, points
+  // "quiz me", "κάνε μου quiz", "test me"
+  if(/\b(quiz me|test me|κανε μου quiz|κανε μου τεστ|εξετασε με)\b/i.test(norm)){
+    D('  🎯 QUIZ MODE requested');
+    cE("excited");
+    // Extract subject if mentioned: "quiz me on math"
+    const subMatch=text.match(/(?:on|about|in|σε|στα|στη|στο)\s+(.+)/i);
+    const subject=subMatch?subMatch[1].trim():'';
+    const quizPrompt=subject
+      ?(isGreekMode()?`Κάνε μου ένα quiz στο θέμα: ${subject}. 5 ερωτήσεις, μία-μία. Περίμενε την απάντησή μου σε κάθε ερώτηση.`
+        :`Give me a quiz about ${subject}. 5 questions, one at a time. Wait for my answer after each question.`)
+      :(isGreekMode()?'Κάνε μου ένα quiz! Διάλεξε θέμα και ρώτα με 5 ερωτήσεις, μία-μία.'
+        :'Give me a quiz! Pick a topic and ask me 5 questions, one at a time.');
+    cE("thinking");
+    clearTimeout(conversationTimer);
+    sendMessage(quizPrompt);
+    return;
+  }
+  
+  // "scan homework", "βοηθησε με εργασια", "read this"
+  if(/\b(scan|homework|εργασια|βοηθα με|read this|τι λεει αυτο|τι γραφει|help me with this)\b/i.test(norm)){
+    D('  📸 HOMEWORK SCAN requested');
+    cE("focused");
+    captureHomework(text);
+    return;
+  }
+  
+  // "my points", "ποντοι μου", "my level", "leaderboard"
+  if(/\b(my points|ποντοι|level|επιπεδο|score|βαθμολογια|leaderboard|καταταξη)\b/i.test(norm)){
+    D('  🎮 POINTS/LEVEL query');
+    if(currentStudentName){
+      fetch('/api/student/profile?name='+encodeURIComponent(currentStudentName))
+      .then(r=>r.json()).then(p=>{
+        const lvl=p.level||{number:1,name_el:'Αρχάριος'};
+        const msg=isGreekMode()
+          ?`[proud] Είσαι επίπεδο ${lvl.number}, ${lvl.name_el}! Έχεις ${p.total_points} πόντους, ${p.current_streak} μέρες σερί, και ${(p.achievements||[]).length} επιτεύγματα!`
+          :`[proud] You're level ${lvl.number}, ${lvl.name_en}! You have ${p.total_points} points, ${p.current_streak} day streak, and ${(p.achievements||[]).length} achievements!`;
+        msgs.push({role:"user",content:text});
+        msgs.push({role:"assistant",content:msg});
+        handleAIResponse(msg);
+      }).catch(()=>{cE("thinking");sendMessage(text)});
+      return;
+    }
+  }
+  
+  // INSTANT GREETING: common greetings get canned response (no AI roundtrip)
   const INSTANT_GREETINGS={
     // Greek greetings (accent-stripped keys)
     'τι κανεις':['[happy] Μια χαρά! Εσύ;','[happy] Καλά είμαι! Τι γίνεται;','[happy] Ωραία! Εσύ πώς είσαι;','[happy] Τέλεια! Πες μου τα νέα σου!'],
@@ -985,6 +1041,56 @@ function handleAIResponse(t){
   let c=t.replace(/^\[(?:emotion_?(?:name)?:)?\w+\]\s*/,"");
   say(c);
   loading=false;
+}
+
+// Homework photo capture — snap camera frame and send to vision AI
+async function captureHomework(context){
+  D('>>> captureHomework');
+  cE("focused");
+  try{
+    // Get camera snapshot from server
+    const r=await fetch('/api/faces/snapshot');
+    if(!r.ok)throw new Error('No camera');
+    const blob=await r.blob();
+    
+    // Convert to base64
+    const reader=new FileReader();
+    reader.onload=async function(){
+      const base64=reader.result.split(',')[1];
+      D('  📸 Got snapshot: '+Math.round(blob.size/1024)+'KB');
+      
+      // Send to AI with vision prompt
+      const prompt=isGreekMode()
+        ?'Κοίτα αυτή τη φωτογραφία εργασίας/βιβλίου. Εξήγησέ μου τι βλέπεις και βοήθησέ με να το λύσω βήμα-βήμα. Χρησιμοποίησε τον πίνακα αν χρειάζεται.'
+        :'Look at this homework/textbook photo. Explain what you see and help me solve it step by step. Use the whiteboard if needed.';
+      
+      // Use Gemini or Claude vision endpoint
+      const msgWithImage=[...msgs,{role:"user",content:[
+        {type:"text",text:context||prompt},
+        {type:"image",source:{type:"base64",media_type:"image/jpeg",data:base64}}
+      ]}];
+      
+      // For now, describe what they need help with and send as text
+      // (Full vision API integration would go through a dedicated endpoint)
+      say(isGreekMode()?'Βλέπω! Δώσε μου ένα δευτερόλεπτο...':'I see it! Give me a second...');
+      
+      // Log homework
+      if(currentStudentName){
+        fetch('/api/student/interaction',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name:currentStudentName,session_id:currentSessionId,type:'homework',subject:'general',question:context||'homework scan'})
+        }).catch(()=>{});
+      }
+      
+      // Send to chat as text with note about photo
+      setTimeout(()=>{
+        sendMessage(prompt+'\n\n[Note: Student is showing their homework/textbook to the camera. Help them with what they might be studying.]');
+      },2000);
+    };
+    reader.readAsDataURL(blob);
+  }catch(e){
+    D('  ❌ Homework capture error: '+e);
+    say(isGreekMode()?'Δεν μπορώ να δω. Πες μου τι θες βοήθεια!':'I can\'t see it. Tell me what you need help with!');
+  }
 }
 
 // Face tap activation - always works as backup
@@ -1109,20 +1215,79 @@ Be real. Be warm. Be their brilliant friend.`,
   // Note: startWakeListener is called from say() onend callback
 }
 
-// ===== STUDENT EMOTION =====
+// ===== STUDENT PROFILES & GAMIFICATION =====
 let lastRecognizedPerson=null;
+let currentSessionId=null;
+let currentStudentName="";
+
+function updateGamificationHud(data){
+  const hud=document.getElementById("gamificationHud");
+  if(!data||!data.name){hud.style.display="none";return}
+  hud.style.display="block";
+  const lvl=data.level||{number:1,name_el:"Αρχάριος",name_en:"Beginner"};
+  document.getElementById("hudLevel").textContent=`Lv.${lvl.number} ${isGreekMode()?lvl.name_el:lvl.name_en}`;
+  document.getElementById("hudPoints").textContent=`⭐ ${data.points||0}`;
+  document.getElementById("hudStreak").textContent=`🔥 ${data.streak||0}`;
+}
+
+function showAchievementPopup(achievement){
+  const el=document.getElementById("hudAchievement");
+  el.textContent=`${achievement.icon} ${isGreekMode()?achievement.name_el:achievement.name_en}!`;
+  el.style.display="block";
+  // Also announce it
+  const msg=isGreekMode()?`Νέο επίτευγμα! ${achievement.name_el}!`:`New achievement! ${achievement.name_en}!`;
+  setTimeout(()=>{cE("proud");say(msg)},500);
+  setTimeout(()=>{el.style.display="none"},5000);
+}
+
+async function startStudentSession(name,mood){
+  try{
+    const r=await fetch('/api/student/session/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,mood:mood||''})});
+    const data=await r.json();
+    currentSessionId=data.session_id;
+    currentStudentName=name;
+    D('  📊 Session started: #'+currentSessionId+' for '+name);
+    // Update HUD
+    if(data.greeting_context){updateGamificationHud(data.greeting_context)}
+    return data.greeting_context;
+  }catch(e){D('  ⚠ Session start error: '+e);return null}
+}
+
+function endStudentSession(){
+  if(!currentSessionId)return;
+  fetch('/api/student/session/end',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:currentSessionId,mood:sEmo.emotion||''})}).catch(()=>{});
+  D('  📊 Session ended: #'+currentSessionId);
+  currentSessionId=null;
+}
+
+// ===== STUDENT EMOTION =====
 function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').then(r=>r.json()).then(d=>{sEmo=d;const b=document.getElementById("engBar"),dot=document.getElementById("engDot"),l=document.getElementById("engLabel");if(!d.face_detected){b.style.display="flex";dot.style.background="#666";l.textContent="";document.getElementById("personName").textContent="";return}b.style.display="flex";const e=d.engagement_score;dot.style.background=e>70?"#00ff88":e>40?"#ffaa00":"#ff4444";l.textContent=`${e}%`;
 // Show recognized person name
 const pn=document.getElementById("personName");
 if(d.recognized_person){pn.textContent=d.recognized_person;pn.style.color="#00ff88";
-// Greet new person on first recognition
+// Greet new person on first recognition — with personalized context
 if(d.recognized_person!==lastRecognizedPerson&&!inConversation&&!isSpeaking){
   lastRecognizedPerson=d.recognized_person;
-  const greetings=isGreekMode()?["Γεια σου "+d.recognized_person+"!","Α, "+d.recognized_person+"! Τι κάνεις;","Χαίρομαι που σε βλέπω "+d.recognized_person+"!"]:["Hey "+d.recognized_person+"!","Hi "+d.recognized_person+"!","Good to see you "+d.recognized_person+"!"];
-  const g=greetings[Math.floor(Math.random()*greetings.length)];
-  cE("happy");say(g);
+  // Start session and get personalized greeting
+  startStudentSession(d.recognized_person,d.emotion).then(ctx=>{
+    let g;
+    if(ctx&&ctx.is_new){
+      // Brand new student
+      g=isGreekMode()?`Γεια σου ${d.recognized_person}! Χαίρομαι που σε γνωρίζω! Είμαι ο VIRON!`:`Hey ${d.recognized_person}! Nice to meet you! I'm VIRON!`;
+    }else if(ctx&&ctx.days_away>3){
+      // Been away
+      g=isGreekMode()?`${d.recognized_person}! Πού ήσουν; Σε έψαχνα!`:`${d.recognized_person}! Where have you been? I missed you!`;
+    }else if(ctx&&ctx.streak>2){
+      // On a streak
+      g=isGreekMode()?`Γεια σου ${d.recognized_person}! ${ctx.streak} μέρες σερί! Συνεχίζουμε!`:`Hey ${d.recognized_person}! ${ctx.streak} day streak! Let's keep it going!`;
+    }else{
+      const greetings=isGreekMode()?[`Γεια σου ${d.recognized_person}!`,`Α, ${d.recognized_person}! Τι κάνεις;`,`Χαίρομαι που σε βλέπω ${d.recognized_person}!`]:[`Hey ${d.recognized_person}!`,`Hi ${d.recognized_person}!`,`Good to see you ${d.recognized_person}!`];
+      g=greetings[Math.floor(Math.random()*greetings.length)];
+    }
+    cE("happy");say(g);
+  });
 }
-}else{pn.textContent="";lastRecognizedPerson=null}
+}else{pn.textContent="";if(lastRecognizedPerson){endStudentSession()}lastRecognizedPerson=null;document.getElementById("gamificationHud").style.display="none"}
 handleP(d)}).catch(()=>{})}
 setInterval(pollSE,2000);
 function handleP(d){if(!proactiveEnabled||loading||voiceState===VOICE_ACTIVATED)return;const n=Date.now();if(n-lastPT<20000)return;const e=d.emotion,s=d.emotion_streak||0;if(s<6)return;let m=null,em=null;

@@ -9,6 +9,9 @@ backend/models/*.onnx
 
 # Face database (personal data)
 backend/faces_db.json
+backend/viron_students.db
+backend/viron_students.db-wal
+backend/viron_students.db-shm
 
 # Python
 __pycache__/
