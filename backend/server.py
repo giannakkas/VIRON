@@ -138,13 +138,26 @@ class StudentEmotionDetector:
     def start(self, camera_index=0):
         if self.running or not HAS_CV2:
             return False
-        self.cap = cv2.VideoCapture(camera_index)
+        
+        # Try V4L2 first (more reliable than GStreamer for USB cameras)
+        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
+        if not self.cap.isOpened():
+            print(f"  V4L2 failed, trying default backend...")
+            self.cap = cv2.VideoCapture(camera_index)
         if not self.cap.isOpened():
             print(f"⚠ Cannot open camera {camera_index}")
             return False
+        
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.cap.set(cv2.CAP_PROP_FPS, 15)
+        
+        # Warm up — read a few frames to let camera stabilize
+        for _ in range(5):
+            ret, frame = self.cap.read()
+            if ret:
+                self.last_frame = frame.copy()
+        
         self.running = True
         self.thread = threading.Thread(target=self._detection_loop, daemon=True)
         self.thread.start()
@@ -162,12 +175,16 @@ class StudentEmotionDetector:
             self.cap.release()
 
     def _detection_loop(self):
+        frames_ok = 0
         while self.running:
             ret, frame = self.cap.read()
             if not ret:
                 time.sleep(0.1)
                 continue
             self.last_frame = frame.copy()  # Store for face registration
+            frames_ok += 1
+            if frames_ok == 1:
+                print(f"  📷 First frame captured OK ({frame.shape})")
             self.frame_count += 1
             if self.frame_count % 3 != 0:
                 continue
