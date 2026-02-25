@@ -109,7 +109,11 @@ class FaceRecognizer:
         """Detect face using Haar cascade, return (x,y,w,h) or None"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5, minSize=(80, 80))
+        # Try with lenient params first
+        faces = self.face_cascade.detectMultiScale(gray, 1.1, 3, minSize=(60, 60))
+        if len(faces) == 0:
+            # Retry with even more lenient params
+            faces = self.face_cascade.detectMultiScale(gray, 1.05, 2, minSize=(40, 40))
         if len(faces) == 0:
             return None
         # Return largest face

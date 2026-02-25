@@ -351,12 +351,25 @@ def chat_proxy():
         })
     try:
         print(f"  → Trying direct Anthropic API...")
+        model = config.get("model", "claude-opus-4-20250514")
         resp = http_requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            json={"model": config.get("model", "claude-opus-4-20250514"), "max_tokens": data.get("max_tokens", 1500),
+            json={"model": model, "max_tokens": data.get("max_tokens", 1500),
                   "system": data.get("system", ""), "messages": data.get("messages", [])},
-            timeout=45)  # 45s for Opus
+            timeout=45)
         print(f"  → Anthropic API status: {resp.status_code}")
+        
+        # If Opus overloaded, fall back to Sonnet
+        if resp.status_code == 529 and "opus" in model:
+            print(f"  ⚠ Opus overloaded, falling back to Sonnet...")
+            fallback = "claude-sonnet-4-20250514"
+            resp = http_requests.post("https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                json={"model": fallback, "max_tokens": data.get("max_tokens", 1500),
+                      "system": data.get("system", ""), "messages": data.get("messages", [])},
+                timeout=30)
+            print(f"  → Sonnet fallback status: {resp.status_code}")
+        
         if resp.status_code != 200:
             print(f"  ❌ Anthropic error: {resp.text[:300]}")
         return Response(resp.content, status=resp.status_code, content_type="application/json")
@@ -375,7 +388,7 @@ def test_tts():
     try:
         import edge_tts, asyncio, io
         async def gen():
-            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+18%", pitch="-2st")
+            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+18%", pitch="-10Hz")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -534,20 +547,28 @@ def face_register_multi():
     
     registered = 0
     errors = []
-    for i in range(count):
+    max_attempts = count * 3  # Try up to 3x more frames to get enough samples
+    attempts = 0
+    for i in range(max_attempts):
+        if registered >= count:
+            break
+        attempts += 1
         frame = detector.last_frame
         if frame is None:
-            errors.append(f"Frame {i+1}: no frame")
+            errors.append(f"Attempt {attempts}: no frame")
+            time.sleep(0.5)
             continue
         try:
             success, msg = face_recognizer.register_face(frame.copy(), name)
             if success:
                 registered += 1
+                print(f"  ✅ Face sample {registered}/{count} for {name}")
             else:
-                errors.append(f"Frame {i+1}: {msg}")
+                if attempts <= 3:  # Only log first few errors
+                    errors.append(f"Attempt {attempts}: {msg}")
         except Exception as e:
-            errors.append(f"Frame {i+1}: {type(e).__name__}: {e}")
-        time.sleep(0.3)  # Brief delay between captures
+            errors.append(f"Attempt {attempts}: {type(e).__name__}: {e}")
+        time.sleep(0.5)  # Wait for new frame
     
     return jsonify({
         "success": registered > 0,
@@ -691,7 +712,7 @@ def text_to_speech():
         print(f"🎙️ edge-tts: voice={voice}, text='{text[:50]}'")
         
         async def gen():
-            communicate = edge_tts.Communicate(text, voice, rate="+18%", pitch="-2st")
+            communicate = edge_tts.Communicate(text, voice, rate="+18%", pitch="-10Hz")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":

@@ -319,7 +319,6 @@ document.addEventListener('keydown',unlockAudio,{once:false});
 
 function sayServerTTS(text,lang){
   D('  sayServerTTS('+lang+'): "'+text.substring(0,60)+'"');
-  startT();
   fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:lang||'en'})})
   .then(r=>{
     D('  TTS response: '+r.status);
@@ -334,7 +333,7 @@ function sayServerTTS(text,lang){
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
     a.onended=()=>{D('  TTS playback ended');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
     a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
-    a.play().catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,600)})
+    a.play().then(()=>{startT()}).catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,600)})
   })
   .catch(e=>{
     D('  Server TTS FAILED: '+e.message+' — falling back to browser voice');
@@ -345,6 +344,7 @@ function sayServerTTS(text,lang){
     if(lang!=='el'&&enV)u.voice=enV;
     if(lang==='el'&&gkV)u.voice=gkV;
     u.rate=0.9;u.pitch=0.85;
+    u.onstart=()=>{startT()};
     u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,600)};
     u.onerror=()=>{stopT();setTimeout(startWakeListener,600)};
     synth.speak(u);
@@ -538,7 +538,7 @@ function startAlwaysListening(){
         
         // Personalized ack with name if recognized
         const pName=sEmo.recognized_person;
-        const ackText=pName?(isGreekMode()?`Ναι ${pName};`:`Yes ${pName}?`):"Mhm?";
+        const ackText=pName?(isGreekMode()?`Ναι ${pName};`:`Yes ${pName}?`):(isGreekMode()?"Ναι;":"Yes?");
         D('  Playing ack: "'+ackText+'"');
         fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
         .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
