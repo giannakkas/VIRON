@@ -816,26 +816,23 @@ function startCommandListening(){
       
       // Skip during whiteboard — just need 'ok'
       if(!wbO){
-        // Reject very short single noise words
-        if(wordCount<=1&&NOISE_WORDS.test(cleanSpeech)){
+        // Reject very short single noise words (only when NOT in conversation)
+        if(!inConversation&&wordCount<=1&&NOISE_WORDS.test(cleanSpeech)){
           D('  🔇 Noise word: "'+speech+'", ignoring');
-          if(inConversation)setTimeout(startCommandListening,300);
           return;
         }
-        // Reject low confidence speech
-        if(confidence>0&&confidence<0.65){
+        // Reject low confidence speech (but NOT during active conversation — student is talking to us!)
+        if(!inConversation&&confidence>0&&confidence<0.65){
           D('  🔇 Low confidence ('+confidence.toFixed(2)+'), ignoring: "'+speech+'"');
-          if(inConversation)setTimeout(startCommandListening,300);
           return;
         }
         // When confidence=0.00 (Chrome gives no data, common in Greek mode):
-        // Reject if it doesn't look like intentional speech to VIRON
-        if(confidence===0&&wordCount>=3){
-          // Allow through if it contains question words or common intent patterns
-          const hasIntent=/\?|τι |πώς |πού |γιατί |πόσο |ποιο |what |how |why |where |when |who |can you|tell me|explain|πες μου|εξήγησε/i.test(speech);
+        // During conversation: ALWAYS allow through (student is talking to us)
+        // Outside conversation: reject if no intent pattern
+        if(confidence===0&&wordCount>=3&&!inConversation){
+          const hasIntent=/\?|τι |πώς |πού |γιατί |πόσο |ποιο |μπορ|εξηγ|πες |μάθ|θέλω |βοήθ|λύσε|δείξε|κάνε|γράψε|βρες |δώσε|φτιάξε|what |how |why |where |when |who |can you|tell me|explain|help|show|find|make|give|solve|teach|quiz|play /i.test(speech);
           if(!hasIntent){
             D('  🔇 Zero confidence + no intent pattern ('+wordCount+' words), ignoring: "'+speech+'"');
-            if(inConversation)setTimeout(startCommandListening,300);
             return;
           }
         }
@@ -845,6 +842,13 @@ function startCommandListening(){
           if(inConversation)setTimeout(startCommandListening,300);
           return;
         }
+      }
+      
+      // In conversation: still filter obvious gibberish (single meaningless char)
+      if(inConversation&&cleanSpeech.length<2){
+        D('  🔇 Too short in conversation, ignoring');
+        setTimeout(startCommandListening,300);
+        return;
       }
       
       // WHITEBOARD MODE: only accept close commands, ignore everything else
@@ -1029,7 +1033,8 @@ function processStudentSpeech(text){
   let corrected=text;
   const SPEECH_CORRECTIONS=[
     // Πυθαγόρειο θεώρημα — Chrome often mishears this
-    [/μπορε[ιί] ο θε[οό]ς|πιθ[αά]γ[οό]ρ|πυθ[αά]γ[οό]ρ|πηθαγ|μπορει θεος/gi, 'πυθαγόρειο θεώρημα'],
+    [/πυθαγ[οό]ρ[εέ][ιί]?ο?\s*θ[εέ]μα/gi, 'πυθαγόρειο θεώρημα'],
+    [/μπορε[ιί] ο θε[οό]ς|πιθ[αά]γ[οό]ρ|πηθαγ|μπορει θεος/gi, 'πυθαγόρειο θεώρημα'],
     // Common math terms
     [/φωτο σ[υύ]νθεση|φωτός[υύ]νθεση/gi, 'φωτοσύνθεση'],
     [/εξ[ιί]σωση|εξήσωση/gi, 'εξίσωση'],
