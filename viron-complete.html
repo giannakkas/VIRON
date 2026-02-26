@@ -876,7 +876,8 @@ function startCommandListening(){
   
   // Use Whisper (server) if available, Chrome fallback if not
   if(whisperReady){
-    startWhisperListening();
+    // Small delay to let speaker audio fade before mic opens
+    setTimeout(startWhisperListening,300);
   }else{
     startChromeListening();
   }
@@ -888,6 +889,12 @@ let whisperStream=null;
 
 function startWhisperListening(){
   D('  🎙️ Using Whisper STT (server-side)');
+  
+  // Clean up any previous Whisper recording
+  if(whisperRecorder&&whisperRecorder.state==='recording'){try{whisperRecorder.stop()}catch{}}
+  if(whisperStream){whisperStream.getTracks().forEach(t=>t.stop());whisperStream=null}
+  whisperRecorder=null;
+  
   let chunks=[];
   let silenceTimer=null;
   let recordingDone=false;
@@ -1309,6 +1316,9 @@ function processStudentSpeech(text){
     'καλημερα':['[happy] Καλημέρα! Πώς ξύπνησες;','[happy] Καλημέρα! Έτοιμος για μάθημα;','[happy] Καλημέρα! Τι ωραία μέρα!'],
     'καλησπερα':['[happy] Καλησπέρα! Τι κάνεις;','[happy] Καλησπέρα! Πώς πέρασες;','[happy] Καλησπέρα! Πες μου τι θες!'],
     'ευχαριστω':['[happy] Παρακαλώ!','[happy] Τίποτα! Εδώ είμαι!','[happy] Με χαρά!'],
+    'ευχαριστουμε':['[happy] Παρακαλώ!','[happy] Τίποτα!','[happy] Με χαρά!'],
+    'ευχαριστουμε πολυ':['[happy] Παρακαλώ πολύ!','[happy] Εδώ είμαι πάντα!'],
+    'ευχαριστω πολυ':['[happy] Παρακαλώ πολύ!','[happy] Χαίρομαι που βοήθησα!'],
     'τι γινεται':['[happy] Όλα καλά! Εσύ;','[happy] Μια χαρά! Τα λέμε;','[happy] Καλά πάμε! Εσύ;'],
     'τι λεει':['[happy] Εδώ είμαστε! Εσύ;','[happy] Καλά! Τι κάνεις;'],
     'τι νεα':['[happy] Εδώ, σε περιμένω! Εσύ;','[happy] Τα ίδια! Εσένα;'],
