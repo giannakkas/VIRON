@@ -80,6 +80,62 @@ config = load_config()
 app = Flask(__name__, static_folder=ROOT_DIR)
 CORS(app)
 
+# ============ TTS CACHE (eliminates cloud round-trip for repeated phrases) ============
+import hashlib
+_tts_cache = {}  # key: hash(text+lang+speed) -> audio bytes
+_tts_cache_lock = threading.Lock()
+
+def _tts_cache_key(text, lang, speed):
+    return hashlib.md5(f"{text}|{lang}|{speed}".encode()).hexdigest()
+
+def _generate_tts_audio(text, lang='el', speed='normal'):
+    """Generate TTS audio bytes (blocking). Returns (audio_bytes, mimetype) or None."""
+    rate_map = {'slow': '+5%', 'normal': '+10%', 'fast': '+18%'}
+    tts_rate = rate_map.get(speed, '+10%')
+    try:
+        import edge_tts, asyncio, io
+        voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
+        async def gen():
+            communicate = edge_tts.Communicate(text, voice, rate=tts_rate, pitch="-10Hz")
+            buf = io.BytesIO()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            buf.seek(0)
+            return buf
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            buf = loop.run_until_complete(gen())
+            return buf.read()
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+    except Exception as e:
+        print(f"⚠ TTS cache gen error: {e}")
+        return None
+
+def _prewarm_tts_cache():
+    """Pre-generate common ack phrases so they're instant."""
+    phrases = [
+        ("Ναι;", "el"), ("Ναι!", "el"),
+        ("Yes?", "en"), ("Yes!", "en"),
+    ]
+    print("🔥 Pre-warming TTS cache for ack phrases...")
+    for text, lang in phrases:
+        key = _tts_cache_key(text, lang, 'normal')
+        audio = _generate_tts_audio(text, lang, 'normal')
+        if audio:
+            with _tts_cache_lock:
+                _tts_cache[key] = audio
+            print(f"  ✓ Cached: \"{text}\" ({len(audio)} bytes)")
+        else:
+            print(f"  ⚠ Failed to cache: \"{text}\"")
+    print(f"✅ TTS cache ready ({len(_tts_cache)} phrases)")
+
+# Pre-warm in background thread so server starts immediately
+threading.Thread(target=_prewarm_tts_cache, daemon=True).start()
+
 # Global error handler — prevent unhandled exceptions from crashing the server
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -1246,13 +1302,22 @@ except ImportError:
 
 @app.route('/api/tts', methods=['POST'])
 def text_to_speech():
-    """Generate speech audio from text. Returns MP3. Uses edge-tts for male voice, gTTS fallback."""
+    """Generate speech audio from text. Returns MP3. Uses cache for repeated phrases, edge-tts for male voice, gTTS fallback."""
     data = request.get_json()
     if not data or not data.get('text'):
         return jsonify({"error": "No text"}), 400
     text = data['text']
     lang = data.get('lang', 'el')
     speed = data.get('speed', 'normal')  # 'normal', 'slow', 'fast'
+    
+    # Check cache first (instant response for ack phrases and repeated text)
+    cache_key = _tts_cache_key(text, lang, speed)
+    with _tts_cache_lock:
+        cached = _tts_cache.get(cache_key)
+    if cached:
+        print(f"⚡ TTS cache hit: '{text[:50]}' ({len(cached)} bytes)")
+        return Response(cached, mimetype='audio/mpeg',
+                       headers={'Content-Disposition': 'inline'})
     
     # Speed presets: normal for chat, slow for whiteboard teaching
     rate_map = {'slow': '+5%', 'normal': '+10%', 'fast': '+18%'}
@@ -1281,6 +1346,13 @@ def text_to_speech():
             buf = loop.run_until_complete(gen())
             audio_bytes = buf.read()
             print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
+            
+            # Cache short phrases (under 100 chars) for future instant playback
+            if len(text) < 100:
+                with _tts_cache_lock:
+                    _tts_cache[cache_key] = audio_bytes
+                print(f"  💾 Cached for next time: '{text[:50]}'")
+            
             return Response(audio_bytes, mimetype='audio/mpeg',
                            headers={'Content-Disposition': 'inline'})
         finally:
@@ -1311,6 +1383,31 @@ def text_to_speech():
                        headers={'Content-Disposition': 'inline'})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/tts/prewarm', methods=['POST'])
+def tts_prewarm():
+    """Pre-cache TTS for a name so ack is instant. Called when face is recognized."""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name:
+        return jsonify({"status": "no name"}), 200
+    phrases = [
+        (f"Ναι {name};", "el"),
+        (f"Yes {name}?", "en"),
+    ]
+    def _warm():
+        for text, lang in phrases:
+            key = _tts_cache_key(text, lang, 'normal')
+            with _tts_cache_lock:
+                if key in _tts_cache:
+                    continue
+            audio = _generate_tts_audio(text, lang, 'normal')
+            if audio:
+                with _tts_cache_lock:
+                    _tts_cache[key] = audio
+                print(f"  ⚡ Pre-cached ack for {name}: \"{text}\"")
+    threading.Thread(target=_warm, daemon=True).start()
+    return jsonify({"status": "warming", "name": name}), 200
 
 # ============ DEBUG LOGGING ============
 DEBUG_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log")

@@ -1448,6 +1448,13 @@ function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').th
 const pn=document.getElementById("personName");
 if(d.recognized_person){pn.textContent=d.recognized_person;pn.style.color="#00ff88";
 
+// Pre-warm TTS cache for this person's ack phrases
+if(!window._prewarmedNames)window._prewarmedNames=new Set();
+if(!window._prewarmedNames.has(d.recognized_person)){
+  window._prewarmedNames.add(d.recognized_person);
+  fetch('/api/tts/prewarm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:d.recognized_person})}).catch(()=>{});
+}
+
 // Multi-face: greet ALL recognized persons
 const allPersons=d.recognized_persons||[];
 const primaryPerson=d.recognized_person;
