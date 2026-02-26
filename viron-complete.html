@@ -843,250 +843,286 @@ const MAX_CMD_RETRIES=5;
 
 let activeCmdRec=null; // Track active command recognition
 
+// ===== SERVER-SIDE STT (Whisper) =====
+let whisperReady=false;
+// Check if Whisper is available on server
+fetch('/api/stt/status').then(r=>r.json()).then(d=>{whisperReady=d.ready;D('🎙️ Whisper STT: '+(d.ready?'READY':'not available'))}).catch(()=>{});
+// Re-check periodically (model loads in background)
+setInterval(()=>{if(!whisperReady)fetch('/api/stt/status').then(r=>r.json()).then(d=>{if(d.ready){whisperReady=true;D('🎙️ Whisper STT: READY')}}).catch(()=>{})},5000);
+
 function startCommandListening(){
-  D('>>> startCommandListening (inConversation='+inConversation+', retry='+cmdRetryCount+', wbPresenting='+wbPresenting+')');
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR)return;
+  D('>>> startCommandListening (inConversation='+inConversation+', retry='+cmdRetryCount+', wbPresenting='+wbPresenting+', whisper='+whisperReady+')');
   
-  // Don't listen while whiteboard is presenting
-  if(wbPresenting){
-    D('  📋 Whiteboard presenting, skipping');
-    return;
-  }
+  if(wbPresenting){D('  📋 Whiteboard presenting, skipping');return}
+  if(isSpeaking||(synth&&synth.speaking)){D('  Audio still playing, retry in 500ms');setTimeout(startCommandListening,500);return}
   
-  // Don't start if audio is still playing
-  if(isSpeaking||(synth&&synth.speaking)){
-    D('  Audio still playing (isSpeaking='+isSpeaking+'), retry in 500ms');
-    setTimeout(startCommandListening,500);
-    return;
-  }
-  
-  // Kill any existing recognition FIRST
+  // Kill any existing recognition
   try{if(alwaysRec)alwaysRec.abort()}catch{}
   try{if(activeCmdRec)activeCmdRec.abort()}catch{}
   activeCmdRec=null;
   
-  // Prevent infinite restart loops
   const maxRetries=wbO?20:10;
   if(cmdRetryCount>=maxRetries){
     D('  ❌ Too many retries ('+cmdRetryCount+'), ending');
     cmdRetryCount=0;
-    if(wbO){
-      // Don't end conversation, just stop trying to listen
-      D('  📋 Whiteboard still open, waiting for tap or timeout');
-      return;
-    }
+    if(wbO){D('  📋 Whiteboard open, waiting');return}
     if(inConversation)endConversation();
     else{voiceState=VOICE_IDLE;startAlwaysListening()}
     return;
   }
   
-  voiceState=VOICE_ACTIVATED;
-  updateListenUI();
+  voiceState=VOICE_ACTIVATED;updateListenUI();
   document.getElementById("listenText").textContent='Listening...';
   
-  // Start voice recording for verification (DISABLED — conflicts with Chrome SpeechRecognition mic access)
-  // startVoiceRecording();
+  // Use Whisper (server) if available, Chrome fallback if not
+  if(whisperReady){
+    startWhisperListening();
+  }else{
+    startChromeListening();
+  }
+}
+
+// ===== WHISPER-BASED COMMAND LISTENING =====
+let whisperRecorder=null;
+let whisperStream=null;
+
+function startWhisperListening(){
+  D('  🎙️ Using Whisper STT (server-side)');
+  let chunks=[];
+  let silenceTimer=null;
+  let recordingDone=false;
+  
+  // Set up audio analysis for silence detection
+  const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}})
+  .then(stream=>{
+    whisperStream=stream;
+    const recorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
+    whisperRecorder=recorder;
+    
+    // Silence detection via analyser
+    const source=audioCtx.createMediaStreamSource(stream);
+    const analyser=audioCtx.createAnalyser();
+    analyser.fftSize=512;
+    source.connect(analyser);
+    const dataArray=new Uint8Array(analyser.frequencyBinCount);
+    let speechDetected=false;
+    let silenceStart=0;
+    
+    function checkAudio(){
+      if(recordingDone)return;
+      analyser.getByteFrequencyData(dataArray);
+      const avg=dataArray.reduce((a,b)=>a+b,0)/dataArray.length;
+      if(avg>15){
+        speechDetected=true;
+        silenceStart=0;
+        voiceState=VOICE_HEARING;updateListenUI();
+      }else if(speechDetected){
+        if(!silenceStart)silenceStart=Date.now();
+        // 1.2 seconds of silence after speech → stop recording
+        if(Date.now()-silenceStart>1200){
+          D('  🔇 Silence detected, stopping recording');
+          recordingDone=true;
+          try{recorder.stop()}catch{}
+          return;
+        }
+      }
+      requestAnimationFrame(checkAudio);
+    }
+    
+    recorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data)};
+    
+    recorder.onstop=()=>{
+      // Clean up stream
+      if(whisperStream){whisperStream.getTracks().forEach(t=>t.stop());whisperStream=null}
+      try{audioCtx.close()}catch{}
+      
+      if(chunks.length===0){
+        D('  ⚠ No audio chunks');
+        handleWhisperNoSpeech();
+        return;
+      }
+      
+      const blob=new Blob(chunks,{type:'audio/webm'});
+      D('  📤 Sending '+Math.round(blob.size/1024)+'KB to Whisper...');
+      voiceState=VOICE_PROCESSING;updateListenUI();
+      document.getElementById("listenText").textContent='Processing...';
+      
+      const formData=new FormData();
+      formData.append('audio',blob,'speech.webm');
+      
+      fetch('/api/stt',{method:'POST',body:formData})
+      .then(r=>r.json())
+      .then(data=>{
+        if(data.text&&data.text.trim().length>1){
+          handleWhisperResult(data.text.trim(),data.language||'el');
+        }else{
+          D('  🔇 Whisper: no speech detected');
+          handleWhisperNoSpeech();
+        }
+      })
+      .catch(e=>{
+        D('  ⚠ Whisper error: '+e);
+        cmdRetryCount++;
+        if(inConversation)setTimeout(startCommandListening,500);
+        else{voiceState=VOICE_IDLE;startAlwaysListening()}
+      });
+    };
+    
+    recorder.start();
+    checkAudio();
+    D('  🎙️ Whisper recording started');
+    
+    // Hard timeout: 10 seconds max recording
+    setTimeout(()=>{
+      if(!recordingDone){
+        recordingDone=true;
+        D('  ⏰ Max recording time reached');
+        try{recorder.stop()}catch{}
+      }
+    },10000);
+    
+  }).catch(e=>{
+    D('  ❌ Mic access failed: '+e.message);
+    // Fall back to Chrome
+    startChromeListening();
+  });
+}
+
+function handleWhisperResult(speech,lang){
+  D('  🎙️ Whisper result: "'+speech+'" (lang='+lang+')');
+  document.getElementById("listenText").textContent=speech;
+  
+  // Whiteboard mode: only accept close commands
+  if(wbO){
+    if(/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it|κατάλαβα|ωραία|back|πίσω)\b/i.test(speech)){
+      D('  📋 Closing whiteboard via voice');
+      closeWB();
+    }else{
+      D('  📋 Whiteboard open, ignoring');
+      setTimeout(startCommandListening,500);
+    }
+    return;
+  }
+  
+  cmdRetryCount=0;silenceCount=0;
+  if(inConversation)resetConversationTimer();
+  
+  // Strip wake words if in conversation
+  if(inConversation&&matchesWakeWord(speech.toLowerCase())){
+    const after=extractAfterWake(speech);
+    if(after&&after.length>2){speech=after;D('  ✅ Stripped wake word: "'+speech+'"')}
+    else{setTimeout(startCommandListening,300);return}
+  }
+  
+  D('  ✅ Command: "'+speech+'"');
+  cE("thinking");voiceState=VOICE_PROCESSING;updateListenUI();
+  processStudentSpeech(speech);
+}
+
+function handleWhisperNoSpeech(){
+  cmdRetryCount=0;
+  if(inConversation){
+    silenceCount++;
+    if(silenceCount>=3){
+      cE("happy");say(isGreekMode()?"Εδώ είμαι αν με χρειαστείς!":"I'm here if you need me!");
+      inConversation=false;clearTimeout(conversationTimer);
+    }else{
+      D('  🗣️ Silence, still listening...');
+      setTimeout(startCommandListening,300);
+    }
+  }else{
+    voiceState=VOICE_IDLE;startAlwaysListening();
+  }
+}
+
+// ===== CHROME FALLBACK COMMAND LISTENING =====
+function startChromeListening(){
+  D('  🔄 Using Chrome SpeechRecognition (fallback)');
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){D('  ❌ No SpeechRecognition');return}
   
   let cmdRec=new SR();
-  activeCmdRec=cmdRec; // Track globally
+  activeCmdRec=cmdRec;
   cmdRec.continuous=false;
   cmdRec.interimResults=true;
   cmdRec.lang=getSRLang();
   cmdRec.maxAlternatives=3;
   
-  let gotResult=false;
-  let handled=false;
+  let gotResult=false;let handled=false;
   const timeout=inConversation?12000:8000;
   let cmdTimeout=setTimeout(()=>{
     if(!gotResult&&!handled){
-      handled=true;
-      D('  ⏰ Command timeout');
+      handled=true;D('  ⏰ Command timeout');
       try{cmdRec.stop()}catch{}
-      cmdRetryCount=0; // timeout is normal, reset retries
+      cmdRetryCount=0;
       if(inConversation){
         silenceCount++;
         if(silenceCount>=2){
-          cE("happy");
-          say(isGreekMode()?"Εδώ είμαι αν με χρειαστείς!":"I'm here if you need me!");
-          inConversation=false;
-          clearTimeout(conversationTimer);
-        }else{
-          D('  🗣️ Silence in conversation, still listening...');
-          setTimeout(startCommandListening,500);
-        }
-      }else{
-        cE("confused");
-        say(isGreekMode()?"Δεν σε άκουσα!":"I didn't catch that!");
-      }
+          cE("happy");say(isGreekMode()?"Εδώ είμαι αν με χρειαστείς!":"I'm here if you need me!");
+          inConversation=false;clearTimeout(conversationTimer);
+        }else{D('  🗣️ Silence, still listening...');setTimeout(startCommandListening,500)}
+      }else{voiceState=VOICE_IDLE;startAlwaysListening()}
     }
   },timeout);
   
   cmdRec.onresult=(e)=>{
-    let finalText="";
-    let interim="";
-    let confidence=0;
+    let finalText="";let interim="";let confidence=0;
     for(let i=e.resultIndex;i<e.results.length;i++){
-      if(e.results[i].isFinal){
-        finalText+=e.results[i][0].transcript;
-        confidence=e.results[i][0].confidence||0;
-      }
+      if(e.results[i].isFinal){finalText+=e.results[i][0].transcript;confidence=e.results[i][0].confidence||0}
       else interim+=e.results[i][0].transcript;
     }
-    if(finalText||interim){
-      document.getElementById("listenText").textContent=finalText||interim;
-      // Show red speaking bars when voice detected
-      if(interim&&!finalText){voiceState=VOICE_HEARING;updateListenUI()}
-    }
+    if(finalText||interim){document.getElementById("listenText").textContent=finalText||interim;if(interim&&!finalText){voiceState=VOICE_HEARING;updateListenUI()}}
     if(finalText&&finalText.trim().length>1){
       let speech=finalText.trim();
-      D('  🎤 Final: "'+speech+'" (confidence='+confidence.toFixed(2)+')');
-      
-      // NOISE FILTER: reject ambient sounds, low-confidence, and gibberish
-      const NOISE_WORDS=/^(the|a|an|i|um|uh|hmm|mm|oh|ah|ha|huh|mhm|yeah|and|but|so|like|just|it|is|in|on|to|at|do|of|that|this|you|he|she|we|they|was|for|are|as|with|his|my|not|be|her|one|our|out|day|had|has|all|been|if|who|will|no|up|about|their|them|what|would|can|said|each|which|she|or|an|la|da|de|le|el|en|se|na|τα|τη|τον|μια|με|σε|θα|δε|αν|από|στο)$/i;
-      const cleanSpeech=speech.replace(/[^a-zA-Zα-ωά-ώΑ-ΩΆ-Ώ\s]/g,'').trim();
-      const wordCount=cleanSpeech.split(/\s+/).filter(w=>w.length>0).length;
-      
-      // Skip during whiteboard — just need 'ok'
-      if(!wbO){
-        // Reject very short single noise words (only when NOT in conversation)
-        if(!inConversation&&wordCount<=1&&NOISE_WORDS.test(cleanSpeech)){
-          D('  🔇 Noise word: "'+speech+'", ignoring');
-          return;
-        }
-        // Reject low confidence speech (but NOT during active conversation — student is talking to us!)
-        if(!inConversation&&confidence>0&&confidence<0.65){
-          D('  🔇 Low confidence ('+confidence.toFixed(2)+'), ignoring: "'+speech+'"');
-          return;
-        }
-        // When confidence=0.00 (Chrome gives no data, common in Greek mode):
-        // During conversation: ALWAYS allow through (student is talking to us)
-        // Outside conversation: reject if no intent pattern
-        if(confidence===0&&wordCount>=3&&!inConversation){
-          const hasIntent=/\?|τι |πώς |πού |γιατί |πόσο |ποιο |μπορ|εξηγ|πες |μάθ|θέλω |βοήθ|λύσε|δείξε|κάνε|γράψε|βρες |δώσε|φτιάξε|what |how |why |where |when |who |can you|tell me|explain|help|show|find|make|give|solve|teach|quiz|play /i.test(speech);
-          if(!hasIntent){
-            D('  🔇 Zero confidence + no intent pattern ('+wordCount+' words), ignoring: "'+speech+'"');
-            return;
-          }
-        }
-        // Reject single-character gibberish
-        if(cleanSpeech.length<2){
-          D('  🔇 Too short, ignoring');
-          if(inConversation)setTimeout(startCommandListening,300);
-          return;
-        }
-      }
-      
-      // In conversation: still filter obvious gibberish (single meaningless char)
-      if(inConversation&&cleanSpeech.length<2){
-        D('  🔇 Too short in conversation, ignoring');
-        setTimeout(startCommandListening,300);
-        return;
-      }
-      
-      // WHITEBOARD MODE: only accept close commands, ignore everything else
-      if(wbO){
-        if(/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it|κατάλαβα|ωραία|back|πίσω)\b/i.test(speech)){
-          D('  📋 Closing whiteboard via voice: "'+speech+'"');
-          gotResult=true;handled=true;clearTimeout(cmdTimeout);
-          closeWB(); // closeWB handles conversation resume
-        }else{
-          D('  📋 Whiteboard open, ignoring: "'+speech+'"');
-          setTimeout(startCommandListening,500);
-        }
-        return;
-      }
-      
-      gotResult=true;
-      handled=true;
-      clearTimeout(cmdTimeout);
-      cmdRetryCount=0;
-      silenceCount=0;
+      D('  🎤 Chrome: "'+speech+'" (conf='+confidence.toFixed(2)+')');
+      gotResult=true;handled=true;clearTimeout(cmdTimeout);
+      cmdRetryCount=0;silenceCount=0;
       if(inConversation)resetConversationTimer();
       
-      // In conversation mode, strip accidental wake words
+      // Strip wake words
       if(inConversation&&matchesWakeWord(speech.toLowerCase())){
         const after=extractAfterWake(speech);
-        if(after&&after.length>2){
-          speech=after;
-          D('  ✅ Stripped wake word, command: "'+speech+'"');
-        }else{
-          D('  (wake word only in conversation, ignoring)');
-          setTimeout(startCommandListening,300);
-          return;
-        }
+        if(after&&after.length>2)speech=after;
+        else{setTimeout(startCommandListening,300);return}
+      }
+      
+      // Whiteboard mode
+      if(wbO){
+        if(/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready)\b/i.test(speech)){closeWB()}
+        else setTimeout(startCommandListening,500);
+        return;
       }
       
       D('  ✅ Command: "'+speech+'"');
-      cE("thinking");
-      voiceState=VOICE_PROCESSING;
-      updateListenUI();
-      
-      // Voice verification gate
-      stopVoiceRecording();
-      if(voiceVerifyEnabled){
-        verifyVoice().then(vr=>{
-          if(vr.verified){
-            processStudentSpeech(speech);
-          }else{
-            D('  🔇 Voice NOT verified — rejected');
-            cE("confused");
-            say(isGreekMode()?'Δεν σε αναγνωρίζω. Μόνο εγγεγραμμένοι μαθητές μπορούν να μιλήσουν μαζί μου.':'I don\'t recognize your voice. Only registered students can talk to me.');
-          }
-        });
-      }else{
-        processStudentSpeech(speech);
-      }
+      cE("thinking");voiceState=VOICE_PROCESSING;updateListenUI();
+      processStudentSpeech(speech);
     }
   };
   
   cmdRec.onerror=(e)=>{
-    clearTimeout(cmdTimeout);
-    D('  ⚠️ cmd error: '+e.error);
-    // Ignore errors from replaced/old recognition instances
-    if(activeCmdRec!==cmdRec){D('  (stale instance, ignoring)');return}
+    clearTimeout(cmdTimeout);D('  ⚠️ cmd error: '+e.error);
+    if(activeCmdRec!==cmdRec){D('  (stale)');return}
     if(!gotResult&&!handled){
-      handled=true;
-      if(e.error==='aborted'){
-        cmdRetryCount++;
-        const retryDelay=wbO?2500:1000;
-        if(inConversation||wbO)setTimeout(startCommandListening,retryDelay);
-        else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
-      }else if(e.error==='no-speech'){
-        cmdRetryCount=0; // no-speech is normal
-        if(inConversation||wbO)setTimeout(startCommandListening,500);
-        else{voiceState=VOICE_IDLE;startAlwaysListening()}
-      }else if(e.error==='network'){
-        // Network error — Chrome speech API flaky, retry immediately
-        D('  🔄 Network error, fast retry');
-        cmdRetryCount++;
-        if(inConversation||wbO)setTimeout(startCommandListening,200);
-        else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,200)}
-      }else{
-        cmdRetryCount++;
-        if(inConversation||wbO)setTimeout(startCommandListening,1000);
-        else{voiceState=VOICE_IDLE;startAlwaysListening()}
-      }
+      handled=true;cmdRetryCount++;
+      const delay=e.error==='network'?200:e.error==='aborted'?1000:500;
+      if(e.error==='no-speech')cmdRetryCount=0;
+      if(inConversation||wbO)setTimeout(startCommandListening,delay);
+      else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,delay)}
     }
   };
-  
   cmdRec.onend=()=>{
-    clearTimeout(cmdTimeout);
-    if(activeCmdRec!==cmdRec)return; // stale
-    if(!gotResult&&!handled){
-      handled=true;
-      cmdRetryCount++;
+    clearTimeout(cmdTimeout);if(activeCmdRec!==cmdRec)return;
+    if(!gotResult&&!handled){handled=true;cmdRetryCount++;
       if(inConversation||wbO)setTimeout(startCommandListening,800);
       else{voiceState=VOICE_IDLE;startAlwaysListening()}
     }
   };
-  
-  // Small delay to let Chrome release mic from previous instance
   setTimeout(()=>{
-    if(activeCmdRec!==cmdRec)return; // replaced already
+    if(activeCmdRec!==cmdRec)return;
     try{cmdRec.start();D('  🎙️ cmdRec started OK')}catch(e){
-      D('  ❌ cmd start error: '+e.message);
-      cmdRetryCount++;
+      D('  ❌ cmd start error: '+e.message);cmdRetryCount++;
       if(inConversation||wbO)setTimeout(startCommandListening,1500);
       else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,500)}
     }

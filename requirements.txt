@@ -20,6 +20,7 @@ onnxruntime>=1.16             # ONNX inference for face models
 gTTS>=2.5                     # Google Text-to-Speech
 edge-tts>=6.1                 # Microsoft Edge TTS (better quality)
 resemblyzer>=0.1.3            # Voice fingerprint / speaker verification
+faster-whisper>=1.0           # Server-side speech-to-text (replaces Chrome WebSpeech API)
 
 # === Utilities ===
 qrcode[pil]>=7.4              # QR code generation (WiFi setup)

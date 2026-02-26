@@ -9,6 +9,27 @@ from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 import subprocess, json, os, re, time, threading, sys
 
+# ============ WHISPER SPEECH-TO-TEXT ============
+HAS_WHISPER = False
+whisper_model = None
+_whisper_lock = threading.Lock()
+
+def _load_whisper():
+    global HAS_WHISPER, whisper_model
+    try:
+        from faster_whisper import WhisperModel
+        print("🎙️ Loading Whisper STT model (base)...")
+        whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        HAS_WHISPER = True
+        print("✅ Whisper STT ready (base model, CPU)")
+    except ImportError:
+        print("⚠ faster-whisper not installed. Install: pip3 install faster-whisper --break-system-packages")
+    except Exception as e:
+        print(f"⚠ Whisper load error: {e}")
+
+# Load in background so server starts fast
+threading.Thread(target=_load_whisper, daemon=True).start()
+
 try:
     from flask_socketio import SocketIO, emit
     HAS_SOCKETIO = True
@@ -1428,6 +1449,65 @@ def tts_prewarm():
                 print(f"  ⚡ Pre-cached ack for {name}: \"{text}\"")
     threading.Thread(target=_warm, daemon=True).start()
     return jsonify({"status": "warming", "name": name}), 200
+
+# ============ WHISPER SPEECH-TO-TEXT ENDPOINT ============
+@app.route('/api/stt', methods=['POST'])
+def speech_to_text():
+    """Transcribe audio using Whisper. Accepts audio file, returns text."""
+    if not HAS_WHISPER or whisper_model is None:
+        return jsonify({"error": "Whisper not ready", "text": ""}), 503
+    
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({"error": "No audio", "text": ""}), 400
+    
+    import tempfile
+    tmp_path = None
+    try:
+        # Save uploaded audio to temp file
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
+            tmp_path = tmp.name
+            audio_file.save(tmp)
+        
+        t_start = time.time()
+        
+        # Transcribe with Whisper
+        with _whisper_lock:
+            segments, info = whisper_model.transcribe(
+                tmp_path,
+                language=None,  # Auto-detect Greek/English
+                beam_size=3,
+                vad_filter=True,  # Filter silence
+                vad_parameters=dict(min_silence_duration_ms=300)
+            )
+            text_parts = []
+            for segment in segments:
+                text_parts.append(segment.text.strip())
+        
+        text = " ".join(text_parts).strip()
+        elapsed = time.time() - t_start
+        lang = info.language if info else "unknown"
+        
+        print(f"🎙️ Whisper: \"{text[:80]}\" (lang={lang}, {elapsed:.1f}s)")
+        
+        return jsonify({
+            "text": text,
+            "language": lang,
+            "duration": round(elapsed, 2)
+        })
+    except Exception as e:
+        import traceback
+        print(f"⚠ Whisper STT error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "text": ""}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+@app.route('/api/stt/status', methods=['GET'])
+def stt_status():
+    """Check if Whisper STT is ready."""
+    return jsonify({"ready": HAS_WHISPER and whisper_model is not None})
 
 # ============ DEBUG LOGGING ============
 DEBUG_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log")
