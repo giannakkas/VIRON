@@ -867,7 +867,7 @@ function startCommandListening(){
   activeCmdRec=null;
   
   // Prevent infinite restart loops
-  const maxRetries=wbO?20:5;
+  const maxRetries=wbO?20:10;
   if(cmdRetryCount>=maxRetries){
     D('  ❌ Too many retries ('+cmdRetryCount+'), ending');
     cmdRetryCount=0;
@@ -885,8 +885,8 @@ function startCommandListening(){
   updateListenUI();
   document.getElementById("listenText").textContent='Listening...';
   
-  // Start voice recording for verification (if enabled)
-  startVoiceRecording();
+  // Start voice recording for verification (DISABLED — conflicts with Chrome SpeechRecognition mic access)
+  // startVoiceRecording();
   
   let cmdRec=new SR();
   activeCmdRec=cmdRec; // Track globally
@@ -1056,6 +1056,12 @@ function startCommandListening(){
         cmdRetryCount=0; // no-speech is normal
         if(inConversation||wbO)setTimeout(startCommandListening,500);
         else{voiceState=VOICE_IDLE;startAlwaysListening()}
+      }else if(e.error==='network'){
+        // Network error — Chrome speech API flaky, retry immediately
+        D('  🔄 Network error, fast retry');
+        cmdRetryCount++;
+        if(inConversation||wbO)setTimeout(startCommandListening,200);
+        else{voiceState=VOICE_IDLE;setTimeout(startAlwaysListening,200)}
       }else{
         cmdRetryCount++;
         if(inConversation||wbO)setTimeout(startCommandListening,1000);
