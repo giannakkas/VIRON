@@ -1252,7 +1252,7 @@ function processStudentSpeech(text){
   text=corrected;
   
   const lower=text.toLowerCase().trim();
-  const norm=lower.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+  const norm=lower.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[.!?;,·:'"]/g,'').replace(/\s+/g,' ').trim();
   
   // SPECIAL COMMANDS: quiz, homework, points
   // "quiz me", "κάνε μου quiz", "test me"
