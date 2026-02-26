@@ -136,8 +136,8 @@ def _prewarm_tts_cache():
     """Pre-generate common phrases so they're instant."""
     phrases = [
         # Ack phrases (mhm expression)
-        ("Μμ;", "el"), ("Μμ!", "el"),
-        ("Mmhm?", "en"), ("Mmhm!", "en"),
+        ("Ορίστε;", "el"), ("Ορίστε!", "el"),
+        ("Yes?", "en"), ("Yes!", "en"),
         # Common greetings
         ("Γεια σου! Πες Hey VIRON για να μου μιλήσεις!", "el"),
         ("Γεια σου!", "el"),
@@ -1433,8 +1433,8 @@ def tts_prewarm():
     if not name:
         return jsonify({"status": "no name"}), 200
     phrases = [
-        (f"Μμ, {name};", "el"),
-        (f"Mmhm, {name}?", "en"),
+        (f"Ορίστε {name};", "el"),
+        (f"Yes {name}?", "en"),
     ]
     def _warm():
         for text, lang in phrases:
