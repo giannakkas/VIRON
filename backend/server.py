@@ -1296,7 +1296,7 @@ except ImportError:
 
 @app.route('/api/tts', methods=['POST'])
 def text_to_speech():
-    """Generate speech audio from text. Returns MP3. Uses cache for repeated phrases, edge-tts for male voice, gTTS fallback."""
+    """Generate speech audio from text. Returns MP3. Uses cache for repeated phrases, edge-tts streaming for new text, gTTS fallback."""
     data = request.get_json()
     if not data or not data.get('text'):
         return jsonify({"error": "No text"}), 400
@@ -1317,12 +1317,51 @@ def text_to_speech():
     rate_map = {'slow': '+5%', 'normal': '+10%', 'fast': '+18%'}
     tts_rate = rate_map.get(speed, '+10%')
     
-    # Try edge-tts first (has male Greek voice)
+    # Try edge-tts CLI subprocess (streams audio via pipe — much faster than Python async)
+    try:
+        import shutil
+        if shutil.which('edge-tts'):
+            voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
+            print(f"🎙️ edge-tts CLI: voice={voice}, rate={tts_rate}, text='{text[:50]}'")
+            
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+                tmp_path = tmp.name
+            
+            t_start = time.time()
+            proc = subprocess.run(
+                ['edge-tts', '--voice', voice, '--rate', tts_rate, '--pitch', '-10Hz',
+                 '--text', text, '--write-media', tmp_path],
+                capture_output=True, timeout=15
+            )
+            
+            if proc.returncode == 0 and os.path.exists(tmp_path):
+                with open(tmp_path, 'rb') as f:
+                    audio_bytes = f.read()
+                os.unlink(tmp_path)
+                elapsed = time.time() - t_start
+                print(f"✅ edge-tts CLI OK: {len(audio_bytes)} bytes in {elapsed:.1f}s")
+                
+                # Cache short phrases for future instant playback
+                if len(text) < 100:
+                    with _tts_cache_lock:
+                        _tts_cache[cache_key] = audio_bytes
+                    print(f"  💾 Cached for next time: '{text[:50]}'")
+                
+                return Response(audio_bytes, mimetype='audio/mpeg',
+                               headers={'Content-Disposition': 'inline'})
+            else:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                print(f"⚠ edge-tts CLI failed: {proc.stderr.decode()[:200]}")
+    except Exception as e:
+        print(f"⚠ edge-tts CLI error: {e}")
+    
+    # Fallback: edge-tts Python API
     try:
         import edge_tts, asyncio, io
-        # Male voices: el-GR-NestorasNeural (Greek), en-GB-RyanNeural (soft British male)
         voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
-        print(f"🎙️ edge-tts: voice={voice}, rate={tts_rate}, text='{text[:50]}'")
+        print(f"🎙️ edge-tts Python API fallback: voice={voice}, text='{text[:50]}'")
         
         async def gen():
             communicate = edge_tts.Communicate(text, voice, rate=tts_rate, pitch="-10Hz")
@@ -1335,13 +1374,11 @@ def text_to_speech():
         
         buf = asyncio.run(gen())
         audio_bytes = buf.read()
-        print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
+        print(f"✅ edge-tts Python OK: {len(audio_bytes)} bytes")
         
-        # Cache short phrases (under 100 chars) for future instant playback
         if len(text) < 100:
             with _tts_cache_lock:
                 _tts_cache[cache_key] = audio_bytes
-            print(f"  💾 Cached for next time: '{text[:50]}'")
         
         return Response(audio_bytes, mimetype='audio/mpeg',
                        headers={'Content-Disposition': 'inline'})

@@ -455,6 +455,68 @@ document.addEventListener('keydown',unlockAudio,{once:false});
 
 function sayServerTTS(text,lang,speed){
   D('  sayServerTTS('+lang+', speed='+(speed||'normal')+'): "'+text.substring(0,60)+'"');
+  
+  // Split long text into sentences for pipelining (play first while fetching rest)
+  const sentences=text.match(/[^.!;?·]+[.!;?·]+|[^.!;?·]+$/g)||[text];
+  // Only pipeline if we have multiple sentences and text is long enough
+  if(sentences.length>1 && text.length>60){
+    D('  📢 Pipelining '+sentences.length+' sentences');
+    let queue=sentences.map(s=>s.trim()).filter(s=>s.length>0);
+    let prefetched={}; // index -> blob
+    
+    // Prefetch sentence audio
+    function prefetchSentence(idx){
+      if(idx>=queue.length||prefetched[idx])return;
+      fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:queue[idx],lang:lang||'en',speed:speed||'normal'})})
+      .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+      .then(blob=>{prefetched[idx]=blob;D('  📦 Prefetched sentence '+(idx+1)+'/'+queue.length)})
+      .catch(e=>D('  ⚠ Prefetch failed for sentence '+idx+': '+e));
+    }
+    
+    // Play sentences in order
+    function playSentence(idx){
+      if(idx>=queue.length){
+        D('  ✅ All sentences played');
+        isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,600);
+        return;
+      }
+      function playBlob(blob){
+        const url=URL.createObjectURL(blob);
+        const a=new Audio(url);
+        currentAudio=a;
+        a.volume=(document.getElementById("volSlider")?.value||75)/100;
+        // Prefetch next 2 sentences while this one plays
+        prefetchSentence(idx+1);
+        prefetchSentence(idx+2);
+        a.onended=()=>{URL.revokeObjectURL(url);playSentence(idx+1)};
+        a.onerror=()=>{URL.revokeObjectURL(url);playSentence(idx+1)};
+        a.play().then(()=>{if(idx===0)startT()}).catch(()=>playSentence(idx+1));
+      }
+      
+      if(prefetched[idx]){
+        playBlob(prefetched[idx]);
+      } else {
+        // Fetch this sentence now
+        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:queue[idx],lang:lang||'en',speed:speed||'normal'})})
+        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+        .then(blob=>playBlob(blob))
+        .catch(e=>{D('  ⚠ Sentence '+idx+' failed: '+e);playSentence(idx+1)});
+      }
+    }
+    
+    // Start: fetch first 2 sentences immediately, play first as soon as ready
+    prefetchSentence(0);
+    prefetchSentence(1);
+    // Wait for first sentence then start playing
+    function waitAndPlay(){
+      if(prefetched[0]){playSentence(0);return}
+      setTimeout(waitAndPlay,50);
+    }
+    waitAndPlay();
+    return;
+  }
+  
+  // Short text: single request (original behavior)
   fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,lang:lang||'en',speed:speed||'normal'})})
   .then(r=>{
     D('  TTS response: '+r.status);
