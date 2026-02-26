@@ -90,8 +90,8 @@ def _tts_cache_key(text, lang, speed):
 
 def _generate_tts_audio(text, lang='el', speed='normal'):
     """Generate TTS audio bytes (blocking). Returns (audio_bytes, mimetype) or None."""
-    rate_map = {'slow': '+5%', 'normal': '+10%', 'fast': '+18%'}
-    tts_rate = rate_map.get(speed, '+10%')
+    rate_map = {'slow': '+8%', 'normal': '+18%', 'fast': '+28%'}
+    tts_rate = rate_map.get(speed, '+18%')
     try:
         import edge_tts, asyncio, io
         voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
@@ -112,12 +112,25 @@ def _generate_tts_audio(text, lang='el', speed='normal'):
         return None
 
 def _prewarm_tts_cache():
-    """Pre-generate common ack phrases so they're instant."""
+    """Pre-generate common phrases so they're instant."""
     phrases = [
+        # Ack phrases
         ("Ναι;", "el"), ("Ναι!", "el"),
         ("Yes?", "en"), ("Yes!", "en"),
+        # Common greetings
+        ("Γεια! Είμαι ο Βίρον!", "el"),
+        ("Γεια σου!", "el"),
+        ("Γεια σου! Πώς είσαι;", "el"),
+        ("Γεια! Τι κάνεις;", "el"),
+        ("Χαίρομαι πολύ!", "el"),
+        ("Γεια! Τι νέα;", "el"),
+        ("Τι κάνεις;", "el"),
+        ("Hey! I'm VIRON!", "en"),
+        ("Hi there!", "en"),
+        ("You're welcome!", "en"),
+        ("No problem!", "en"),
     ]
-    print("🔥 Pre-warming TTS cache for ack phrases...")
+    print("🔥 Pre-warming TTS cache for common phrases...")
     for text, lang in phrases:
         key = _tts_cache_key(text, lang, 'normal')
         audio = _generate_tts_audio(text, lang, 'normal')
@@ -1314,8 +1327,8 @@ def text_to_speech():
                        headers={'Content-Disposition': 'inline'})
     
     # Speed presets: normal for chat, slow for whiteboard teaching
-    rate_map = {'slow': '+5%', 'normal': '+10%', 'fast': '+18%'}
-    tts_rate = rate_map.get(speed, '+10%')
+    rate_map = {'slow': '+8%', 'normal': '+18%', 'fast': '+28%'}
+    tts_rate = rate_map.get(speed, '+18%')
     
     # Try edge-tts CLI subprocess (streams audio via pipe — much faster than Python async)
     try:
@@ -1343,7 +1356,7 @@ def text_to_speech():
                 print(f"✅ edge-tts CLI OK: {len(audio_bytes)} bytes in {elapsed:.1f}s")
                 
                 # Cache short phrases for future instant playback
-                if len(text) < 100:
+                if len(text) < 200:
                     with _tts_cache_lock:
                         _tts_cache[cache_key] = audio_bytes
                     print(f"  💾 Cached for next time: '{text[:50]}'")
@@ -1376,7 +1389,7 @@ def text_to_speech():
         audio_bytes = buf.read()
         print(f"✅ edge-tts Python OK: {len(audio_bytes)} bytes")
         
-        if len(text) < 100:
+        if len(text) < 200:
             with _tts_cache_lock:
                 _tts_cache[cache_key] = audio_bytes
         

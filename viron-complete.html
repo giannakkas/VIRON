@@ -459,7 +459,7 @@ function sayServerTTS(text,lang,speed){
   // Split long text into sentences for pipelining (play first while fetching rest)
   const sentences=text.match(/[^.!;?·]+[.!;?·]+|[^.!;?·]+$/g)||[text];
   // Only pipeline if we have multiple sentences and text is long enough
-  if(sentences.length>1 && text.length>60){
+  if(sentences.length>1 && text.length>30){
     D('  📢 Pipelining '+sentences.length+' sentences');
     let queue=sentences.map(s=>s.trim()).filter(s=>s.length>0);
     let prefetched={}; // index -> blob
