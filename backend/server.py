@@ -103,16 +103,12 @@ def _generate_tts_audio(text, lang='el', speed='normal'):
                     buf.write(chunk["data"])
             buf.seek(0)
             return buf
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            buf = loop.run_until_complete(gen())
-            return buf.read()
-        finally:
-            loop.close()
-            asyncio.set_event_loop(None)
+        buf = asyncio.run(gen())
+        return buf.read()
     except Exception as e:
         print(f"⚠ TTS cache gen error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def _prewarm_tts_cache():
@@ -541,9 +537,7 @@ def test_tts():
                     buf.write(chunk["data"])
             buf.seek(0)
             return buf
-        loop = asyncio.new_event_loop()
-        buf = loop.run_until_complete(gen())
-        loop.close()
+        buf = asyncio.run(gen())
         return Response(buf.read(), mimetype='audio/mpeg')
     except Exception as e:
         return f"edge-tts error: {e}", 500
@@ -1339,29 +1333,18 @@ def text_to_speech():
             buf.seek(0)
             return buf
         
-        loop = None
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            buf = loop.run_until_complete(gen())
-            audio_bytes = buf.read()
-            print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
-            
-            # Cache short phrases (under 100 chars) for future instant playback
-            if len(text) < 100:
-                with _tts_cache_lock:
-                    _tts_cache[cache_key] = audio_bytes
-                print(f"  💾 Cached for next time: '{text[:50]}'")
-            
-            return Response(audio_bytes, mimetype='audio/mpeg',
-                           headers={'Content-Disposition': 'inline'})
-        finally:
-            if loop:
-                try:
-                    loop.close()
-                except:
-                    pass
-                asyncio.set_event_loop(None)
+        buf = asyncio.run(gen())
+        audio_bytes = buf.read()
+        print(f"✅ edge-tts OK: {len(audio_bytes)} bytes")
+        
+        # Cache short phrases (under 100 chars) for future instant playback
+        if len(text) < 100:
+            with _tts_cache_lock:
+                _tts_cache[cache_key] = audio_bytes
+            print(f"  💾 Cached for next time: '{text[:50]}'")
+        
+        return Response(audio_bytes, mimetype='audio/mpeg',
+                       headers={'Content-Disposition': 'inline'})
     except ImportError:
         print("⚠ edge-tts not installed, using gTTS (pip install edge-tts)")
     except Exception as e:
