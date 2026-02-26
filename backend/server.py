@@ -1472,10 +1472,15 @@ def speech_to_text():
         t_start = time.time()
         
         # Transcribe with Whisper
+        # Use language hint from client, default to Greek
+        hint_lang = request.form.get('lang', 'el')
+        # Map to Whisper language codes
+        whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None
+        
         with _whisper_lock:
             segments, info = whisper_model.transcribe(
                 tmp_path,
-                language=None,  # Auto-detect Greek/English
+                language=whisper_lang,  # Force language instead of auto-detect
                 beam_size=3,
                 vad_filter=True,  # Filter silence
                 vad_parameters=dict(min_silence_duration_ms=300)

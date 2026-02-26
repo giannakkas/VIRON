@@ -951,6 +951,7 @@ function startWhisperListening(){
       
       const formData=new FormData();
       formData.append('audio',blob,'speech.webm');
+      formData.append('lang',isGreekMode()?'el':'en');
       
       fetch('/api/stt',{method:'POST',body:formData})
       .then(r=>r.json())
