@@ -114,19 +114,19 @@ def _generate_tts_audio(text, lang='el', speed='normal'):
 def _prewarm_tts_cache():
     """Pre-generate common phrases so they're instant."""
     phrases = [
-        # Ack phrases
-        ("Ναι;", "el"), ("Ναι!", "el"),
-        ("Yes?", "en"), ("Yes!", "en"),
+        # Ack phrases (mhm expression)
+        ("Μμ;", "el"), ("Μμ!", "el"),
+        ("Mmhm?", "en"), ("Mmhm!", "en"),
         # Common greetings
-        ("Γεια! Είμαι ο Βίρον!", "el"),
+        ("Γεια σου! Πες Hey VIRON για να μου μιλήσεις!", "el"),
         ("Γεια σου!", "el"),
         ("Γεια σου! Πώς είσαι;", "el"),
         ("Γεια! Τι κάνεις;", "el"),
         ("Χαίρομαι πολύ!", "el"),
         ("Γεια! Τι νέα;", "el"),
         ("Τι κάνεις;", "el"),
-        ("Hey! I'm VIRON!", "en"),
-        ("Hi there!", "en"),
+        ("Ε, γεια! Χαίρομαι που σε βλέπω!", "el"),
+        ("Hi there! Say Hey VIRON to talk to me!", "en"),
         ("You're welcome!", "en"),
         ("No problem!", "en"),
     ]
@@ -1396,26 +1396,13 @@ def text_to_speech():
         return Response(audio_bytes, mimetype='audio/mpeg',
                        headers={'Content-Disposition': 'inline'})
     except ImportError:
-        print("⚠ edge-tts not installed, using gTTS (pip install edge-tts)")
+        print("⚠ edge-tts not installed")
+        return jsonify({"error": "edge-tts not available"}), 500
     except Exception as e:
         import traceback
         print(f"⚠ edge-tts error: {e}")
         traceback.print_exc()
-        print("Falling back to gTTS")
-    
-    # Fallback: gTTS
-    if not HAS_GTTS:
-        return jsonify({"error": "No TTS engine available"}), 500
-    try:
-        import io
-        tts = gTTS(text=text, lang=lang, slow=False)
-        buf = io.BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        return Response(buf.read(), mimetype='audio/mpeg',
-                       headers={'Content-Disposition': 'inline'})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"TTS failed: {e}"}), 500
 
 @app.route('/api/tts/prewarm', methods=['POST'])
 def tts_prewarm():
@@ -1425,8 +1412,8 @@ def tts_prewarm():
     if not name:
         return jsonify({"status": "no name"}), 200
     phrases = [
-        (f"Ναι {name};", "el"),
-        (f"Yes {name}?", "en"),
+        (f"Μμ, {name};", "el"),
+        (f"Mmhm, {name}?", "en"),
     ]
     def _warm():
         for text, lang in phrases:
