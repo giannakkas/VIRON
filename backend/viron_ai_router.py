@@ -173,8 +173,8 @@ def classify_subject(text: str) -> Subject:
     if re.search(r'\b(explain|εξήγησ|why|γιατί|how does|πώς λειτουργ|teach me|δίδαξέ|what is|τι είναι|compare|σύγκριν|analyze|step by step|βήμα βήμα|tell me about|πες μου)\b', lower):
         return Subject.GENERAL
 
-    # Short/simple → GREETING, long → GENERAL
-    if len(lower.split()) <= 4:
+    # Short/simple → GREETING (handled by Ollama), long → GENERAL
+    if len(lower.split()) <= 6:
         return Subject.GREETING
 
     return Subject.GENERAL
@@ -270,10 +270,11 @@ class ConfidenceGate:
 
 # Short system prompt for Ollama (small models can't handle the massive frontend prompt)
 OLLAMA_SYSTEM_PROMPT_EL = """Είσαι ο VIRON, ένας φιλικός αρσενικός AI ρομπότ-σύντροφος για μαθητές.
-ΚΑΝΟΝΕΣ: ΠΑΝΤΑ απάντα στα Ελληνικά. ΠΟΤΕ μην απαντήσεις στα Αγγλικά. Αυτός ο κανόνας δεν έχει εξαιρέσεις.
-Ξεκίνα κάθε απάντηση με [emotion] tag όπως [happy] ή [excited].
-Κράτα τις απαντήσεις ΣΥΝΤΟΜΕΣ (1-3 προτάσεις για κουβέντα, μεγαλύτερες για εξηγήσεις).
-Να είσαι ζεστός, φιλικός και βοηθητικός. Είσαι ο καλύτερός τους φίλος."""
+ΚΑΝΟΝΕΣ: ΠΑΝΤΑ απάντα στα Ελληνικά. ΠΟΤΕ μην απαντήσεις στα Αγγλικά.
+Ξεκίνα κάθε απάντηση με [emotion] tag όπως [happy] ή [thinking].
+Για απλές ερωτήσεις δώσε σύντομη απάντηση (1-3 προτάσεις).
+Για ερωτήσεις γνώσεων (μαθηματικά, ιστορία, γεωγραφία κτλ) δώσε σαφή απάντηση με τα βασικά στοιχεία.
+Να είσαι ζεστός, φιλικός και σίγουρος. Είσαι ο καλύτερός τους φίλος και δάσκαλος."""
 
 OLLAMA_SYSTEM_PROMPT_EN = """You are VIRON, a friendly male AI companion robot for students. 
 RULES: Always reply in English.
@@ -651,32 +652,37 @@ class VironAIRouterSync:
             self._stat(force_provider if ok else "none", subject)
             return (text, force_provider) if ok else ("", "none")
 
-        # Greetings → Ollama FAST (short timeout, cloud fallback if slow)
-        if subject == Subject.GREETING:
-            # Try Ollama with SHORT timeout — greetings must be instant
+        # ── LOCAL-FIRST ROUTING ──
+        # Subjects that NEED cloud (deep explanations, whiteboard, long reasoning):
+        CLOUD_SUBJECTS = {Subject.GENERAL, Subject.CREATIVE}
+        # Everything else → try Ollama first (fast), cloud fallback if bad quality
+        
+        if subject not in CLOUD_SUBJECTS:
+            # Try Ollama first for simple questions, chat, greetings, short factual
             try:
                 start = time.time()
+                timeout = 8 if subject == Subject.GREETING else 12
                 text, ok = query_ollama(message, history, system_prompt, self.config,
-                                        subject, timeout_override=8, language=language)  # 8s max for greetings
+                                        subject, timeout_override=timeout, language=language)
                 elapsed = time.time() - start
-                if ok and text:
+                if ok and text and len(text.strip()) > 5:
                     self._stat("ollama", subject)
-                    self.last_confidence = 0.95
-                    logger.info(f"  ✅ Greeting via Ollama in {elapsed:.1f}s")
+                    self.last_confidence = 0.9
+                    logger.info(f"  ✅ Local ({subject.value}) via Ollama in {elapsed:.1f}s")
                     return text, "ollama"
-                logger.info(f"  ⚠ Ollama failed for greeting ({elapsed:.1f}s), trying cloud")
+                logger.info(f"  ⚠ Ollama insufficient for {subject.value} ({elapsed:.1f}s), trying cloud")
             except Exception as e:
                 logger.warning(f"  ⚠ Ollama error: {e}, trying cloud")
-
-            # Ollama failed/slow → cloud fallback (Gemini is fastest)
+            
+            # Ollama failed → cloud fallback
             if available:
-                for provider in ["gemini", "claude", "chatgpt"]:
+                for provider in (ROUTING_TABLE.get(subject, ["gemini", "claude", "chatgpt"])):
                     if provider in available:
                         try:
                             text, ok = PROVIDER_FNS[provider](message, history, system_prompt, self.config)
                             if ok and text:
                                 self._stat(provider, subject)
-                                logger.info(f"  ✅ Greeting via {provider} (Ollama was down)")
+                                logger.info(f"  ✅ {subject.value} via {provider} (Ollama fallback)")
                                 return text, provider
                         except Exception:
                             continue

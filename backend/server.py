@@ -111,8 +111,8 @@ def _tts_cache_key(text, lang, speed):
 
 def _generate_tts_audio(text, lang='el', speed='normal'):
     """Generate TTS audio bytes (blocking). Returns (audio_bytes, mimetype) or None."""
-    rate_map = {'slow': '+8%', 'normal': '+18%', 'fast': '+28%'}
-    tts_rate = rate_map.get(speed, '+18%')
+    rate_map = {'slow': '+10%', 'normal': '+15%', 'fast': '+25%'}
+    tts_rate = rate_map.get(speed, '+15%')
     try:
         import edge_tts, asyncio, io
         voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
@@ -566,7 +566,7 @@ def test_tts():
     try:
         import edge_tts, asyncio, io
         async def gen():
-            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+18%", pitch="-10Hz")
+            communicate = edge_tts.Communicate("Γεια σου! Είμαι ο VIRON.", "el-GR-NestorasNeural", rate="+15%", pitch="-10Hz")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -1353,8 +1353,8 @@ def text_to_speech():
                        headers={'Content-Disposition': 'inline'})
     
     # Speed presets: normal for chat, slow for whiteboard teaching
-    rate_map = {'slow': '+8%', 'normal': '+18%', 'fast': '+28%'}
-    tts_rate = rate_map.get(speed, '+18%')
+    rate_map = {'slow': '+10%', 'normal': '+15%', 'fast': '+25%'}
+    tts_rate = rate_map.get(speed, '+15%')
     
     # Try edge-tts CLI subprocess (streams audio via pipe — much faster than Python async)
     try:

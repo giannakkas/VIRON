@@ -793,7 +793,7 @@ function startAlwaysListening(){
         .catch(e=>{
           D('  Ack TTS failed: '+e+', using browser voice');
           const ack=new SpeechSynthesisUtterance(ackText);
-          ack.lang="en-US";if(enV)ack.voice=enV;
+          ack.lang=isGreekMode()?'el-GR':'en-US';if(isGreekMode()&&gkV)ack.voice=gkV;else if(enV)ack.voice=enV;
           ack.volume=0.6;ack.rate=1.0;ack.pitch=0.85;
           ack.onend=()=>startCommandListening();
           ack.onerror=()=>startCommandListening();
