@@ -269,11 +269,20 @@ class ConfidenceGate:
 # ═══════════════════════════════════════════════════════════════════
 
 # Short system prompt for Ollama (small models can't handle the massive frontend prompt)
-OLLAMA_SYSTEM_PROMPT = """You are VIRON, a friendly male AI companion robot for students. 
-RULES: If the student speaks Greek, reply in Greek. If English, reply in English.
+OLLAMA_SYSTEM_PROMPT_EL = """Είσαι ο VIRON, ένας φιλικός αρσενικός AI ρομπότ-σύντροφος για μαθητές.
+ΚΑΝΟΝΕΣ: ΠΑΝΤΑ απάντα στα Ελληνικά. ΠΟΤΕ μην απαντήσεις στα Αγγλικά. Αυτός ο κανόνας δεν έχει εξαιρέσεις.
+Ξεκίνα κάθε απάντηση με [emotion] tag όπως [happy] ή [excited].
+Κράτα τις απαντήσεις ΣΥΝΤΟΜΕΣ (1-3 προτάσεις για κουβέντα, μεγαλύτερες για εξηγήσεις).
+Να είσαι ζεστός, φιλικός και βοηθητικός. Είσαι ο καλύτερός τους φίλος."""
+
+OLLAMA_SYSTEM_PROMPT_EN = """You are VIRON, a friendly male AI companion robot for students. 
+RULES: Always reply in English.
 Start every response with [emotion] tag like [happy] or [excited].
 Keep responses SHORT (1-3 sentences for chat, longer for explanations).
 Be warm, friendly, and helpful. You're their best friend."""
+
+def get_ollama_system_prompt(language: str = "el") -> str:
+    return OLLAMA_SYSTEM_PROMPT_EL if language == "el" else OLLAMA_SYSTEM_PROMPT_EN
 
 
 # ── Local Model Strategy ──
@@ -294,12 +303,12 @@ Be warm, friendly, and helpful. You're their best friend."""
 
 
 def query_ollama(message: str, history: list, system_prompt: str, config: RouterConfig,
-                 subject: Subject = None, timeout_override: int = None) -> Tuple[str, bool]:
+                 subject: Subject = None, timeout_override: int = None, language: str = "el") -> Tuple[str, bool]:
     """Query local Ollama — uses the primary model (stays in RAM for speed)."""
     model = config.ollama_model
     timeout = timeout_override or config.local_timeout  # ONE model, always loaded, instant response
 
-    messages = [{"role": "system", "content": OLLAMA_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": get_ollama_system_prompt(language)}]
     messages.extend(history[-4:])
     messages.append({"role": "user", "content": message})
 
@@ -610,7 +619,7 @@ class VironAIRouterSync:
         return out
 
     def chat(self, message: str, history: list = None, system_prompt: str = "",
-             force_provider: str = None) -> Tuple[str, str]:
+             force_provider: str = None, force_language: str = "") -> Tuple[str, str]:
         """Main entry. Returns (response, provider_name)."""
         history = history or []
         self.stats["total"] += 1
@@ -628,7 +637,7 @@ class VironAIRouterSync:
 
         # Classify
         subject = classify_subject(message)
-        language = detect_language(message)
+        language = force_language if force_language else detect_language(message)
         self.last_subject = subject.value
         self.last_language = language
         self.last_strategy = self.strategy.value
@@ -648,7 +657,7 @@ class VironAIRouterSync:
             try:
                 start = time.time()
                 text, ok = query_ollama(message, history, system_prompt, self.config,
-                                        subject, timeout_override=8)  # 8s max for greetings
+                                        subject, timeout_override=8, language=language)  # 8s max for greetings
                 elapsed = time.time() - start
                 if ok and text:
                     self._stat("ollama", subject)
@@ -671,11 +680,11 @@ class VironAIRouterSync:
                                 return text, provider
                         except Exception:
                             continue
-            return "[happy] Hey!", "fallback"
+            return ("[happy] Γεια!" if language == "el" else "[happy] Hey!"), "fallback"
 
         # Route via strategy
         if not available:
-            text, ok = query_ollama(message, history, system_prompt, self.config, subject)
+            text, ok = query_ollama(message, history, system_prompt, self.config, subject, language=language)
             self._stat("ollama" if ok else "none", subject)
             return (text, "ollama") if ok else ("", "none")
 
@@ -685,7 +694,7 @@ class VironAIRouterSync:
         self._stat(provider, subject)
 
         if not text:
-            text, ok = query_ollama(message, history, system_prompt, self.config, subject)
+            text, ok = query_ollama(message, history, system_prompt, self.config, subject, language=language)
             if ok:
                 self._stat("ollama", subject)
                 return text, "ollama"

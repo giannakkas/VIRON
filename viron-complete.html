@@ -438,7 +438,8 @@ function say(text,speed){
   if(!clean){D('  say: empty after cleanup');stopT();startWakeListener();return}
   
   // ALL speech → server edge-tts (male voice) with browser fallback
-  const lang=isGr(clean)?'el':'en';
+  // When Greek mode: ALWAYS use Greek TTS, even if AI accidentally responded in English
+  const lang=isGreekMode()?'el':(isGr(clean)?'el':'en');
   sayServerTTS(clean,lang,speed||'normal');
 }
 
@@ -1412,7 +1413,9 @@ async function sendMessage(text){
 
 PERSONALITY: Warm, calm, educated gentleman. Best friend who's incredibly smart. Loyal, articulate, sometimes lovingly sarcastic. You have your own opinions and personality — NEVER give the same answer twice. Be creative, spontaneous, and varied in how you respond.
 
-CRITICAL LANGUAGE RULE: If the student speaks Greek, you MUST reply in Greek (modern δημοτική). If English, reply in English. ALWAYS match the student's language.
+${isGreekMode() 
+? 'ΓΛΩΣΣΑ: ΠΑΝΤΑ απάντα στα Ελληνικά. ΠΟΤΕ μην απαντήσεις στα Αγγλικά. Χρησιμοποίησε μόνο σύγχρονη δημοτική Ελληνικά. Αυτός ο κανόνας ισχύει ΠΑΝΤΑ χωρίς εξαίρεση.'
+: 'LANGUAGE: Always reply in English.'}
 
 RESPONSE LENGTH:
 - Simple greetings/chat ("τι κάνεις", "how are you", casual talk): MAX 1 sentence. Be quick, warm, natural. Like texting a friend.
@@ -1462,7 +1465,7 @@ ${personName ? `The student's name is ${personName}. Use their name naturally in
 YOUTUBE — When asked to play music: [YOUTUBE:videoId:Title - Artist]
 
 Be real. Be warm. Be their brilliant friend.`,
-    messages:msgs.map(m=>({role:m.role,content:m.content}))})});
+    messages:msgs.map(m=>({role:m.role,content:m.content})),language:isGreekMode()?'el':'en'})});
     D('  API status: '+r.status);
     if(!r.ok){
       const errText=await r.text();
@@ -1471,7 +1474,7 @@ Be real. Be warm. Be their brilliant friend.`,
     }
     const d=await r.json();
     D('  API response: '+JSON.stringify(d).substring(0,300));
-    let t=d.content?.filter(c=>c.type==="text").map(c=>c.text).join("")||"[confused] Hmm!";
+    let t=d.content?.filter(c=>c.type==="text").map(c=>c.text).join("")||(isGreekMode()?"[confused] Χμμ!":"[confused] Hmm!");
     D('  AI text: "'+t.substring(0,200)+'"');
     // Parse emotion tag — handles [happy], [emotion_name:happy], [emotion:happy]
     let em=t.match(/^\[(?:emotion_?(?:name)?:)?(\w+)\]/);

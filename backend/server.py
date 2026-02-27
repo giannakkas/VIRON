@@ -450,7 +450,8 @@ def chat_proxy():
     system_prompt = data.get("system", "")
     history = data.get("messages", [])[:-1]  # all except last (which is the user msg)
     conversation_id = data.get("conversation_id", "")
-    print(f"\n💬 CHAT: '{user_msg[:80]}'")
+    forced_lang = data.get("language", "")  # 'el' or 'en' — forced by frontend
+    print(f"\n💬 CHAT: '{user_msg[:80]}' (lang={forced_lang})")
 
     # ── Inject student memory into system prompt ──
     student_name = ""
@@ -471,6 +472,7 @@ def chat_proxy():
                 message=user_msg,
                 history=history,
                 system_prompt=system_prompt,
+                force_language=forced_lang,
             )
             if reply and len(reply.strip()) > 2:
                 print(f"  ✅ {provider} | 📚 {ai_router.last_subject} | 🎛️ {ai_router.last_strategy} | 🌐 {ai_router.last_language} | conf:{ai_router.last_confidence:.2f}")
@@ -513,7 +515,7 @@ def chat_proxy():
     # ── Fallback: direct Anthropic API (if router fails completely) ──
     if not HAS_REQUESTS:
         return jsonify({
-            "content": [{"type": "text", "text": "[confused] My brain isn't connected!"}],
+            "content": [{"type": "text", "text": "[confused] Ο εγκέφαλός μου δεν είναι συνδεδεμένος!" if forced_lang == "el" else "[confused] My brain isn't connected!"}],
             "provider": "none",
         })
 
@@ -523,7 +525,7 @@ def chat_proxy():
     if not api_key:
         print("  ❌ No API key!")
         return jsonify({
-            "content": [{"type": "text", "text": "[confused] No API key configured!"}],
+            "content": [{"type": "text", "text": "[confused] Δεν έχω κλειδί API!" if forced_lang == "el" else "[confused] No API key configured!"}],
             "provider": "none",
         })
     try:
