@@ -908,27 +908,31 @@ function startWhisperListening(){
     const recorder=new MediaRecorder(stream,{mimeType:'audio/webm;codecs=opus'});
     whisperRecorder=recorder;
     
-    // Silence detection via analyser
+    // Silence detection via analyser (time domain = more reliable)
     const source=audioCtx.createMediaStreamSource(stream);
     const analyser=audioCtx.createAnalyser();
-    analyser.fftSize=512;
+    analyser.fftSize=2048;
     source.connect(analyser);
-    const dataArray=new Uint8Array(analyser.frequencyBinCount);
+    const dataArray=new Uint8Array(analyser.fftSize);
     let speechDetected=false;
     let silenceStart=0;
     
     function checkAudio(){
       if(recordingDone)return;
-      analyser.getByteFrequencyData(dataArray);
-      const avg=dataArray.reduce((a,b)=>a+b,0)/dataArray.length;
-      if(avg>15){
+      analyser.getByteTimeDomainData(dataArray);
+      // Calculate RMS amplitude (128 = silence in time domain)
+      let sum=0;
+      for(let i=0;i<dataArray.length;i++){const v=dataArray[i]-128;sum+=v*v}
+      const rms=Math.sqrt(sum/dataArray.length);
+      
+      if(rms>8){
         speechDetected=true;
         silenceStart=0;
         voiceState=VOICE_HEARING;updateListenUI();
       }else if(speechDetected){
         if(!silenceStart)silenceStart=Date.now();
-        // 1.2 seconds of silence after speech → stop recording
-        if(Date.now()-silenceStart>1200){
+        // 1.5 seconds of silence after speech → stop recording
+        if(Date.now()-silenceStart>1500){
           D('  🔇 Silence detected, stopping recording');
           recordingDone=true;
           try{recorder.stop()}catch{}
@@ -1579,7 +1583,8 @@ function endStudentSession(){
 }
 
 // ===== STUDENT EMOTION =====
-function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').then(r=>r.json()).then(d=>{sEmo=d;const b=document.getElementById("engBar"),dot=document.getElementById("engDot"),l=document.getElementById("engLabel");if(!d.face_detected){b.style.display="flex";dot.style.background="#666";l.textContent="";document.getElementById("personName").textContent="";return}b.style.display="flex";const e=d.engagement_score;dot.style.background=e>70?"#00ff88":e>40?"#ffaa00":"#ff4444";l.textContent=`${e}%`;
+let _emotionErrors=0;
+function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{_emotionErrors=0;sEmo=d;const b=document.getElementById("engBar"),dot=document.getElementById("engDot"),l=document.getElementById("engLabel");if(!d.face_detected){b.style.display="flex";dot.style.background="#666";l.textContent="";document.getElementById("personName").textContent="";return}b.style.display="flex";const e=d.engagement_score;dot.style.background=e>70?"#00ff88":e>40?"#ffaa00":"#ff4444";l.textContent=`${e}%`;
 // Show recognized person name
 const pn=document.getElementById("personName");
 if(d.recognized_person){pn.textContent=d.recognized_person;pn.style.color="#00ff88";
@@ -1642,7 +1647,7 @@ if(newPersons.length>0&&!inConversation&&!isSpeaking){
   }
 }
 }else{pn.textContent="";if(lastRecognizedPerson){endStudentSession()}lastRecognizedPerson=null;document.getElementById("gamificationHud").style.display="none"}
-handleP(d)}).catch(()=>{})}
+handleP(d)}).catch(()=>{_emotionErrors++;if(_emotionErrors>5&&emotionDetectionOn){emotionDetectionOn=false;D('⚠ Emotion detection disabled (too many errors)')}})}
 setInterval(pollSE,2000);
 function handleP(d){if(!proactiveEnabled||loading||voiceState===VOICE_ACTIVATED)return;const n=Date.now();if(n-lastPT<20000)return;const e=d.emotion,s=d.emotion_streak||0;if(s<6)return;let m=null,em=null;
 if(e==="sad"&&s>8){m="Φαίνεσαι λίγο στεναχωρημένος. Είσαι εντάξει;";em="worried"}

@@ -598,7 +598,10 @@ def test_chat():
 # ============ STUDENT EMOTION ============
 @app.route('/api/student/emotion', methods=['GET'])
 def student_emotion():
-    return jsonify(detector.get_state())
+    try:
+        return jsonify(detector.get_state())
+    except Exception as e:
+        return jsonify({"emotion": "neutral", "confidence": 0, "face_count": 0, "error": str(e)})
 
 @app.route('/api/student/start-detection', methods=['POST'])
 def start_detection():
