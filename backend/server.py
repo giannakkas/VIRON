@@ -1618,6 +1618,27 @@ def serve_static(filename):
 if __name__ == '__main__':
     port = config['port']
     has_key = config.get('anthropic_api_key', '') not in ['', 'YOUR_API_KEY_HERE']
+    
+    # Pre-warm Ollama: load model into memory for instant responses
+    def _warm_ollama():
+        try:
+            import urllib.request
+            model = config.get('ollama_model', 'qwen2.5:3b')
+            print(f"🧠 Pre-loading Ollama model ({model}) into memory...")
+            data = json.dumps({"model": model, "prompt": "Γεια!", "stream": False}).encode()
+            req = urllib.request.Request("http://localhost:11434/api/generate", 
+                                         data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=30)
+            # Keep model loaded with keep_alive
+            keep = json.dumps({"model": model, "keep_alive": "60m"}).encode()
+            req2 = urllib.request.Request("http://localhost:11434/api/generate",
+                                          data=keep, headers={"Content-Type": "application/json"})
+            try: urllib.request.urlopen(req2, timeout=5)
+            except: pass
+            print(f"✅ Ollama model loaded in memory (keep_alive=60m)")
+        except Exception as e:
+            print(f"⚠ Ollama pre-warm failed: {e}")
+    threading.Thread(target=_warm_ollama, daemon=True).start()
     print(f"""
 🤖 ═══════════════════════════════════════
    VIRON AI Companion

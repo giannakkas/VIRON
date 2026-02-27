@@ -328,9 +328,11 @@ function setVironLang(lang){
   vironLang=lang;
   localStorage.setItem('viron-lang',lang);
   D('Language set to: '+lang);
-  // Restart listener with new language
-  stopAllRecognition();
-  setTimeout(startAlwaysListening,500);
+  // Restart listener with new language (but not during setup)
+  if(document.getElementById('setupWizard').style.display!=='block'){
+    stopAllRecognition();
+    setTimeout(startAlwaysListening,500);
+  }
 }
 function getSRLang(){return vironLang==='el'?'el-GR':'en-US';}
 function isGreekMode(){return vironLang==='el';}
@@ -682,6 +684,8 @@ let alwaysListening=false;
 let lastWakeTime=0; // Prevent double triggers
 
 function startAlwaysListening(){
+  // Don't listen during setup wizard
+  if(document.getElementById('setupWizard')?.style.display==='block'){D('  Setup active, skip listening');return}
   D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', wakeLang=en-US, cmdLang='+getSRLang());
   if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
@@ -1326,6 +1330,12 @@ function processStudentSpeech(text){
     'τι γινεται':['[happy] Όλα καλά! Εσύ;','[happy] Μια χαρά! Τα λέμε;','[happy] Καλά πάμε! Εσύ;'],
     'τι λεει':['[happy] Εδώ είμαστε! Εσύ;','[happy] Καλά! Τι κάνεις;'],
     'τι νεα':['[happy] Εδώ, σε περιμένω! Εσύ;','[happy] Τα ίδια! Εσένα;'],
+    'ειμαι καλα':['[happy] Χαίρομαι! Τι θες να κάνουμε;','[happy] Τέλεια! Πες μου!','[happy] Ωραία! Πώς μπορώ να βοηθήσω;'],
+    'ειμαι καλο':['[happy] Χαίρομαι! Τι θες να κάνουμε;','[happy] Τέλεια! Πες μου!'],
+    'καλα ειμαι':['[happy] Μπράβο! Τι κάνουμε σήμερα;','[happy] Χαίρομαι! Πες μου τι θες!'],
+    'καλα':['[happy] Ωραία! Πώς μπορώ να βοηθήσω;','[happy] Τέλεια!'],
+    'ειμαι μια χαρα':['[happy] Τέλεια! Πες μου τι θες!','[happy] Χαίρομαι πολύ!'],
+    'ωραια':['[happy] Τέλεια! Τι κάνουμε;','[happy] Ωραία! Πες μου!'],
     // English greetings
     'hi':['[happy] Hey there!','[happy] Hi! What\'s up?','[happy] Hey! How are you?'],
     'hello':['[happy] Hello! How can I help?','[happy] Hey! Good to see you!','[happy] Hello there!'],
@@ -2472,8 +2482,9 @@ splash.addEventListener('click',async function startViron(){
   startVironNormal();
 },{once:true});
 
-// Keepalive: ensure always-on listening stays alive
+// Keepalive: ensure always-on listening stays alive (NOT during setup)
 setInterval(()=>{
+  if(document.getElementById('setupWizard').style.display==='block')return; // Skip during setup
   if(voiceState===VOICE_IDLE&&!loading&&!(synth&&synth.speaking)&&!alwaysListening){
     D('  Keepalive: restarting listener');
     startAlwaysListening();
