@@ -18,10 +18,10 @@ def _load_whisper():
     global HAS_WHISPER, whisper_model
     try:
         from faster_whisper import WhisperModel
-        print("🎙️ Loading Whisper STT model (base)...")
-        whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        print("🎙️ Loading Whisper STT model (small — better Greek accuracy)...")
+        whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
         HAS_WHISPER = True
-        print("✅ Whisper STT ready (base model, CPU)")
+        print("✅ Whisper STT ready (small model, CPU)")
     except ImportError:
         print("⚠ faster-whisper not installed. Install: pip3 install faster-whisper --break-system-packages")
     except Exception as e:
@@ -1486,7 +1486,7 @@ def speech_to_text():
             segments, info = whisper_model.transcribe(
                 tmp_path,
                 language=whisper_lang,  # Force language instead of auto-detect
-                beam_size=3,
+                beam_size=5,
                 vad_filter=True,  # Filter silence
                 vad_parameters=dict(min_silence_duration_ms=300)
             )
