@@ -1483,16 +1483,36 @@ def speech_to_text():
         whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None
         
         with _whisper_lock:
+            # First try with gentle VAD
             segments, info = whisper_model.transcribe(
                 tmp_path,
                 language=whisper_lang,  # Force language instead of auto-detect
                 beam_size=5,
-                vad_filter=True,  # Filter silence
-                vad_parameters=dict(min_silence_duration_ms=300)
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,   # More lenient silence detection
+                    speech_pad_ms=300,              # Pad speech segments
+                    threshold=0.3,                  # Lower threshold = more sensitive to speech
+                )
             )
             text_parts = []
             for segment in segments:
                 text_parts.append(segment.text.strip())
+            
+            # If VAD filtered everything out, retry WITHOUT VAD
+            if not text_parts:
+                print("  ⚠ VAD filtered all audio, retrying without VAD...")
+                segments2, info = whisper_model.transcribe(
+                    tmp_path,
+                    language=whisper_lang,
+                    beam_size=5,
+                    vad_filter=False,
+                )
+                for segment in segments2:
+                    t = segment.text.strip()
+                    # Skip Whisper hallucinations (repeated punctuation, music tags, etc)
+                    if t and not re.match(r'^[\s\.\,\!\?\;\:…]+$', t) and '[' not in t:
+                        text_parts.append(t)
         
         text = " ".join(text_parts).strip()
         elapsed = time.time() - t_start

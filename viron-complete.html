@@ -903,7 +903,7 @@ function startWhisperListening(){
   let chunks=[];
   let recordingDone=false;
   // Record duration: shorter in conversation (user is already talking)
-  const recordDuration=inConversation?4000:5000;
+  const recordDuration=inConversation?5000:6000;
   
   navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}})
   .then(stream=>{
