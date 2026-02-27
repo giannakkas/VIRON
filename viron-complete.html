@@ -905,6 +905,8 @@ function startWhisperListening(){
   
   // Set up audio analysis for silence detection
   const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  // Chrome suspends AudioContext until user gesture — resume it
+  if(audioCtx.state==='suspended')audioCtx.resume();
   
   navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}})
   .then(stream=>{
@@ -920,6 +922,8 @@ function startWhisperListening(){
     const dataArray=new Uint8Array(analyser.fftSize);
     let speechDetected=false;
     let silenceStart=0;
+    let noSpeechStart=Date.now();
+    let rmsLogCount=0;
     
     function checkAudio(){
       if(recordingDone)return;
@@ -929,9 +933,13 @@ function startWhisperListening(){
       for(let i=0;i<dataArray.length;i++){const v=dataArray[i]-128;sum+=v*v}
       const rms=Math.sqrt(sum/dataArray.length);
       
-      if(rms>8){
+      // Log RMS every ~1 second so we can debug mic levels
+      if(rmsLogCount++%60===0)D('  🔊 RMS: '+rms.toFixed(1)+(speechDetected?' (speech)':' (waiting)'));
+      
+      if(rms>3){
         speechDetected=true;
         silenceStart=0;
+        noSpeechStart=0;
         voiceState=VOICE_HEARING;updateListenUI();
       }else if(speechDetected){
         if(!silenceStart)silenceStart=Date.now();
@@ -942,6 +950,12 @@ function startWhisperListening(){
           try{recorder.stop()}catch{}
           return;
         }
+      }else if(noSpeechStart&&Date.now()-noSpeechStart>5000){
+        // No speech detected after 5 seconds — stop early
+        D('  🔇 No speech for 5s, stopping recording early');
+        recordingDone=true;
+        try{recorder.stop()}catch{}
+        return;
       }
       requestAnimationFrame(checkAudio);
     }
