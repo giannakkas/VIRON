@@ -1468,11 +1468,34 @@ def speech_to_text():
     
     import tempfile
     tmp_path = None
+    wav_path = None
     try:
         # Save uploaded audio to temp file
         with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
             tmp_path = tmp.name
             audio_file.save(tmp)
+        
+        file_size = os.path.getsize(tmp_path)
+        print(f"🎙️ STT: received {file_size//1024}KB audio")
+        
+        # Convert webm → wav with ffmpeg (better Whisper compatibility + amplify)
+        wav_path = tmp_path.replace('.webm', '.wav')
+        try:
+            result = subprocess.run([
+                'ffmpeg', '-y', '-i', tmp_path,
+                '-af', 'volume=3.0,highpass=f=100,lowpass=f=8000',  # Amplify 3x + band-pass filter
+                '-ar', '16000', '-ac', '1',  # 16kHz mono (Whisper optimal)
+                wav_path
+            ], capture_output=True, timeout=10)
+            if result.returncode == 0 and os.path.exists(wav_path):
+                audio_path = wav_path
+                print(f"  ✅ Converted to WAV ({os.path.getsize(wav_path)//1024}KB), amplified 3x")
+            else:
+                audio_path = tmp_path
+                print(f"  ⚠ ffmpeg failed, using raw webm")
+        except Exception as e:
+            audio_path = tmp_path
+            print(f"  ⚠ ffmpeg error: {e}, using raw webm")
         
         t_start = time.time()
         
@@ -1485,7 +1508,7 @@ def speech_to_text():
         with _whisper_lock:
             # First try with gentle VAD
             segments, info = whisper_model.transcribe(
-                tmp_path,
+                audio_path,
                 language=whisper_lang,  # Force language instead of auto-detect
                 beam_size=5,
                 vad_filter=True,
@@ -1503,7 +1526,7 @@ def speech_to_text():
             if not text_parts:
                 print("  ⚠ VAD filtered all audio, retrying without VAD...")
                 segments2, info = whisper_model.transcribe(
-                    tmp_path,
+                    audio_path,
                     language=whisper_lang,
                     beam_size=5,
                     vad_filter=False,
@@ -1533,6 +1556,8 @@ def speech_to_text():
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+        if wav_path and os.path.exists(wav_path):
+            os.unlink(wav_path)
 
 @app.route('/api/stt/status', methods=['GET'])
 def stt_status():
