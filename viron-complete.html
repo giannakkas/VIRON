@@ -902,8 +902,8 @@ function startWhisperListening(){
   
   let chunks=[];
   let recordingDone=false;
-  // Record duration: shorter in conversation (user is already talking)
-  const recordDuration=inConversation?5000:6000;
+  // Max recording time (safety cap)
+  const maxRecordDuration=inConversation?8000:10000;
   
   navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}})
   .then(stream=>{
@@ -953,15 +953,91 @@ function startWhisperListening(){
     };
     
     recorder.start();
-    D('  🎙️ Recording for '+recordDuration+'ms');
+    D('  🎙️ Recording (smart VAD, max '+maxRecordDuration+'ms)');
     
-    // Fixed duration recording — Whisper's VAD handles silence
-    setTimeout(()=>{
-      if(!recordingDone){
-        recordingDone=true;
-        try{recorder.stop()}catch{}
+    // ── Smart Voice Activity Detection ──
+    // Monitor audio level to detect speech end and stop recording early
+    const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const source=audioCtx.createMediaStreamSource(stream);
+    const analyser=audioCtx.createAnalyser();
+    analyser.fftSize=512;
+    analyser.smoothingTimeConstant=0.3;
+    source.connect(analyser);
+    const dataArr=new Uint8Array(analyser.frequencyBinCount);
+    
+    const SPEECH_THRESHOLD=15;      // Level to count as speech
+    const SILENCE_AFTER_SPEECH=900; // ms of silence after speech to stop
+    const MIN_SPEECH_DURATION=300;  // min ms of speech before we accept silence-stop
+    const NO_SPEECH_TIMEOUT=4000;   // stop if no speech detected at all
+    
+    let speechDetected=false;
+    let speechStartTime=0;
+    let silenceStartTime=0;
+    let vadInterval=null;
+    
+    function stopRecordingClean(reason){
+      if(recordingDone)return;
+      recordingDone=true;
+      if(vadInterval)clearInterval(vadInterval);
+      try{audioCtx.close()}catch(e){}
+      if(recorder.state==='recording'){
+        D('  🛑 Stop recording: '+reason);
+        recorder.stop();
       }
-    },recordDuration);
+    }
+    
+    vadInterval=setInterval(()=>{
+      if(recordingDone)return;
+      analyser.getByteFrequencyData(dataArr);
+      // Calculate average volume (skip lowest freqs which are noise)
+      let sum=0;for(let i=4;i<dataArr.length;i++)sum+=dataArr[i];
+      const level=sum/(dataArr.length-4);
+      
+      const now=Date.now();
+      
+      if(level>=SPEECH_THRESHOLD){
+        if(!speechDetected){
+          speechDetected=true;
+          speechStartTime=now;
+          D('  🗣️ Speech detected (level='+Math.round(level)+')');
+        }
+        silenceStartTime=0; // reset silence timer
+      }else{
+        // Silence
+        if(speechDetected&&silenceStartTime===0){
+          silenceStartTime=now;
+        }
+        // Check if enough silence after speech
+        if(speechDetected&&silenceStartTime>0){
+          const speechDur=silenceStartTime-speechStartTime;
+          const silDur=now-silenceStartTime;
+          if(speechDur>=MIN_SPEECH_DURATION&&silDur>=SILENCE_AFTER_SPEECH){
+            stopRecordingClean('speech ended ('+Math.round(speechDur)+'ms speech, '+Math.round(silDur)+'ms silence)');
+            return;
+          }
+        }
+        // No speech timeout
+        if(!speechDetected&&(now-speechStartTime)>NO_SPEECH_TIMEOUT){
+          // speechStartTime is 0 here, use recording start
+        }
+      }
+    },50); // Check every 50ms
+    
+    // Track recording start for no-speech timeout
+    const recStartTime=Date.now();
+    const noSpeechCheck=setInterval(()=>{
+      if(recordingDone){clearInterval(noSpeechCheck);return}
+      if(!speechDetected&&(Date.now()-recStartTime)>NO_SPEECH_TIMEOUT){
+        clearInterval(noSpeechCheck);
+        stopRecordingClean('no speech detected after '+NO_SPEECH_TIMEOUT+'ms');
+      }
+    },500);
+    
+    // Safety cap — stop after max duration
+    setTimeout(()=>{
+      clearInterval(noSpeechCheck);
+      stopRecordingClean('max duration reached');
+    },maxRecordDuration);
     
   }).catch(e=>{
     D('  ❌ Mic access failed: '+e.message);
