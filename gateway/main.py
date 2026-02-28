@@ -344,12 +344,12 @@ async def chat(req: ChatRequest):
             router=router_result, latency_ms=_ms(start)
         )
 
-    # 4. Log user message
+    # 4. Get conversation history for context (BEFORE logging current message)
+    history = get_recent_messages(req.student_id, limit=12)
+
+    # 5. Log user message
     log_message(req.student_id, "user", req.message,
                 router_result.mode, router_result.cloud_provider, router_result.dict())
-
-    # 5. Get conversation history for context
-    history = get_recent_messages(req.student_id, limit=12)
 
     # 6. Route to appropriate backend
     reply = ""
