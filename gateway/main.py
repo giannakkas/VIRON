@@ -20,6 +20,7 @@ Architecture:
 
 import time
 import json
+import os
 import logging
 from typing import Optional
 
@@ -440,6 +441,15 @@ async def chat(req: ChatRequest):
     reply = ""
     actual_mode = router_result.mode
     actual_provider = router_result.cloud_provider
+
+    # Force cloud mode when local CPU is too slow (disable with FORCE_CLOUD=0)
+    force_cloud = os.environ.get("FORCE_CLOUD", "1") == "1"
+    if force_cloud and router_result.mode == "local":
+        logger.info("FORCE_CLOUD: overriding local → cloud/chatgpt")
+        router_result.mode = "cloud"
+        router_result.cloud_provider = "chatgpt"
+        actual_mode = "cloud"
+        actual_provider = "chatgpt"
 
     if router_result.mode == "cloud" and router_result.cloud_provider != "none":
         # Try cloud
