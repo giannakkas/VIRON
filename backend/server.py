@@ -1546,31 +1546,38 @@ def speech_to_text():
     wav_path = None
     try:
         # Save uploaded audio to temp file
-        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
+        orig_name = audio_file.filename or 'speech.webm'
+        suffix = '.wav' if orig_name.endswith('.wav') else '.webm'
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp_path = tmp.name
             audio_file.save(tmp)
         
         file_size = os.path.getsize(tmp_path)
-        print(f"🎙️ STT: received {file_size//1024}KB audio")
+        print(f"🎙️ STT: received {file_size//1024}KB audio ({suffix})")
         
-        # Convert webm → wav with ffmpeg (better Whisper compatibility + amplify)
-        wav_path = tmp_path.replace('.webm', '.wav')
-        try:
-            result = subprocess.run([
-                'ffmpeg', '-y', '-i', tmp_path,
-                '-af', 'volume=3.0,highpass=f=100,lowpass=f=8000',  # Amplify 3x + band-pass filter
-                '-ar', '16000', '-ac', '1',  # 16kHz mono (Whisper optimal)
-                wav_path
-            ], capture_output=True, timeout=10)
-            if result.returncode == 0 and os.path.exists(wav_path):
-                audio_path = wav_path
-                print(f"  ✅ Converted to WAV ({os.path.getsize(wav_path)//1024}KB), amplified 3x")
-            else:
-                audio_path = tmp_path
-                print(f"  ⚠ ffmpeg failed, using raw webm")
-        except Exception as e:
+        # If already WAV (from Silero VAD), use directly — no ffmpeg needed
+        if suffix == '.wav':
             audio_path = tmp_path
-            print(f"  ⚠ ffmpeg error: {e}, using raw webm")
+            print(f"  ✅ Direct WAV from Silero VAD (no conversion needed)")
+        else:
+            # Convert webm → wav with ffmpeg (better Whisper compatibility + amplify)
+            wav_path = tmp_path.replace('.webm', '.wav')
+            try:
+                result = subprocess.run([
+                    'ffmpeg', '-y', '-i', tmp_path,
+                    '-af', 'volume=3.0,highpass=f=100,lowpass=f=8000',  # Amplify 3x + band-pass filter
+                    '-ar', '16000', '-ac', '1',  # 16kHz mono (Whisper optimal)
+                    wav_path
+                ], capture_output=True, timeout=10)
+                if result.returncode == 0 and os.path.exists(wav_path):
+                    audio_path = wav_path
+                    print(f"  ✅ Converted to WAV ({os.path.getsize(wav_path)//1024}KB), amplified 3x")
+                else:
+                    audio_path = tmp_path
+                    print(f"  ⚠ ffmpeg failed, using raw webm")
+            except Exception as e:
+                audio_path = tmp_path
+                print(f"  ⚠ ffmpeg error: {e}, using raw webm")
         
         t_start = time.time()
         
@@ -1581,21 +1588,34 @@ def speech_to_text():
         whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None
         
         with _whisper_lock:
-            # First try with gentle VAD
+            # First try with Silero VAD (server-side neural speech detection)
             segments, info = whisper_model.transcribe(
                 audio_path,
                 language=whisper_lang,  # Force language instead of auto-detect
                 beam_size=5,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=500,   # More lenient silence detection
-                    speech_pad_ms=300,              # Pad speech segments
-                    threshold=0.3,                  # Lower threshold = more sensitive to speech
-                )
+                    min_silence_duration_ms=400,    # Tighter silence detection
+                    speech_pad_ms=200,               # Less padding
+                    threshold=0.35,                  # Silero VAD threshold
+                ),
+                no_speech_threshold=0.5,            # Filter low-confidence segments
+                condition_on_previous_text=False,   # Reduce hallucination chaining
             )
             text_parts = []
             for segment in segments:
-                text_parts.append(segment.text.strip())
+                t = segment.text.strip()
+                # Skip Whisper hallucinations: repeated words, music tags, nonsense
+                if t and not re.match(r'^[\s\.\,\!\?\;\:…]+$', t) and '[' not in t:
+                    # Skip if same phrase repeated 3+ times
+                    words = t.split()
+                    if len(words) >= 3:
+                        # Check for repeating patterns
+                        unique_words = set(w.lower() for w in words)
+                        if len(unique_words) <= 2 and len(words) > 4:
+                            print(f"  ⚠ Skipping hallucination (repetition): '{t[:60]}'")
+                            continue
+                    text_parts.append(t)
             
             # If VAD filtered everything out, retry WITHOUT VAD
             if not text_parts:
@@ -1631,7 +1651,7 @@ def speech_to_text():
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-        if wav_path and os.path.exists(wav_path):
+        if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
             os.unlink(wav_path)
 
 @app.route('/api/stt/status', methods=['GET'])
