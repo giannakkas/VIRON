@@ -1,0 +1,5 @@
+# VIRON Hybrid Gateway Dependencies
+fastapi>=0.104
+uvicorn>=0.24
+httpx>=0.25
+pydantic>=2.0

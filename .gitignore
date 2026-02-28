@@ -16,6 +16,11 @@ backend/viron_students.db-shm
 # Voice profiles (personal data)
 backend/voice_profiles/
 
+# Hybrid AI — models and data (large files, bind-mounted)
+models/*.gguf
+data/
+.env
+
 # Python
 __pycache__/
 *.pyc

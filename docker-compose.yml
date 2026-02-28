@@ -1,0 +1,115 @@
+# ═══════════════════════════════════════════════════════════════
+# VIRON — Docker Compose (Hybrid AI Architecture)
+# ═══════════════════════════════════════════════════════════════
+#
+# Services:
+#   llama-router  — Gemma 2B (intent classification, port 8081)
+#   llama-tutor   — Mistral 7B (offline tutoring, port 8082)
+#   gateway       — FastAPI hybrid gateway (port 8080)
+#
+# The existing Flask backend (port 5000) runs OUTSIDE docker
+# as before (manages face UI, camera, hardware, TTS/STT).
+#
+# Prerequisites:
+#   1. bash scripts/download_models.sh   (downloads GGUF models)
+#   2. bash scripts/build_llamacpp.sh    (builds llama.cpp with CUDA)
+#   3. cp .env.example .env && edit .env (add API keys)
+#
+# Usage:
+#   docker-compose up -d
+#   # Or without docker: bash run-hybrid.sh
+# ═══════════════════════════════════════════════════════════════
+
+version: "3.8"
+
+services:
+  # ─── Local Router: Gemma 2 2B (intent classification) ────
+  llama-router:
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    container_name: viron-router
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      --model /models/gemma-2-2b-it-Q4_K_M.gguf
+      --port 8081
+      --host 0.0.0.0
+      --n-gpu-layers 99
+      --ctx-size 2048
+      --threads 4
+      --parallel 2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ─── Local Tutor: Mistral 7B Instruct (offline answers) ──
+  llama-tutor:
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    container_name: viron-tutor
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      --model /models/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+      --port 8082
+      --host 0.0.0.0
+      --n-gpu-layers 99
+      --ctx-size 4096
+      --threads 4
+      --parallel 2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ─── Hybrid Gateway: FastAPI (unified /v1/chat) ──────────
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: viron-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    depends_on:
+      llama-router:
+        condition: service_healthy
+      llama-tutor:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - ROUTER_URL=http://llama-router:8081
+      - TUTOR_URL=http://llama-tutor:8082
+      - DB_PATH=/data/viron.db
+      - GATEWAY_PORT=8080
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
