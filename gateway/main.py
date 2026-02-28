@@ -141,6 +141,85 @@ def default_routing(message: str) -> RouterResult:
     )
 
 
+# Keywords that MUST go to cloud (Greek + English)
+_CLOUD_KEYWORDS = {
+    "math": {
+        "chatgpt": [
+            "πυθαγόρ", "pythag", "εξίσωση", "equation", "θεώρημα", "theorem",
+            "αλγόριθμ", "algorithm", "γεωμετρ", "geometry", "άλγεβρ", "algebra",
+            "τριγωνομ", "trigon", "παράγωγ", "derivative", "ολοκλήρωμα", "integral",
+            "κλάσμ", "fraction", "ποσοστό", "percent", "solve", "λύσε", "υπολόγισε",
+            "calculate", "squared", "τετράγωνο", "formula", "τύπος", "μαθηματ",
+        ]
+    },
+    "science": {
+        "gemini": [
+            "φωτοσύνθ", "photosynth", "βαρύτ", "gravity", "πλανήτ", "planet",
+            "ηλιακ", "solar", "κύτταρ", "cell", "dna", "ατομ", "atom", "μόρι",
+            "molecule", "ενέργ", "energy", "θερμ", "therm", "ηλεκτρ", "electr",
+            "μαγνητ", "magnet", "δύναμ", "force", "φυσικ", "physics", "χημε",
+            "chemistry", "βιολογ", "biology", "οικοσύστημ", "ecosystem", "εξέλιξ",
+            "evolution", "σύμπαν", "universe", "γαλαξ", "galaxy",
+        ]
+    },
+    "history": {
+        "claude": [
+            "ιστορ", "history", "πόλεμ", "war", "επανάστ", "revolution",
+            "αρχαί", "ancient", "μεσαίων", "medieval", "αυτοκρατ", "empire",
+            "δημοκρατ", "democra", "φιλόσοφ", "philosoph", "αναγέννηση", "renaissance",
+        ]
+    },
+    "english": {
+        "claude": [
+            "ποίημ", "poem", "essay", "story", "write", "γράψε",
+            "λογοτεχ", "literature", "μετάφρα", "translat", "explain.*word",
+            "τι σημαίνει", "what does.*mean", "what is the meaning",
+        ]
+    },
+}
+
+# Words that signal educational intent
+_EXPLAIN_WORDS = [
+    "εξήγησ", "explain", "πώς", "how does", "how do", "what is", "τι είναι",
+    "γιατί", "why", "πες μου", "tell me about", "teach", "μάθε", "learn",
+    "describe", "περίγραψ", "define", "ορισμός",
+]
+
+
+def override_routing(router_result: RouterResult, message: str) -> RouterResult:
+    """Override Gemma router if it misclassifies known educational topics."""
+    msg_lower = message.lower()
+
+    # Check if message contains educational explain-words
+    has_explain = any(w in msg_lower for w in _EXPLAIN_WORDS)
+
+    # Check for subject keywords
+    for subject, providers in _CLOUD_KEYWORDS.items():
+        for provider, keywords in providers.items():
+            if any(kw in msg_lower for kw in keywords):
+                if has_explain or router_result.mode == "local":
+                    logger.info(f"  🔄 Override: {router_result.mode}/{router_result.subject} → cloud/{subject}/{provider}")
+                    router_result.mode = "cloud"
+                    router_result.subject = subject
+                    router_result.cloud_provider = provider
+                    router_result.complexity_level = "moderate"
+                    if has_explain:
+                        router_result.intent_type = "explanation_request"
+                    return router_result
+
+    # If explain words + non-general subject → force cloud
+    if has_explain and router_result.subject in ("math", "science", "history", "english", "programming"):
+        if router_result.mode == "local":
+            provider = {"math": "chatgpt", "science": "gemini", "history": "claude",
+                        "english": "claude", "programming": "chatgpt"}.get(router_result.subject, "chatgpt")
+            logger.info(f"  🔄 Override: explain + {router_result.subject} → cloud/{provider}")
+            router_result.mode = "cloud"
+            router_result.cloud_provider = provider
+            router_result.complexity_level = "moderate"
+
+    return router_result
+
+
 # ─── Local Tutor (Mistral 8B via llama.cpp) ──────────
 
 def _tutor_system_prompt(age: int, language: str) -> str:
@@ -335,6 +414,9 @@ async def chat(req: ChatRequest):
             reply=blocked_reply, mode="local", cloud_provider="none",
             router=router_result, latency_ms=_ms(start)
         )
+
+    # Smart override: catch misclassified educational questions
+    router_result = override_routing(router_result, req.message)
 
     # 4. Get conversation history for context (BEFORE logging current message)
     history = get_recent_messages(req.student_id, limit=12)
