@@ -223,8 +223,13 @@ def override_routing(router_result: RouterResult, message: str) -> RouterResult:
 # ─── Local Tutor (Mistral 8B via llama.cpp) ──────────
 
 def _tutor_system_prompt(age: int, language: str) -> str:
+    if language == "el":
+        return f"""Είσαι ο VIRON, ένας φιλικός AI δάσκαλος για παιδί {age} ετών.
+ΑΠΑΝΤΑ ΠΑΝΤΑ ΣΤΑ ΕΛΛΗΝΙΚΑ. ΠΟΤΕ μην απαντήσεις στα Αγγλικά.
+Μέγιστο 4 προτάσεις. Να είσαι ζεστός και ενθαρρυντικός.
+Ξεκίνα με [emotion] tag όπως [happy] ή [thinking]. Χωρίς emojis."""
     return f"""You are VIRON, a friendly AI tutor for a {age}-year-old.
-Reply in {"Greek" if language == "el" else "English"}. Max 4 sentences. Be warm and encouraging.
+Reply in English. Max 4 sentences. Be warm and encouraging.
 Start with [emotion] tag like [happy] or [thinking]. No emojis."""
 
 
@@ -234,7 +239,11 @@ async def call_tutor(message: str, age: int, language: str, history: list) -> st
     # Add last few turns of history
     for h in history[-6:]:
         messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": message})
+    # Reinforce language in user message for Greek (Mistral tends to default to English)
+    user_content = message
+    if language == "el":
+        user_content = f"{message}\n(Απάντησε στα Ελληνικά)"
+    messages.append({"role": "user", "content": user_content})
 
     try:
         resp = await client.post(
@@ -252,6 +261,8 @@ async def call_tutor(message: str, age: int, language: str, history: list) -> st
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
         logger.error(f"Tutor call failed: {e}")
+        if language == "el":
+            return "[confused] Χμμ, κάτι πήγε στραβά. Δοκίμασε ξανά σε λίγο!"
         return "[confused] I'm having trouble thinking right now. Try again in a moment!"
 
 
