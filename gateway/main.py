@@ -177,6 +177,25 @@ _CLOUD_KEYWORDS = {
             "τι σημαίνει", "what does.*mean", "what is the meaning",
         ]
     },
+    "weather": {
+        "chatgpt": [
+            "καιρ", "weather", "βρέχ", "rain", "ήλιο", "sun", "κρύο", "cold",
+            "ζέστη", "hot", "χιόν", "snow", "θερμοκρασ", "temperature",
+            "σύννεφ", "cloud", "ομπρέλα", "umbrella",
+        ]
+    },
+    "news": {
+        "chatgpt": [
+            "νέα", "news", "ειδήσ", "headlines", "τι γίνεται στον κόσμο",
+            "τελευταία νέα", "latest news", "τι έγινε σήμερα",
+        ]
+    },
+    "music": {
+        "chatgpt": [
+            "παίξε", "play", "μουσικ", "music", "τραγούδ", "song",
+            "ακούσ", "listen", "youtube", "βάλε μουσικ",
+        ]
+    },
 }
 
 # Words that signal educational intent
@@ -191,6 +210,9 @@ def override_routing(router_result: RouterResult, message: str) -> RouterResult:
     """Override Gemma router if it misclassifies known educational topics."""
     msg_lower = message.lower()
 
+    # Subjects that ALWAYS force cloud (no explain-word needed)
+    ALWAYS_CLOUD = {"weather", "news", "music"}
+
     # Check if message contains educational explain-words
     has_explain = any(w in msg_lower for w in _EXPLAIN_WORDS)
 
@@ -198,7 +220,7 @@ def override_routing(router_result: RouterResult, message: str) -> RouterResult:
     for subject, providers in _CLOUD_KEYWORDS.items():
         for provider, keywords in providers.items():
             if any(kw in msg_lower for kw in keywords):
-                if has_explain or router_result.mode == "local":
+                if subject in ALWAYS_CLOUD or has_explain or router_result.mode == "local":
                     logger.info(f"  🔄 Override: {router_result.mode}/{router_result.subject} → cloud/{subject}/{provider}")
                     router_result.mode = "cloud"
                     router_result.subject = subject
@@ -345,6 +367,108 @@ CLOUD_FALLBACK = {
 }
 
 
+# ─── Message Enrichment (Weather, News) ──────────────
+
+import re as _re
+
+WEATHER_KEYWORDS = [
+    "καιρ", "weather", "βρέχ", "rain", "ήλιο", "sun", "κρύο", "cold",
+    "ζέστη", "hot", "χιόν", "snow", "θερμοκρασ", "temperature", "βαθμ",
+    "degree", "σύννεφ", "cloud", "αέρα", "wind", "ομπρέλα", "umbrella",
+]
+
+NEWS_KEYWORDS = [
+    "νέα", "news", "ειδήσ", "headlines", "τι γίνεται στον κόσμο",
+    "what's happening", "τι έγινε σήμερα", "what happened today",
+    "τελευταία νέα", "latest news", "ενημέρωσ", "update",
+]
+
+
+def _detect_intent(message: str, keywords: list) -> bool:
+    msg = message.lower()
+    return any(kw in msg for kw in keywords)
+
+
+async def fetch_weather(city: str = "Nicosia") -> str:
+    """Fetch weather from wttr.in (free, no API key)."""
+    try:
+        resp = await client.get(
+            f"https://wttr.in/{city}?format=j1",
+            timeout=8,
+            headers={"User-Agent": "VIRON-Robot/1.0"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        current = data["current_condition"][0]
+        temp = current["temp_C"]
+        feels = current["FeelsLikeC"]
+        desc = current["weatherDesc"][0]["value"]
+        humidity = current["humidity"]
+        wind = current["windspeedKmph"]
+        # Tomorrow forecast
+        tomorrow = data.get("weather", [{}])[1] if len(data.get("weather", [])) > 1 else {}
+        tom_max = tomorrow.get("maxtempC", "?")
+        tom_min = tomorrow.get("mintempC", "?")
+        tom_desc = tomorrow.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "") if tomorrow.get("hourly") else ""
+
+        return (
+            f"[WEATHER DATA for {city}]\n"
+            f"Now: {desc}, {temp}°C (feels {feels}°C), humidity {humidity}%, wind {wind}km/h\n"
+            f"Tomorrow: {tom_min}-{tom_max}°C, {tom_desc}\n"
+            f"[/WEATHER DATA]"
+        )
+    except Exception as e:
+        logger.warning(f"Weather fetch failed: {e}")
+        return ""
+
+
+async def fetch_news(language: str = "el") -> str:
+    """Fetch news headlines from Google News RSS."""
+    try:
+        url = "https://news.google.com/rss?hl=el&gl=CY&ceid=CY:el" if language == "el" \
+            else "https://news.google.com/rss?hl=en&gl=US&ceid=US:en"
+        resp = await client.get(url, timeout=8)
+        resp.raise_for_status()
+        # Simple XML parsing for RSS titles
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(resp.text)
+        items = root.findall(".//item")
+        headlines = []
+        for item in items[:6]:
+            title = item.find("title")
+            if title is not None and title.text:
+                headlines.append(title.text.split(" - ")[0])  # Remove source suffix
+        if headlines:
+            return (
+                f"[NEWS HEADLINES]\n"
+                + "\n".join(f"- {h}" for h in headlines)
+                + "\n[/NEWS HEADLINES]"
+            )
+        return ""
+    except Exception as e:
+        logger.warning(f"News fetch failed: {e}")
+        return ""
+
+
+async def enrich_message(message: str, language: str) -> str:
+    """Detect weather/news intent and inject real data into the message."""
+    enriched = message
+
+    if _detect_intent(message, WEATHER_KEYWORDS):
+        logger.info("🌤️ Weather intent detected — fetching data")
+        weather = await fetch_weather("Nicosia")
+        if weather:
+            enriched = f"{message}\n\n{weather}"
+
+    if _detect_intent(message, NEWS_KEYWORDS):
+        logger.info("📰 News intent detected — fetching headlines")
+        news = await fetch_news(language)
+        if news:
+            enriched = f"{enriched}\n\n{news}"
+
+    return enriched
+
+
 async def call_cloud(provider: str, message: str, history: list, age: int, language: str) -> tuple[str, str]:
     """
     Try the primary cloud provider, then fallbacks. Returns (reply, actual_provider).
@@ -354,6 +478,9 @@ async def call_cloud(provider: str, message: str, history: list, age: int, langu
     lang_hint = "Greek" if language == "el" else "English"
     system = cfg.VIRON_SYSTEM_PROMPT + f"\nStudent age: {age} ({age_mode}). Respond in {lang_hint}."
 
+    # Enrich message with weather/news data if detected
+    enriched_message = await enrich_message(message, language)
+
     # Try primary provider
     providers_to_try = [provider] + CLOUD_FALLBACK.get(provider, [])
     for p in providers_to_try:
@@ -361,7 +488,7 @@ async def call_cloud(provider: str, message: str, history: list, age: int, langu
         if fn is None:
             continue
         try:
-            reply = await fn(message, history, system)
+            reply = await fn(enriched_message, history, system)
             if reply and len(reply.strip()) > 2:
                 return reply, p
         except Exception as e:

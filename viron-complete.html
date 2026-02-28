@@ -422,7 +422,7 @@ function say(text,speed){
   // STOP any current speech first — ONE voice at a time
   stopSpeaking();
   isSpeaking=true;
-  showSub(text);
+  // No subtitle on face — VIRON speaks only
   // Strip emojis and special chars that break TTS
   let clean=text.replace(/VIRON/gi,'Βίρον')
     .replace(/[\u{1F600}-\u{1F64F}]/gu,'')  // emoticons
@@ -1511,11 +1511,27 @@ function processStudentSpeech(text){
 
 // Handle an AI response string (emotion parsing + TTS) — used by both sendMessage and instant greetings
 function handleAIResponse(t){
-  let em=t.match(/^\[(?:emotion_?(?:name)?:)?(\w+)\]/);
-  if(em&&E[em[1]])cE(em[1]);
-  let c=t.replace(/^\[(?:emotion_?(?:name)?:)?\w+\]\s*/,"");
+  let c=parseEmotionAndStrip(t);
   say(c);
   loading=false;
+}
+
+// Map Greek emotion tags to English + parse and strip
+const EMOTION_MAP={'happy':'happy','sad':'sad','thinking':'thinking','excited':'excited','calm':'calm','surprised':'surprised','confused':'confused','proud':'proud','worried':'worried','cheeky':'cheeky','neutral':'neutral','hopeful':'hopeful','focused':'focused','sleepy':'sleepy',
+  // Greek mappings
+  'χαρούμενος':'happy','χαρά':'happy','λυπημένος':'sad','σκεπτικός':'thinking','σκέψη':'thinking','ενθουσιασμένος':'excited','ήρεμος':'calm','έκπληκτος':'surprised','μπερδεμένος':'confused','περήφανος':'proud','ανήσυχος':'worried','πονηρός':'cheeky','ουδέτερος':'neutral','αισιόδοξος':'hopeful','συγκεντρωμένος':'focused'};
+
+function parseEmotionAndStrip(t){
+  // Match [emotion] or [Emotion] at start — English or Greek
+  const m=t.match(/^\[([^\]]+)\]\s*/);
+  if(m){
+    const raw=m[1].toLowerCase().trim();
+    const mapped=EMOTION_MAP[raw];
+    if(mapped&&E[mapped])cE(mapped);
+    else if(E[raw])cE(raw);
+    return t.slice(m[0].length);
+  }
+  return t;
 }
 
 // Homework photo capture — snap camera frame and send to vision AI
@@ -1635,10 +1651,18 @@ TEXT: Χωρίς βαρύτητα δεν θα υπήρχαν πλανήτες, �
 [/WHITEBOARD]
 
 FORMAT:
-- Start EVERY response with [emotion]. Available: ${eList}
+- Start EVERY response with [emotion] tag using ENGLISH emotion names, even when speaking Greek.
+  Available: ${eList}
+  Example: [happy] Γεια σου! — CORRECT
+  [Χαρούμενος] Γεια σου! — WRONG (never Greek in emotion tags)
 - NEVER use emojis or special characters — they break the speaker
 - NEVER repeat the student's question back
 - NEVER spell letter by letter
+
+YOUTUBE — You CAN play music! When asked to play a song, respond with:
+[YOUTUBE:videoId:Title - Artist]
+Example: [excited] Ωραία! Πάμε! [YOUTUBE:dQw4w9WgXcQ:Never Gonna Give You Up - Rick Astley]
+Pick a REAL YouTube video ID. You know popular songs — use real IDs.
 
 STUDENT STATE: ${sState}
 ${personName ? `The student's name is ${personName}. Use their name naturally in conversation — like a friend would. Don't overuse it, just occasionally.` : ""}
@@ -1657,10 +1681,8 @@ Be real. Be warm. Be their brilliant friend.`,
     D('  API response: '+JSON.stringify(d).substring(0,300));
     let t=d.content?.filter(c=>c.type==="text").map(c=>c.text).join("")||(isGreekMode()?"[confused] Χμμ!":"[confused] Hmm!");
     D('  AI text: "'+t.substring(0,200)+'"');
-    // Parse emotion tag — handles [happy], [emotion_name:happy], [emotion:happy]
-    let em=t.match(/^\[(?:emotion_?(?:name)?:)?(\w+)\]/);
-    if(em&&E[em[1]])cE(em[1]);
-    let c=t.replace(/^\[(?:emotion_?(?:name)?:)?\w+\]\s*/,"");
+    // Parse emotion and strip tag (handles Greek and English)
+    let c=parseEmotionAndStrip(t);
     const yt=c.match(/\[YOUTUBE:([a-zA-Z0-9_-]+):([^\]]+)\]/);
     if(yt){c=c.replace(/\[YOUTUBE:[^\]]+\]/,"").trim();setTimeout(()=>{document.getElementById("ytT").textContent="♪ "+yt[2];document.getElementById("ytP").src=`https://www.youtube.com/embed/${yt[1]}?autoplay=1&rel=0`;document.getElementById("ytC").classList.add("visible")},1000)}
     const wb=parseWB(c);
