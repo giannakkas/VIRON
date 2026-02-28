@@ -447,11 +447,86 @@ def chat_proxy():
         return jsonify({"error": "No data"}), 400
 
     user_msg = data.get("messages", [{}])[-1].get("content", "")
-    system_prompt = data.get("system", "")
-    history = data.get("messages", [])[:-1]  # all except last (which is the user msg)
-    conversation_id = data.get("conversation_id", "")
     forced_lang = data.get("language", "")  # 'el' or 'en' — forced by frontend
     print(f"\n💬 CHAT: '{user_msg[:80]}' (lang={forced_lang})")
+
+    # ── Try Hybrid Gateway (local + cloud routing via port 8080) ──
+    _gw_url = os.environ.get("HYBRID_GATEWAY_URL", "http://localhost:8080")
+    try:
+        # Get student info from face recognition
+        _student_id = "anonymous"
+        _student_age = int(os.environ.get("DEFAULT_STUDENT_AGE", "12"))
+        if HAS_PROFILES and detector.current_state.get("recognized_person"):
+            _student_id = detector.current_state["recognized_person"]
+            try:
+                _prof = get_student_profile(_student_id)
+                if _prof and _prof.get("age"):
+                    _student_age = _prof["age"]
+            except Exception:
+                pass
+
+        _gw_resp = http_requests.post(
+            f"{_gw_url}/v1/chat",
+            json={
+                "student_id": _student_id,
+                "age": _student_age,
+                "message": user_msg,
+                "language": forced_lang or "en",
+            },
+            timeout=90,
+        )
+        if _gw_resp.status_code == 200:
+            _gw = _gw_resp.json()
+            _reply = _gw.get("reply", "")
+            if _reply and len(_reply.strip()) > 2:
+                _router = _gw.get("router", {})
+                _provider = _gw.get("cloud_provider", "none")
+                if _provider == "none":
+                    _provider = "local-mistral"
+                _subject = _router.get("subject", "general")
+                _mode = _gw.get("mode", "local")
+                _latency = _gw.get("latency_ms", 0)
+                print(f"  ✅ Gateway [{_mode}] | {_provider} | 📚 {_subject} | ⏱ {_latency:.0f}ms")
+                print(f"  → '{_reply[:120]}'")
+
+                # Log interaction for points
+                if HAS_PROFILES and _student_id != "anonymous":
+                    try:
+                        points_result = log_interaction(
+                            student_name=_student_id,
+                            type="question",
+                            subject=_subject,
+                            language=forced_lang or "en",
+                            question=user_msg[:500],
+                            answer=_reply[:500],
+                            emotion=detector.current_state.get("emotion", ""),
+                        )
+                        print(f"  🎮 +{points_result['points_earned']}pts → {points_result['total_points']} total")
+                        if points_result.get("new_achievements"):
+                            for ach in points_result["new_achievements"]:
+                                print(f"  🏆 NEW: {ach['icon']} {ach['name_en']}")
+                    except Exception as e:
+                        print(f"  ⚠ Points error: {e}")
+
+                return jsonify({
+                    "content": [{"type": "text", "text": _reply}],
+                    "provider": _provider,
+                    "subject": _subject,
+                    "strategy": f"hybrid-{_mode}",
+                    "language": forced_lang or _router.get("language", "en"),
+                    "confidence": 0.95 if _mode == "cloud" else 0.80,
+                })
+            else:
+                print(f"  ⚠ Gateway returned empty reply, falling back to old router")
+        else:
+            print(f"  ⚠ Gateway returned {_gw_resp.status_code}, falling back to old router")
+    except Exception as _gw_err:
+        print(f"  ⚠ Gateway unavailable ({_gw_err}), falling back to old router")
+
+    # ── Old router fallback (if gateway is down) ──
+    system_prompt = data.get("system", "")
+    history = data.get("messages", [])[:-1]
+    conversation_id = data.get("conversation_id", "")
 
     # ── Inject student memory into system prompt ──
     student_name = ""
