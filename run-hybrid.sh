@@ -24,14 +24,35 @@ if [ -f .env ]; then
     echo "✓ Loaded .env"
 fi
 
-LLAMA_SERVER="${LLAMA_SERVER:-/opt/llama.cpp/build/bin/llama-server}"
-MODELS_DIR="${MODELS_DIR:-./models}"
+# Auto-detect llama-server: local build → /opt → env override
+if [ -z "$LLAMA_SERVER" ]; then
+    if [ -f "$SCRIPT_DIR/llama.cpp/build/bin/llama-server" ]; then
+        LLAMA_SERVER="$SCRIPT_DIR/llama.cpp/build/bin/llama-server"
+    elif [ -f "/opt/llama.cpp/build/bin/llama-server" ]; then
+        LLAMA_SERVER="/opt/llama.cpp/build/bin/llama-server"
+    fi
+fi
+LLAMA_SERVER="${LLAMA_SERVER:-llama-server}"
+MODELS_DIR="${MODELS_DIR:-$SCRIPT_DIR/models}"
 GEMMA_MODEL="${MODELS_DIR}/gemma-2-2b-it-Q4_K_M.gguf"
 MISTRAL_MODEL="${MODELS_DIR}/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
 
 echo ""
 echo "🤖 VIRON Hybrid AI — Starting..."
 echo "═══════════════════════════════════════════════"
+
+# Detect GPU for --n-gpu-layers flag
+NGL=0
+if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+    NGL=99
+    GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    echo "  GPU: $GPU (CUDA, ngl=$NGL)"
+elif [ -f /proc/device-tree/model ] && grep -qi jetson /proc/device-tree/model 2>/dev/null; then
+    NGL=99
+    echo "  GPU: Jetson (CUDA, ngl=$NGL)"
+else
+    echo "  GPU: None — running CPU-only (slower but works)"
+fi
 
 # Check llama-server binary
 if [ ! -f "$LLAMA_SERVER" ]; then
@@ -73,7 +94,7 @@ $LLAMA_SERVER \
     --model "$GEMMA_MODEL" \
     --port 8081 \
     --host 0.0.0.0 \
-    --n-gpu-layers 99 \
+    --n-gpu-layers $NGL \
     --ctx-size 2048 \
     --threads 4 \
     --parallel 2 \
@@ -87,7 +108,7 @@ $LLAMA_SERVER \
     --model "$MISTRAL_MODEL" \
     --port 8082 \
     --host 0.0.0.0 \
-    --n-gpu-layers 99 \
+    --n-gpu-layers $NGL \
     --ctx-size 4096 \
     --threads 4 \
     --parallel 2 \
@@ -120,7 +141,7 @@ echo ""
 echo "🌐 Starting Hybrid Gateway on port ${GATEWAY_PORT:-8080}..."
 export ROUTER_URL=http://localhost:8081
 export TUTOR_URL=http://localhost:8082
-export DB_PATH="${DB_PATH:-./data/viron.db}"
+export DB_PATH="${DB_PATH:-$SCRIPT_DIR/data/viron.db}"
 mkdir -p "$(dirname "$DB_PATH")"
 
 cd "$SCRIPT_DIR/gateway"
