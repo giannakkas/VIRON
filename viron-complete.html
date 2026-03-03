@@ -903,8 +903,8 @@ async function initSileroVAD(){
       positiveSpeechThreshold:0.8,
       negativeSpeechThreshold:0.4,
       minSpeechFrames:2,
-      preSpeechPadFrames:6,
-      redemptionFrames:6,
+      preSpeechPadFrames:15,
+      redemptionFrames:10,
       onSpeechStart:()=>{
         D('  🗣️ [Silero] Speech detected');
         voiceState=VOICE_HEARING;updateListenUI();
