@@ -748,66 +748,92 @@ setInterval(()=>{if(!owwReady)checkOWWService()},10000);
 function startOWWPolling(){
   if(owwPolling)return;
   owwPolling=true;
-  D('  🎯 Starting openWakeWord polling ('+OWW_POLL_INTERVAL+'ms)');
+  D('  🎯 Starting openWakeWord audio streaming');
   document.getElementById("listenText").textContent='Say "Hey VIRON"';
   voiceState=VOICE_IDLE;updateListenUI();
   
   // Resume detection on service side
   fetch(OWW_URL+'/wakeword/resume',{method:'POST'}).catch(()=>{});
   
-  owwPollTimer=setInterval(()=>{
-    if(!owwPolling)return;
-    fetch(OWW_URL+'/wakeword/poll',{signal:AbortSignal.timeout(1000)})
-    .then(r=>r.json())
-    .then(d=>{
-      if(d.wake){
-        D('  🎯 WAKE WORD from openWakeWord! model='+d.model+' score='+(d.score||0).toFixed(3));
-        stopOWWPolling();
-        stopAllRecognition();
-        
-        // Prevent double triggers within 3s
-        if(Date.now()-lastWakeTime<3000){D('  (wake debounced)');startOWWPolling();return}
-        lastWakeTime=Date.now();
-        
-        startConversation();
-        cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
-        document.getElementById("listenText").textContent='Listening...';
-        
-        // Play acknowledgment
-        const pName=sEmo.recognized_person;
-        const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
-        D('  Playing ack: "'+ackText+'"');
-        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
-        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
-        .then(blob=>{
-          const url=URL.createObjectURL(blob);
-          const a=new Audio(url);
-          currentAudio=a;isSpeaking=true;
-          a.volume=0.6;
-          a.onended=()=>{D('  Ack ended, starting command listen');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-          a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-          a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
+  // Capture mic and stream audio to openWakeWord service
+  if(!window._owwStream){
+    navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1,echoCancellation:true,noiseSuppression:true}})
+    .then(stream=>{
+      window._owwStream=stream;
+      const ctx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+      window._owwCtx=ctx;
+      const src=ctx.createMediaStreamSource(stream);
+      // Use ScriptProcessorNode to capture raw PCM (4096 samples = 256ms at 16kHz)
+      const proc=ctx.createScriptProcessor(4096,1,1);
+      window._owwProc=proc;
+      src.connect(proc);
+      proc.connect(ctx.destination);
+      
+      proc.onaudioprocess=function(e){
+        if(!owwPolling)return;
+        const float32=e.inputBuffer.getChannelData(0);
+        // Convert float32 to int16
+        const int16=new Int16Array(float32.length);
+        for(let i=0;i<float32.length;i++){
+          const s=Math.max(-1,Math.min(1,float32[i]));
+          int16[i]=s<0?s*0x8000:s*0x7FFF;
+        }
+        // Send to server
+        fetch(OWW_URL+'/wakeword/audio',{
+          method:'POST',
+          headers:{'Content-Type':'application/octet-stream'},
+          body:int16.buffer,
+          signal:AbortSignal.timeout(2000)
         })
-        .catch(e=>{
-          D('  Ack TTS failed: '+e);
-          startCommandListening();
-        });
-      }
+        .then(r=>r.json())
+        .then(d=>{
+          if(d.detected){
+            D('  🎯 WAKE WORD from openWakeWord! model='+d.model+' score='+(d.score||0).toFixed(3));
+            stopOWWPolling();
+            stopAllRecognition();
+            
+            if(Date.now()-lastWakeTime<3000){D('  (wake debounced)');startOWWPolling();return}
+            lastWakeTime=Date.now();
+            
+            startConversation();
+            cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
+            document.getElementById("listenText").textContent='Listening...';
+            
+            const pName=sEmo.recognized_person;
+            const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
+            D('  Playing ack: "'+ackText+'"');
+            fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
+            .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+            .then(blob=>{
+              const url=URL.createObjectURL(blob);
+              const a=new Audio(url);
+              currentAudio=a;isSpeaking=true;
+              a.volume=0.6;
+              a.onended=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+              a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+              a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
+            })
+            .catch(e=>{D('  Ack TTS failed: '+e);startCommandListening()});
+          }
+        })
+        .catch(()=>{}); // Silently ignore network errors during streaming
+      };
+      D('  🎤 OWW mic streaming active');
     })
-    .catch(()=>{
-      // Service went down — fallback to Chrome
-      D('  ⚠ openWakeWord poll failed, falling back to Chrome');
-      stopOWWPolling();
-      owwReady=false;
+    .catch(e=>{
+      D('  ❌ OWW mic access failed: '+e+', falling back to Chrome');
+      owwReady=false;owwPolling=false;
       startAlwaysListening();
     });
-  },OWW_POLL_INTERVAL);
+  }else{
+    D('  🎤 OWW mic stream already active');
+  }
 }
 
 function stopOWWPolling(){
   owwPolling=false;
   if(owwPollTimer){clearInterval(owwPollTimer);owwPollTimer=null}
-  // Pause detection on service side
+  // Pause detection on service side (keep mic stream alive for quick resume)
   fetch(OWW_URL+'/wakeword/pause',{method:'POST'}).catch(()=>{});
 }
 

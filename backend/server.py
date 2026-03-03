@@ -1817,8 +1817,9 @@ def wakeword_proxy(path):
         url = f'http://127.0.0.1:{OWW_PORT}/wakeword/{path}'
         req = urllib.request.Request(url, method=request.method)
         if request.method == 'POST':
-            req.add_header('Content-Type', 'application/json')
             data = request.get_data() or b'{}'
+            ct = request.content_type or 'application/json'
+            req.add_header('Content-Type', ct)
             resp = urllib.request.urlopen(req, data, timeout=2)
         else:
             resp = urllib.request.urlopen(req, timeout=2)
