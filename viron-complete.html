@@ -1539,10 +1539,46 @@ function processStudentSpeech(text){
     "what's up":['[happy] Not much! You?','[happy] All good! What about you?'],
   };
   
-  if(INSTANT_GREETINGS[norm]){
-    const responses=INSTANT_GREETINGS[norm];
+  // Fuzzy greeting matching: Whisper often mishears Greek greetings
+  // Keys are accent-stripped to match `norm`
+  const GREETING_FUZZY={
+    // "τι κάνεις" variants
+    'τικανιες':'τι κανεις','τι κανις':'τι κανεις','τικανεις':'τι κανεις',
+    'τι κανιες':'τι κανεις','τι κανεισ':'τι κανεις',
+    'τι κανης':'τι κανεις','τικανης':'τι κανεις',
+    // "γεια σου" variants
+    'για σου':'γεια σου','γεια σ':'γεια σου','γεια':'γεια',
+    // "καλημέρα" variants
+    'καλιμερα':'καλημερα',
+    // "ευχαριστώ" variants
+    'ευχαριστουμε πολυ':'ευχαριστω πολυ','ευχαριστουμε':'ευχαριστω',
+    // "τι γίνεται" variants
+    'τι γινετε':'τι γινεται','τιγινεται':'τι γινεται',
+    // "καλησπέρα" variants
+    'καλισπερα':'καλησπερα',
+  };
+
+  // Try exact match first
+  let greetingKey=norm;
+  // Try fuzzy match
+  if(!INSTANT_GREETINGS[greetingKey]){
+    // Remove trailing punctuation and try again
+    const cleaned=norm.replace(/[;?.!,]+$/,'').trim();
+    if(INSTANT_GREETINGS[cleaned])greetingKey=cleaned;
+    else if(GREETING_FUZZY[cleaned])greetingKey=GREETING_FUZZY[cleaned];
+    else if(GREETING_FUZZY[norm])greetingKey=GREETING_FUZZY[norm];
+    else{
+      // Last resort: check if norm starts with any greeting key
+      for(const k of Object.keys(INSTANT_GREETINGS)){
+        if(norm.startsWith(k)&&norm.length<=k.length+3){greetingKey=k;break;}
+      }
+    }
+  }
+  
+  if(INSTANT_GREETINGS[greetingKey]){
+    const responses=INSTANT_GREETINGS[greetingKey];
     const reply=responses[Math.floor(Math.random()*responses.length)];
-    D('  ⚡ Instant greeting: "'+reply+'" (matched: "'+norm+'")');
+    D('  ⚡ Instant greeting: "'+reply+'" (matched: "'+greetingKey+'" from: "'+norm+'")');
     msgs.push({role:"user",content:text});
     msgs.push({role:"assistant",content:reply});
     handleAIResponse(reply);
@@ -1562,7 +1598,7 @@ function handleAIResponse(t){
 }
 
 // Map Greek emotion tags to English + parse and strip
-const EMOTION_MAP={'happy':'happy','sad':'sad','thinking':'thinking','excited':'excited','calm':'calm','surprised':'surprised','confused':'confused','proud':'proud','worried':'worried','cheeky':'cheeky','neutral':'neutral','hopeful':'hopeful','focused':'focused','sleepy':'sleepy',
+const EMOTION_MAP={'happy':'happy','sad':'sad','thinking':'thinking','excited':'excited','calm':'calm','surprised':'surprised','confused':'confused','proud':'proud','worried':'worried','cheeky':'cheeky','neutral':'neutral','hopeful':'hopeful','focused':'focused','sleepy':'sleepy','curious':'thinking','encouraging':'happy','playful':'cheeky','amused':'happy','warm':'happy','gentle':'calm','serious':'neutral','impressed':'proud','loving':'happy','sympathetic':'sad','cheerful':'happy','determined':'focused','nostalgic':'calm','relaxed':'calm','enthusiastic':'excited','skeptical':'confused','shy':'neutral','bored':'sleepy','angry':'worried','frustrated':'worried',
   // Greek mappings
   'χαρούμενος':'happy','χαρά':'happy','λυπημένος':'sad','σκεπτικός':'thinking','σκέψη':'thinking','ενθουσιασμένος':'excited','ήρεμος':'calm','έκπληκτος':'surprised','μπερδεμένος':'confused','περήφανος':'proud','ανήσυχος':'worried','πονηρός':'cheeky','ουδέτερος':'neutral','αισιόδοξος':'hopeful','συγκεντρωμένος':'focused'};
 
@@ -1578,10 +1614,16 @@ function parseEmotionAndStrip(t){
   // Strip ALL [emotion] tags from anywhere in text
   return t.replace(/\[([^\]]+)\]\s*/g,function(match,tag){
     const lower=tag.toLowerCase().trim();
+    // Skip non-emotion tags like [WHITEBOARD:...] [YOUTUBE:...] [WEATHER...]
+    if(lower.includes(':')||lower.includes('/')||lower.length>20)return match;
     const mp=EMOTION_MAP[lower];
     if(mp&&E[mp]){cE(mp);return '';}
     if(E[lower]){cE(lower);return '';}
-    if(lower.match(/^(happy|sad|thinking|excited|calm|surprised|confused|proud|worried|cheeky|neutral|hopeful|focused|sleepy|winking)$/))return '';
+    // Strip any single-word tag (AI often generates random emotion names)
+    if(/^[a-zA-Zα-ωά-ώ]+$/.test(lower)&&lower.length<=15){
+      D('  🎭 Stripping unknown emotion tag: ['+tag+']');
+      return '';
+    }
     return match;
   }).trim();
 }
