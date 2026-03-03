@@ -1579,6 +1579,19 @@ def speech_to_text():
                     text = resp.json().get("text", "").strip()
                     elapsed = time.time() - t_start
                     print(f"  ✅ OpenAI Whisper: \"{text[:80]}\" ({elapsed:.1f}s)")
+                    # Filter hallucinations (common Whisper ghost outputs)
+                    HALLUCINATION_BLACKLIST = [
+                        "υπότιτλοι", "authorwave", "σας ευχαριστούμε",
+                        "ευχαριστώ που παρακολουθήσατε", "εγγραφείτε στο κανάλι",
+                        "like and subscribe", "thank you for watching",
+                        "subtitles by", "translated by", "amara.org",
+                        "σας ευχαριστώ για την παρακολούθηση",
+                        "παρακαλώ εγγραφείτε", "κάντε like",
+                        "music", "♪", "...", "…",
+                    ]
+                    if text and any(bl in text.lower() for bl in HALLUCINATION_BLACKLIST):
+                        print(f"  ⚠ Filtered hallucination: '{text[:60]}'")
+                        return jsonify({"text": "", "language": whisper_lang or "el", "duration": round(elapsed, 2), "engine": "openai", "filtered": "hallucination"})
                     if text and len(text) > 1:
                         return jsonify({"text": text, "language": whisper_lang or "el", "duration": round(elapsed, 2), "engine": "openai"})
                     else:

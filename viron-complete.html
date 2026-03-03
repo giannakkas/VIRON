@@ -900,9 +900,9 @@ async function initSileroVAD(){
   try{
     D('🔊 Initializing Silero VAD...');
     sileroVAD=await vad.MicVAD.new({
-      positiveSpeechThreshold:0.7,
-      negativeSpeechThreshold:0.35,
-      minSpeechFrames:1,
+      positiveSpeechThreshold:0.8,
+      negativeSpeechThreshold:0.4,
+      minSpeechFrames:2,
       preSpeechPadFrames:6,
       redemptionFrames:6,
       onSpeechStart:()=>{
@@ -1190,6 +1190,13 @@ function handleWhisperResult(speech,lang){
     if(wbO){closeWB();}
     setTimeout(startCommandListening,500);return;
   }
+  // FILTER: reject Whisper hallucinations and TV/background audio
+  const _hallucinations=["υπότιτλοι","authorwave","εγγραφείτε","παρακολουθήσατε","subscribe","subtitles","thank you for watching","like and subscribe","σας ευχαριστούμε για","ευχαριστώ που παρακολ","κάντε like","amara.org"];
+  const _sl=speech.toLowerCase();
+  if(_hallucinations.some(h=>_sl.includes(h))){
+    D('  🚫 Filtered hallucination/TV: "'+speech+'"');
+    setTimeout(()=>{if(inConversation)startCommandListening();else startAlwaysListening();},300);return;
+  }
   document.getElementById("listenText").textContent=speech;
   
   // Whiteboard mode: only accept close commands
@@ -1334,7 +1341,7 @@ function startChromeListening(){
 // Conversation ends after silence timeout.
 let inConversation=false;
 let conversationTimer=null;
-const CONVERSATION_TIMEOUT=60000; // 60s silence → end conversation
+const CONVERSATION_TIMEOUT=30000; // 30s silence → end conversation
 let silenceCount=0; // track consecutive silences
 
 function startConversation(){
