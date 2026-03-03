@@ -17,7 +17,13 @@ sudo apt-get install -y -qq portaudio19-dev python3-pyaudio libspeexdsp-dev
 
 # Install Python packages
 echo "📦 Installing Python packages..."
-pip3 install --break-system-packages openwakeword pyaudio flask flask-cors numpy
+# --break-system-packages only needed for Python 3.11+
+PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+if [ "$PY_MINOR" -ge 11 ]; then
+  pip3 install --break-system-packages openwakeword pyaudio flask flask-cors numpy
+else
+  pip3 install openwakeword pyaudio flask flask-cors numpy
+fi
 
 # Download pre-trained models
 echo "📥 Downloading openWakeWord models..."
