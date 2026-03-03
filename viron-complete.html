@@ -972,7 +972,9 @@ function sendVADAudioToWhisper(audioFloat32){
   document.getElementById("listenText").textContent='Processing...';
   const fd=new FormData();
   fd.append('audio',wavBlob,'speech.wav');
-  fd.append('lang',isGreekMode()?'el':'en');
+  // Wake-word mode: send as English so Whisper can hear "Hey VIRON"
+  // Conversation mode: send in user's language preference
+  fd.append('lang',inConversation?(isGreekMode()?'el':'en'):'en');
   fetch('/api/stt',{method:'POST',body:fd})
   .then(r=>r.json())
   .then(data=>{
@@ -1211,7 +1213,7 @@ function handleWhisperResult(speech,lang){
     setTimeout(startCommandListening,500);return;
   }
   // FILTER: reject Whisper hallucinations and TV/background audio
-  const _hallucinations=["υπότιτλοι","authorwave","εγγραφείτε","παρακολουθήσατε","subscribe","subtitles","thank you for watching","like and subscribe","σας ευχαριστούμε για","ευχαριστώ που παρακολ","κάντε like","amara.org"];
+  const _hallucinations=["υπότιτλοι","authorwave","εγγραφείτε","παρακολουθήσατε","subscribe","subtitles","thank you for watching","like and subscribe","σας ευχαριστούμε","ευχαριστούμε","ευχαριστώ που παρακολ","κάντε like","amara.org"];
   const _sl=speech.toLowerCase();
   if(_hallucinations.some(h=>_sl.includes(h))){
     D('  🚫 Filtered hallucination/TV: "'+speech+'"');
