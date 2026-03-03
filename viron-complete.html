@@ -452,6 +452,7 @@ function say(text,speed){
   if(!synth){D('  say: no synth!');return}
   // STOP any current speech first — ONE voice at a time
   stopSpeaking();
+  owwPauseForSpeech(); // Pause wake word detection while speaking
   isSpeaking=true;
   // No subtitle on face — VIRON speaks only
   // Strip emojis and special chars that break TTS
@@ -718,13 +719,121 @@ let alwaysRec=null;
 let alwaysListening=false;
 let lastWakeTime=0; // Prevent double triggers
 
+// ===== openWakeWord Service (server-side wake word detection) =====
+let owwReady=false;
+let owwPolling=false;
+let owwPollTimer=null;
+const OWW_URL=''; // Same origin proxy via Flask (/wakeword/*)
+const OWW_POLL_INTERVAL=250; // Poll every 250ms
+
+// Check if openWakeWord service is running
+function checkOWWService(){
+  fetch(OWW_URL+'/wakeword/status',{signal:AbortSignal.timeout(2000)})
+  .then(r=>r.json())
+  .then(d=>{
+    if(d.ready){
+      owwReady=true;
+      D('🎯 openWakeWord service READY: models='+JSON.stringify(d.models)+' threshold='+d.threshold);
+    }else{
+      owwReady=false;
+      D('⚠ openWakeWord service not ready yet');
+    }
+  })
+  .catch(()=>{owwReady=false;D('⚠ openWakeWord service not available — using Chrome fallback')});
+}
+checkOWWService();
+// Re-check every 10s in case service starts later
+setInterval(()=>{if(!owwReady)checkOWWService()},10000);
+
+function startOWWPolling(){
+  if(owwPolling)return;
+  owwPolling=true;
+  D('  🎯 Starting openWakeWord polling ('+OWW_POLL_INTERVAL+'ms)');
+  document.getElementById("listenText").textContent='Say "Hey VIRON"';
+  voiceState=VOICE_IDLE;updateListenUI();
+  
+  // Resume detection on service side
+  fetch(OWW_URL+'/wakeword/resume',{method:'POST'}).catch(()=>{});
+  
+  owwPollTimer=setInterval(()=>{
+    if(!owwPolling)return;
+    fetch(OWW_URL+'/wakeword/poll',{signal:AbortSignal.timeout(1000)})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.wake){
+        D('  🎯 WAKE WORD from openWakeWord! model='+d.model+' score='+(d.score||0).toFixed(3));
+        stopOWWPolling();
+        stopAllRecognition();
+        
+        // Prevent double triggers within 3s
+        if(Date.now()-lastWakeTime<3000){D('  (wake debounced)');startOWWPolling();return}
+        lastWakeTime=Date.now();
+        
+        startConversation();
+        cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
+        document.getElementById("listenText").textContent='Listening...';
+        
+        // Play acknowledgment
+        const pName=sEmo.recognized_person;
+        const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
+        D('  Playing ack: "'+ackText+'"');
+        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
+        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+        .then(blob=>{
+          const url=URL.createObjectURL(blob);
+          const a=new Audio(url);
+          currentAudio=a;isSpeaking=true;
+          a.volume=0.6;
+          a.onended=()=>{D('  Ack ended, starting command listen');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+          a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+          a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
+        })
+        .catch(e=>{
+          D('  Ack TTS failed: '+e);
+          startCommandListening();
+        });
+      }
+    })
+    .catch(()=>{
+      // Service went down — fallback to Chrome
+      D('  ⚠ openWakeWord poll failed, falling back to Chrome');
+      stopOWWPolling();
+      owwReady=false;
+      startAlwaysListening();
+    });
+  },OWW_POLL_INTERVAL);
+}
+
+function stopOWWPolling(){
+  owwPolling=false;
+  if(owwPollTimer){clearInterval(owwPollTimer);owwPollTimer=null}
+  // Pause detection on service side
+  fetch(OWW_URL+'/wakeword/pause',{method:'POST'}).catch(()=>{});
+}
+
+// Pause OWW when VIRON speaks, resume when done
+function owwPauseForSpeech(){
+  if(owwReady)fetch(OWW_URL+'/wakeword/pause',{method:'POST'}).catch(()=>{});
+}
+function owwResumeAfterSpeech(){
+  if(owwReady)fetch(OWW_URL+'/wakeword/resume',{method:'POST'}).catch(()=>{});
+}
+
 function startAlwaysListening(){
   // Don't listen during setup wizard
   if(document.getElementById('setupWizard')?.style.display==='block'){D('  Setup active, skip listening');return}
   D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', wakeLang=en-US, cmdLang='+getSRLang());
   if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
-  if(alwaysListening){D('  already listening');return}
+  if(alwaysListening||owwPolling){D('  already listening');return}
+  
+  // PREFER openWakeWord service (server-side, reliable)
+  if(owwReady){
+    D('  🎯 Using openWakeWord service for wake word detection');
+    startOWWPolling();
+    return; // Don't start Chrome Speech API
+  }
+  D('  📢 Using Chrome Speech API fallback for wake word detection');
   
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){D('  ❌ SpeechRecognition not available');return}
@@ -875,8 +984,8 @@ function startAlwaysListening(){
     wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
   }
   
-  // ALSO start Silero VAD as parallel wake word detector (more reliable than Chrome)
-  if(vadReady&&sileroVAD&&!vadListening){
+  // ALSO start Silero VAD as parallel wake word detector (only when Chrome fallback is in use)
+  if(!owwReady&&vadReady&&sileroVAD&&!vadListening){
     try{
       D('  🔊 Starting Silero VAD for wake word detection');
       sileroVAD.start();vadListening=true;
@@ -1448,6 +1557,7 @@ function startWakeListener(){
 
 function stopAllRecognition(){
   D('>>> stopAllRecognition');
+  stopOWWPolling(); // Stop openWakeWord polling
   try{if(alwaysRec)alwaysRec.abort()}catch{}
   try{if(activeRec)activeRec.abort()}catch{}
   try{if(activeCmdRec)activeCmdRec.abort()}catch{}

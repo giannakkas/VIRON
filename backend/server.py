@@ -1805,6 +1805,29 @@ def serve_static(filename):
     static_dir = os.path.join(ROOT_DIR, 'static')
     return send_from_directory(static_dir, filename)
 
+# ============ WAKE WORD SERVICE PROXY ============
+# Proxy requests to openWakeWord service on port 8085
+OWW_PORT = int(os.environ.get('VIRON_WAKEWORD_PORT', '8085'))
+
+@app.route('/wakeword/<path:path>', methods=['GET', 'POST'])
+def wakeword_proxy(path):
+    import urllib.request
+    import urllib.error
+    try:
+        url = f'http://127.0.0.1:{OWW_PORT}/wakeword/{path}'
+        req = urllib.request.Request(url, method=request.method)
+        if request.method == 'POST':
+            req.add_header('Content-Type', 'application/json')
+            data = request.get_data() or b'{}'
+            resp = urllib.request.urlopen(req, data, timeout=2)
+        else:
+            resp = urllib.request.urlopen(req, timeout=2)
+        return jsonify(json.loads(resp.read()))
+    except urllib.error.URLError:
+        return jsonify({"error": "Wake word service not running", "ready": False}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ============ START ============
 if __name__ == '__main__':
     port = config['port']
