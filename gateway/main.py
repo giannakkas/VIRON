@@ -257,25 +257,29 @@ Start with [emotion] tag like [happy] or [thinking]. No emojis."""
 
 
 async def call_tutor(message: str, age: int, language: str, history: list) -> str:
-    """Call the local Mistral tutor via llama.cpp server."""
+    """Call the local LLM for simple responses.
+    Uses Gemma 2B (router model) on GPU — Mistral 7B doesn't fit in 8GB with router.
+    For complex questions, the gateway routes to cloud instead."""
     messages = [{"role": "system", "content": _tutor_system_prompt(age, language)}]
     # Add last few turns of history
-    for h in history[-6:]:
+    for h in history[-4:]:  # Shorter history for smaller model
         messages.append({"role": h["role"], "content": h["content"]})
-    # Reinforce language in user message for Greek (Mistral tends to default to English)
+    # Reinforce language in user message for Greek
     user_content = message
     if language == "el":
-        user_content = f"{message}\n(Απάντησε στα Ελληνικά)"
+        user_content = f"{message}\n(Απάντησε στα Ελληνικά. Μέγιστο 2 προτάσεις.)"
     messages.append({"role": "user", "content": user_content})
 
+    # Try Gemma 2B (router model) — it's on GPU and fast for simple responses
+    local_url = cfg.ROUTER_URL  # Use router model (only one that fits in 8GB)
     try:
         resp = await client.post(
-            f"{cfg.TUTOR_URL}/v1/chat/completions",
+            f"{local_url}/v1/chat/completions",
             json={
-                "model": "mistral-tutor",
+                "model": "gemma-local",
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 150,
+                "max_tokens": 100,  # Keep responses short for 2B model
                 "stream": False,
             },
             timeout=cfg.TUTOR_TIMEOUT,
@@ -283,7 +287,7 @@ async def call_tutor(message: str, age: int, language: str, history: list) -> st
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        logger.error(f"Tutor call failed: {e}")
+        logger.error(f"Local tutor (Gemma) call failed: {e}")
         if language == "el":
             return "[confused] Χμμ, κάτι πήγε στραβά. Δοκίμασε ξανά σε λίγο!"
         return "[confused] I'm having trouble thinking right now. Try again in a moment!"
@@ -570,7 +574,7 @@ async def chat(req: ChatRequest):
     actual_provider = router_result.cloud_provider
 
     # Force cloud mode when local CPU is too slow (disable with FORCE_CLOUD=0)
-    force_cloud = os.environ.get("FORCE_CLOUD", "1") == "1"
+    force_cloud = os.environ.get("FORCE_CLOUD", "0") == "1"
     if force_cloud and router_result.mode == "local":
         logger.info("FORCE_CLOUD: overriding local → cloud/chatgpt")
         router_result.mode = "cloud"
