@@ -116,13 +116,19 @@ class WakeWordDetector:
     
     def pause(self):
         self.is_paused = True
-        if self.model:
-            self.model.reset()
+        try:
+            if self.model:
+                self.model.reset()
+        except Exception:
+            pass  # Reset can fail if audio is being processed — safe to ignore
     
     def resume(self):
         self.is_paused = False
-        if self.model:
-            self.model.reset()
+        try:
+            if self.model:
+                self.model.reset()
+        except Exception:
+            pass
     
     def consume_detection(self) -> dict:
         with self._lock:
