@@ -874,6 +874,14 @@ function startAlwaysListening(){
     clearTimeout(wakeRetryTimeout);
     wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
   }
+  
+  // ALSO start Silero VAD as parallel wake word detector (more reliable than Chrome)
+  if(vadReady&&sileroVAD&&!vadListening){
+    try{
+      D('  🔊 Starting Silero VAD for wake word detection');
+      sileroVAD.start();vadListening=true;
+    }catch(e){D('  ⚠ VAD start error: '+e.message)}
+  }
 }
 
 // After wake word detected, listen for the actual command
@@ -945,6 +953,18 @@ function float32ToWav(samples){
 }
 
 function sendVADAudioToWhisper(audioFloat32){
+  // Energy check: reject quiet audio in wake-word mode (likely TV/ambient)
+  if(!inConversation){
+    let sumSq=0;
+    for(let i=0;i<audioFloat32.length;i++)sumSq+=audioFloat32[i]*audioFloat32[i];
+    const rms=Math.sqrt(sumSq/audioFloat32.length);
+    D('  📊 Audio RMS energy: '+rms.toFixed(4));
+    if(rms<0.015){
+      D('  🔇 Too quiet for wake word (RMS '+rms.toFixed(4)+' < 0.015), skipping Whisper');
+      setTimeout(startAlwaysListening,300);
+      return;
+    }
+  }
   const wavBlob=float32ToWav(audioFloat32);
   const durMs=Math.round(audioFloat32.length/16000*1000);
   D('  📤 Sending '+Math.round(wavBlob.size/1024)+'KB WAV ('+durMs+'ms speech-only) to Whisper');
@@ -1199,6 +1219,33 @@ function handleWhisperResult(speech,lang){
   }
   document.getElementById("listenText").textContent=speech;
   
+  // NOT in conversation? Check for wake word in Whisper result
+  if(!inConversation){
+    const _lw=speech.toLowerCase();
+    if(matchesWakeWord(_lw)){
+      D('  🎯 WAKE WORD via Whisper: "'+speech+'"');
+      stopAllRecognition();
+      const afterWake=extractAfterWake(speech);
+      startConversation();
+      if(afterWake&&afterWake.trim().length>2){
+        D('  → Direct command via Whisper: "'+afterWake+'"');
+        cE("hopeful");voiceState=VOICE_PROCESSING;updateListenUI();
+        processStudentSpeech(afterWake);
+      }else{
+        cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
+        document.getElementById("listenText").textContent='Listening...';
+        const pName=sEmo.recognized_person;
+        const ackText=pName?(isGreekMode()?`Ορίστε ${pName};`:`Yes ${pName}?`):(isGreekMode()?"Ορίστε;":"Yes?");
+        say(ackText);
+      }
+      return;
+    }else{
+      D('  🔇 Not a wake word (not in conversation): "'+speech+'"');
+      setTimeout(startAlwaysListening,300);
+      return;
+    }
+  }
+  
   // Whiteboard mode: only accept close commands
   if(wbO){
     if(/\b(ok|okay|οκ|οκέι|εντάξει|κλείσε|close|done|ready|got it|κατάλαβα|ωραία|back|πίσω)\b/i.test(speech)){
@@ -1341,7 +1388,7 @@ function startChromeListening(){
 // Conversation ends after silence timeout.
 let inConversation=false;
 let conversationTimer=null;
-const CONVERSATION_TIMEOUT=30000; // 30s silence → end conversation
+const CONVERSATION_TIMEOUT=45000; // 45s silence → end conversation
 let silenceCount=0; // track consecutive silences
 
 function startConversation(){
