@@ -722,14 +722,18 @@ let alwaysListening=false;
 let lastWakeTime=0; // Prevent double triggers
 
 // ===== openWakeWord Service (server-side wake word detection) =====
+// DISABLED for now — Chrome Speech API + "hey jarvis" is more reliable
+// Enable with: localStorage.setItem('viron_oww','1') then refresh
 let owwReady=false;
 let owwPolling=false;
 let owwPollTimer=null;
 const OWW_URL=''; // Same origin proxy via Flask (/wakeword/*)
 const OWW_POLL_INTERVAL=250; // Poll every 250ms
+const OWW_ENABLED=false; // Set to true to use openWakeWord service
 
 // Check if openWakeWord service is running
 function checkOWWService(){
+  if(!OWW_ENABLED)return;
   fetch(OWW_URL+'/wakeword/status',{signal:AbortSignal.timeout(2000)})
   .then(r=>r.json())
   .then(d=>{
@@ -743,9 +747,9 @@ function checkOWWService(){
   })
   .catch(()=>{owwReady=false;D('⚠ openWakeWord service not available — using Chrome fallback')});
 }
-checkOWWService();
+if(OWW_ENABLED)checkOWWService();
 // Re-check every 10s in case service starts later
-setInterval(()=>{if(!owwReady)checkOWWService()},10000);
+if(OWW_ENABLED)setInterval(()=>{if(!owwReady)checkOWWService()},10000);
 
 function startOWWPolling(){
   if(owwPolling)return;
@@ -880,7 +884,7 @@ function startAlwaysListening(){
   D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', wakeLang=en-US, cmdLang='+getSRLang());
   if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
-  if(alwaysListening||owwPolling){D('  already listening');return}
+  if(alwaysListening){D('  already listening');return}
   
   // PREFER openWakeWord service (server-side, reliable)
   if(owwReady){
@@ -1039,8 +1043,8 @@ function startAlwaysListening(){
     wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
   }
   
-  // ALSO start Silero VAD as parallel wake word detector (only when Chrome fallback is in use)
-  if(!owwReady&&vadReady&&sileroVAD&&!vadListening){
+  // ALSO start Silero VAD as parallel wake word detector (more reliable than Chrome)
+  if(vadReady&&sileroVAD&&!vadListening){
     try{
       D('  🔊 Starting Silero VAD for wake word detection');
       sileroVAD.start();vadListening=true;
