@@ -87,11 +87,26 @@ class WakeWordDetector:
         try:
             # Energy check — skip quiet audio (TV through speakers)
             rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
+            
+            # Debug: log every ~2 seconds (assuming ~4 calls/sec)
+            self._debug_count = getattr(self, '_debug_count', 0) + 1
+            if self._debug_count % 8 == 0:
+                logger.info(f"Audio RMS={rms:.0f}, samples={len(audio_int16)}, paused={self.is_paused}")
+            
             if rms < 300:  # int16 scale: direct speech ~2000+, TV through mic ~100-500
                 return {"detected": False}
             
             # openWakeWord expects int16 numpy array
             predictions = self.model.predict(audio_int16)
+            
+            for name in self.model_names:
+                score = predictions[name]
+                
+                # Log high-ish scores for debugging
+                if score > 0.1:
+                    logger.info(f"Score: {name}={score:.3f} (threshold={THRESHOLD}, RMS={rms:.0f})")
+                
+                if score >= THRESHOLD:
             
             for name in self.model_names:
                 score = predictions[name]
