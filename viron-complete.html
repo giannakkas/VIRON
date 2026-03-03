@@ -777,29 +777,40 @@ function startOWWPolling(){
       // Downsample ratio
       const ratio=nativeSR/16000;
       let sendCount=0;
+      let audioBuffer=new Float32Array(0); // Accumulate audio
+      const TARGET_SAMPLES=Math.ceil(1280*ratio*2); // ~2 OWW frames worth of native audio
       
       proc.onaudioprocess=function(e){
         if(!owwPolling)return;
         const float32=e.inputBuffer.getChannelData(0);
         
+        // Accumulate audio in buffer
+        const newBuf=new Float32Array(audioBuffer.length+float32.length);
+        newBuf.set(audioBuffer);
+        newBuf.set(float32,audioBuffer.length);
+        audioBuffer=newBuf;
+        
+        // Wait until we have enough samples
+        if(audioBuffer.length<TARGET_SAMPLES)return;
+        
+        // Take the buffer and reset
+        const chunk=audioBuffer;
+        audioBuffer=new Float32Array(0);
+        
         // Energy check — skip quiet audio (TV through speakers)
         let sumSq=0;
-        for(let i=0;i<float32.length;i++)sumSq+=float32[i]*float32[i];
-        const rms=Math.sqrt(sumSq/float32.length);
+        for(let i=0;i<chunk.length;i++)sumSq+=chunk[i]*chunk[i];
+        const rms=Math.sqrt(sumSq/chunk.length);
         if(rms<0.01){return} // Skip quiet audio — direct speech is typically 0.03+
         
         // Downsample from native rate to 16kHz
-        const outLen=Math.round(float32.length/ratio);
+        const outLen=Math.round(chunk.length/ratio);
         const int16=new Int16Array(outLen);
         for(let i=0;i<outLen;i++){
-          const srcIdx=Math.min(Math.round(i*ratio),float32.length-1);
-          const s=Math.max(-1,Math.min(1,float32[srcIdx]));
+          const srcIdx=Math.min(Math.round(i*ratio),chunk.length-1);
+          const s=Math.max(-1,Math.min(1,chunk[srcIdx]));
           int16[i]=s<0?s*0x8000:s*0x7FFF;
         }
-        
-        // Throttle: only send every other chunk to reduce load
-        sendCount++;
-        if(sendCount%2!==0)return;
         
         // Send to server
         fetch(OWW_URL+'/wakeword/audio',{
