@@ -54,9 +54,15 @@ def check_safety(message: str, age: int = 10) -> Tuple[bool, str]:
 
     return True, "safe"
 
-def get_blocked_response(age: int = 10) -> str:
-    """Return an age-appropriate refusal message."""
+def get_blocked_response(age: int = 10, lang: str = "el") -> str:
+    """Return an age-appropriate refusal message in the correct language."""
     mode = age_mode_from_age(age)
+    if lang == "el":
+        if mode == "kids":
+            return "[happy] Ας μιλήσουμε για κάτι άλλο! Τι θα ήθελες να μάθεις;"
+        elif mode == "teens":
+            return "[neutral] Δεν μπορώ να βοηθήσω με αυτό το θέμα. Ας βρούμε κάτι καλύτερο!"
+        return "[neutral] Δεν μπορώ να βοηθήσω με αυτό. Πώς αλλιώς μπορώ να σε βοηθήσω;"
     if mode == "kids":
         return "[happy] Let's talk about something else! What would you like to learn about?"
     elif mode == "teens":

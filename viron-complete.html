@@ -97,6 +97,37 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .wb-step .st{font-size:18px;color:#222;line-height:1.6}
 .wb-step .sr{font-size:28px;color:#27ae60;font-weight:700;text-align:center;padding:16px;background:rgba(39,174,96,0.08);border-radius:12px;border:2px solid rgba(39,174,96,0.2)}
 </style>
+
+<!-- VIRON Weather Overlay & Transition Styles -->
+<style>
+/* Futuristic transitions */
+.wb-overlay{transform:translateY(10px);}
+.wb-overlay.active{transform:translateY(0);}
+@keyframes borderGlow{0%{box-shadow:0 0 15px rgba(0,150,255,0.2)}50%{box-shadow:0 0 30px rgba(0,150,255,0.5)}100%{box-shadow:0 0 15px rgba(0,150,255,0.2)}}
+.wb-overlay.active .wb-content{animation:borderGlow 3s ease-in-out infinite;}
+
+/* Weather overlay */
+.weather-overlay{position:fixed;top:0;left:0;width:100%;height:100%;z-index:200;display:none;
+  background:linear-gradient(135deg,#0a1628 0%,#1a237e 40%,#283593 100%);
+  opacity:0;transition:opacity 0.6s ease,transform 0.6s ease;transform:scale(0.95);}
+.weather-overlay.active{display:flex !important;opacity:1;transform:scale(1);flex-direction:column;align-items:center;justify-content:center;}
+.weather-card{background:rgba(255,255,255,0.08);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.15);
+  border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,0.4);animation:wSlideIn 0.5s ease 0.2s both;}
+@keyframes wSlideIn{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
+.weather-temp{font-size:80px;font-weight:200;color:#fff;line-height:1;margin:10px 0;}
+.weather-desc{font-size:22px;color:rgba(255,255,255,0.8);margin:8px 0;text-transform:capitalize;}
+.weather-city{font-size:16px;color:rgba(255,255,255,0.5);margin-bottom:20px;letter-spacing:2px;text-transform:uppercase;}
+.weather-details{display:flex;justify-content:center;gap:30px;margin-top:20px;flex-wrap:wrap;}
+.weather-detail{text-align:center;}
+.weather-detail-val{font-size:24px;color:#fff;font-weight:300;}
+.weather-detail-label{font-size:12px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-top:4px;}
+.weather-tomorrow{margin-top:24px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);font-size:16px;}
+.weather-icon{font-size:64px;margin-bottom:10px;}
+.weather-close{position:absolute;top:20px;right:20px;color:rgba(255,255,255,0.5);font-size:14px;cursor:pointer;
+  padding:8px 16px;border:1px solid rgba(255,255,255,0.2);border-radius:20px;transition:all 0.3s;}
+.weather-close:hover{color:#fff;border-color:rgba(255,255,255,0.5);}
+</style>
 </head>
 <body>
 <div class="boot-splash" id="bootSplash">
@@ -442,7 +473,7 @@ function say(text,speed){
   
   // ALL speech → server edge-tts (male voice) with browser fallback
   // When Greek mode: ALWAYS use Greek TTS, even if AI accidentally responded in English
-  const lang=isGreekMode()?'el':(isGr(clean)?'el':'en');
+  const lang=isGreekMode()?'el':'en'; // Force language from mode selection
   sayServerTTS(clean,lang,speed||'normal');
 }
 
@@ -871,7 +902,7 @@ async function initSileroVAD(){
     sileroVAD=await vad.MicVAD.new({
       positiveSpeechThreshold:0.7,
       negativeSpeechThreshold:0.35,
-      minSpeechFrames:3,
+      minSpeechFrames:1,
       preSpeechPadFrames:6,
       redemptionFrames:6,
       onSpeechStart:()=>{
@@ -1152,6 +1183,13 @@ function startWhisperListening(){
 
 function handleWhisperResult(speech,lang){
   D('  🎙️ Whisper result: "'+speech+'" (lang='+lang+')');
+  // INTERRUPT: if VIRON is speaking and user says stop/σταμάτα
+  const _stopWords=["σταμάτα","σταματα","stop","στοπ","σώπα","σωπα","shut up","αρκετά","αρκετα","enough","σκάσε","σκασε"];
+  if(isSpeaking&&_stopWords.some(w=>speech.toLowerCase().includes(w))){
+    D('  🛑 INTERRUPT: stopping speech');stopSpeaking();cE("neutral");
+    if(wbO){closeWB();}
+    setTimeout(startCommandListening,500);return;
+  }
   document.getElementById("listenText").textContent=speech;
   
   // Whiteboard mode: only accept close commands
@@ -1522,16 +1560,23 @@ const EMOTION_MAP={'happy':'happy','sad':'sad','thinking':'thinking','excited':'
   'χαρούμενος':'happy','χαρά':'happy','λυπημένος':'sad','σκεπτικός':'thinking','σκέψη':'thinking','ενθουσιασμένος':'excited','ήρεμος':'calm','έκπληκτος':'surprised','μπερδεμένος':'confused','περήφανος':'proud','ανήσυχος':'worried','πονηρός':'cheeky','ουδέτερος':'neutral','αισιόδοξος':'hopeful','συγκεντρωμένος':'focused'};
 
 function parseEmotionAndStrip(t){
-  // Match [emotion] or [Emotion] at start — English or Greek
+  // Match first [emotion] for initial face animation
   const m=t.match(/^\[([^\]]+)\]\s*/);
   if(m){
     const raw=m[1].toLowerCase().trim();
     const mapped=EMOTION_MAP[raw];
     if(mapped&&E[mapped])cE(mapped);
     else if(E[raw])cE(raw);
-    return t.slice(m[0].length);
   }
-  return t;
+  // Strip ALL [emotion] tags from anywhere in text
+  return t.replace(/\[([^\]]+)\]\s*/g,function(match,tag){
+    const lower=tag.toLowerCase().trim();
+    const mp=EMOTION_MAP[lower];
+    if(mp&&E[mp]){cE(mp);return '';}
+    if(E[lower]){cE(lower);return '';}
+    if(lower.match(/^(happy|sad|thinking|excited|calm|surprised|confused|proud|worried|cheeky|neutral|hopeful|focused|sleepy|winking)$/))return '';
+    return match;
+  }).trim();
 }
 
 // Homework photo capture — snap camera frame and send to vision AI
@@ -1679,6 +1724,9 @@ Be real. Be warm. Be their brilliant friend.`,
     }
     const d=await r.json();
     D('  API response: '+JSON.stringify(d).substring(0,300));
+    // Show weather overlay if gateway returned weather data
+    const _wd=parseWeatherFromGateway(d);
+    if(_wd)setTimeout(()=>showWeather(_wd),500);
     let t=d.content?.filter(c=>c.type==="text").map(c=>c.text).join("")||(isGreekMode()?"[confused] Χμμ!":"[confused] Hmm!");
     D('  AI text: "'+t.substring(0,200)+'"');
     // Parse emotion and strip tag (handles Greek and English)
@@ -1863,10 +1911,19 @@ function openWB(t,steps){
     stepEls.push({el:d,data:x});
   });
   
-  // Show whiteboard
-  document.getElementById("face").style.transition="opacity 0.6s";
-  document.getElementById("face").style.opacity="0";
-  setTimeout(()=>document.getElementById("wb").classList.add("active"),600);
+  // Show whiteboard with futuristic transition
+  const _face=document.getElementById("face");
+  _face.style.transition="opacity 0.5s ease, transform 0.5s ease";
+  _face.style.opacity="0";_face.style.transform="scale(0.9)";
+  setTimeout(()=>{
+    document.getElementById("wb").classList.add("active");
+    // Auto-scroll whiteboard content slowly
+    let _wbScroll=setInterval(()=>{
+      const el=document.getElementById("wbc");
+      if(!el||!wbO){clearInterval(_wbScroll);return;}
+      if(el.scrollTop<el.scrollHeight-el.clientHeight)el.scrollTop+=1;
+    },80);
+  },600);
   
   // Animate steps one by one
   const stepDelay=2000;
@@ -1899,7 +1956,9 @@ function closeWB(){
   stopAllRecognition();
   document.getElementById("wb").classList.remove("active");
   setTimeout(()=>{
-    document.getElementById("face").style.opacity="1";
+    const _f=document.getElementById("face");
+    _f.style.transition="opacity 0.5s ease, transform 0.5s ease";
+    _f.style.transform="scale(1)";_f.style.opacity="1";
     cE("happy");
     // Resume conversation
     if(inConversation){
@@ -2685,6 +2744,74 @@ if((emo==="cheeky"||tO>.4)&&co>.2){const ty=(uly+lly)*.55+2;h+=`<ellipse cx="0" 
 h+=`<circle cx="${-mW}" cy="0" r="7" fill="rgba(255,255,255,0.45)"/><circle cx="${mW}" cy="0" r="7" fill="rgba(255,255,255,0.45)"/>`}
 h+=`</g>`;svg.innerHTML=h;requestAnimationFrame(rF)}
 requestAnimationFrame(rF);
+
+// ===== WEATHER DISPLAY =====
+const WEATHER_ICONS={"sunny":"☀️","clear":"🌙","partly cloudy":"⛅","cloudy":"☁️","overcast":"☁️",
+  "rain":"🌧️","light rain":"🌦️","heavy rain":"🌧️","drizzle":"🌦️","thunderstorm":"⛈️","thunder":"⛈️",
+  "snow":"❄️","fog":"🌫️","mist":"🌫️","haze":"🌫️","wind":"💨"};
+let weatherVisible=false;let _weatherCloseTimer=null;
+
+function getWeatherIcon(desc){
+  if(!desc)return "🌤️";
+  const d=desc.toLowerCase();
+  for(const[k,v]of Object.entries(WEATHER_ICONS)){if(d.includes(k))return v;}
+  return "🌤️";
+}
+
+function showWeather(data){
+  if(!data||!data.temp)return;
+  weatherVisible=true;
+  const face=document.getElementById("face");
+  if(face){face.style.transition="opacity 0.5s ease,transform 0.5s ease";face.style.opacity="0";face.style.transform="scale(0.9)";}
+  document.getElementById("weatherIcon").textContent=getWeatherIcon(data.desc||"");
+  document.getElementById("weatherCity").textContent=data.city||"Nicosia";
+  document.getElementById("weatherTemp").textContent=(data.temp||"--")+"°C";
+  document.getElementById("weatherDesc").textContent=data.desc||"--";
+  document.getElementById("weatherFeels").textContent=(data.feels||"--")+"°C";
+  document.getElementById("weatherHumidity").textContent=(data.humidity||"-")+"%";
+  document.getElementById("weatherWind").textContent=(data.wind||"--")+" km/h";
+  const tmr=document.getElementById("weatherTomorrow");
+  if(data.tomorrow){tmr.textContent=(isGreekMode()?"Αύριο: ":"Tomorrow: ")+data.tomorrow;tmr.style.display="";}
+  else{tmr.style.display="none";}
+  setTimeout(()=>{document.getElementById("weatherOverlay").classList.add("active");},100);
+  clearTimeout(_weatherCloseTimer);
+  _weatherCloseTimer=setTimeout(()=>{if(weatherVisible)closeWeather();},20000);
+}
+
+function closeWeather(){
+  if(!weatherVisible)return;
+  weatherVisible=false;clearTimeout(_weatherCloseTimer);
+  const ov=document.getElementById("weatherOverlay");
+  ov.style.opacity="0";ov.style.transform="scale(0.95)";
+  setTimeout(()=>{ov.classList.remove("active");ov.style.opacity="";ov.style.transform="";},500);
+  const face=document.getElementById("face");
+  if(face){face.style.transition="opacity 0.5s ease,transform 0.5s ease";face.style.transform="scale(1)";face.style.opacity="1";}
+}
+
+function parseWeatherFromGateway(d){
+  // Parse weather_data from gateway response
+  if(d&&d.weather_data)return d.weather_data;
+  return null;
+}
+// ===== END WEATHER =====
+
 </script>
+
+<!-- Weather Overlay -->
+<div class="weather-overlay" id="weatherOverlay" onclick="closeWeather()">
+  <div class="weather-close" onclick="closeWeather()">✕</div>
+  <div class="weather-card" onclick="event.stopPropagation()">
+    <div class="weather-icon" id="weatherIcon">☀️</div>
+    <div class="weather-city" id="weatherCity">Nicosia</div>
+    <div class="weather-temp" id="weatherTemp">--°C</div>
+    <div class="weather-desc" id="weatherDesc">--</div>
+    <div class="weather-details">
+      <div class="weather-detail"><div class="weather-detail-val" id="weatherFeels">--°</div><div class="weather-detail-label">Feels Like</div></div>
+      <div class="weather-detail"><div class="weather-detail-val" id="weatherHumidity">--%</div><div class="weather-detail-label">Humidity</div></div>
+      <div class="weather-detail"><div class="weather-detail-val" id="weatherWind">--</div><div class="weather-detail-label">Wind</div></div>
+    </div>
+    <div class="weather-tomorrow" id="weatherTomorrow"></div>
+  </div>
+</div>
 </body>
 </html>

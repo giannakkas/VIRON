@@ -65,6 +65,7 @@ class ChatResponse(BaseModel):
     cloud_provider: str
     router: RouterResult
     latency_ms: float
+    weather_data: Optional[dict] = None
 
 
 # ─── Router (Gemma 2B via llama.cpp) ─────────────────
@@ -523,7 +524,7 @@ async def chat(req: ChatRequest):
     # 2. Safety check (LOCAL — never lets unsafe content reach cloud)
     is_safe, reason = check_safety(req.message, req.age)
     if not is_safe:
-        blocked_reply = get_blocked_response(req.age)
+        blocked_reply = get_blocked_response(req.age, req.language)
         router_result = RouterResult(
             intent_type="unsafe_request", safety_flag="unsafe",
             mode="local", cloud_provider="none"
@@ -550,7 +551,7 @@ async def chat(req: ChatRequest):
 
     # Override safety: if router says unsafe, block it
     if router_result.safety_flag == "unsafe":
-        blocked_reply = get_blocked_response(req.age)
+        blocked_reply = get_blocked_response(req.age, req.language)
         log_message(req.student_id, "user", req.message, "blocked", "", router_result.dict())
         log_message(req.student_id, "assistant", blocked_reply, "blocked", "")
         return ChatResponse(
@@ -609,14 +610,47 @@ async def chat(req: ChatRequest):
 
     logger.info(f"[{req.student_id}] {actual_mode}/{actual_provider} | {router_result.intent_type}/{router_result.subject} | {latency:.0f}ms | '{req.message[:60]}'")
 
+    # Check if weather was in context → return structured data for visual overlay
+    weather_data = None
+    if reply and "[WEATHER DATA" in reply:
+        try:
+            weather_data = await _get_weather_structured()
+        except Exception:
+            pass
+
     return ChatResponse(
         reply=reply,
         mode=actual_mode,
         cloud_provider=actual_provider if actual_provider else "none",
         router=router_result,
         latency_ms=latency,
+        weather_data=weather_data,
     )
 
+
+
+async def _get_weather_structured(city: str = "Nicosia") -> Optional[dict]:
+    """Return structured weather data for client-side overlay display."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"https://wttr.in/{city}?format=j1", timeout=5,
+                                     headers={"User-Agent": "VIRON-Robot/1.0"})
+            resp.raise_for_status()
+            data = resp.json()
+            current = data["current_condition"][0]
+            tomorrow = data.get("weather", [{}])[1] if len(data.get("weather", [])) > 1 else {}
+            return {
+                "city": city,
+                "temp": current.get("temp_C", "?"),
+                "feels": current.get("FeelsLikeC", "?"),
+                "desc": current.get("weatherDesc", [{}])[0].get("value", ""),
+                "humidity": current.get("humidity", "?"),
+                "wind": current.get("windspeedKmph", "?"),
+                "tomorrow": f'{tomorrow.get("mintempC","?")}-{tomorrow.get("maxtempC","?")}°C' if tomorrow else None
+            }
+    except Exception as e:
+        logger.warning(f"Structured weather fetch failed: {e}")
+        return None
 
 @app.get("/health")
 async def health():
