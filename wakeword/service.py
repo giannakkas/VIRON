@@ -107,11 +107,6 @@ class WakeWordDetector:
                     logger.info(f"Score: {name}={score:.3f} (threshold={THRESHOLD}, RMS={rms:.0f})")
                 
                 if score >= THRESHOLD:
-            
-            for name in self.model_names:
-                score = predictions[name]
-                
-                if score >= THRESHOLD:
                     now = time.time()
                     # Debounce: min 2s between detections
                     if now - self.last_detection > 2.0:
