@@ -776,9 +776,9 @@ function startOWWPolling(){
       
       // Downsample ratio
       const ratio=nativeSR/16000;
-      let sendCount=0;
       let audioBuffer=new Float32Array(0); // Accumulate audio
-      const TARGET_SAMPLES=Math.ceil(1280*ratio*2); // ~2 OWW frames worth of native audio
+      // Need at least 1280 samples at 16kHz = 1280*ratio native samples
+      const MIN_NATIVE=Math.ceil(1280*ratio);
       
       proc.onaudioprocess=function(e){
         if(!owwPolling)return;
@@ -790,18 +790,12 @@ function startOWWPolling(){
         newBuf.set(float32,audioBuffer.length);
         audioBuffer=newBuf;
         
-        // Wait until we have enough samples
-        if(audioBuffer.length<TARGET_SAMPLES)return;
+        // Wait until we have enough for 1 OWW frame
+        if(audioBuffer.length<MIN_NATIVE)return;
         
         // Take the buffer and reset
         const chunk=audioBuffer;
         audioBuffer=new Float32Array(0);
-        
-        // Energy check — skip quiet audio (TV through speakers)
-        let sumSq=0;
-        for(let i=0;i<chunk.length;i++)sumSq+=chunk[i]*chunk[i];
-        const rms=Math.sqrt(sumSq/chunk.length);
-        if(rms<0.01){return} // Skip quiet audio — direct speech is typically 0.03+
         
         // Downsample from native rate to 16kHz
         const outLen=Math.round(chunk.length/ratio);
