@@ -455,15 +455,105 @@ async def fetch_news(language: str = "el") -> str:
         return ""
 
 
-async def enrich_message(message: str, language: str) -> str:
-    """Detect weather/news intent and inject real data into the message."""
-    enriched = message
+# Track last weather request per student for follow-up city detection
+_pending_weather: dict[str, bool] = {}  # student_id → waiting for city
 
-    if _detect_intent(message, WEATHER_KEYWORDS):
-        logger.info("🌤️ Weather intent detected — fetching data")
-        weather = await fetch_weather("Nicosia")
-        if weather:
-            enriched = f"{message}\n\n{weather}"
+# Common cities (Greek + English) for extraction
+_CITY_NAMES = {
+    # Cyprus
+    "λευκωσία": "Nicosia", "nicosia": "Nicosia", "λευκωσια": "Nicosia",
+    "λεμεσό": "Limassol", "λεμεσος": "Limassol", "limassol": "Limassol",
+    "λάρνακα": "Larnaca", "λαρνακα": "Larnaca", "larnaca": "Larnaca",
+    "πάφο": "Paphos", "παφος": "Paphos", "paphos": "Paphos", "πάφος": "Paphos",
+    "αμμόχωστο": "Famagusta", "famagusta": "Famagusta",
+    # Greece
+    "αθήνα": "Athens", "αθηνα": "Athens", "athens": "Athens",
+    "θεσσαλονίκη": "Thessaloniki", "θεσσαλονικη": "Thessaloniki", "thessaloniki": "Thessaloniki",
+    "πάτρα": "Patras", "patras": "Patras", "ηράκλειο": "Heraklion", "heraklion": "Heraklion",
+    "ρόδο": "Rhodes", "rhodes": "Rhodes", "κέρκυρα": "Corfu", "corfu": "Corfu",
+    "μύκονο": "Mykonos", "mykonos": "Mykonos", "σαντορίνη": "Santorini", "santorini": "Santorini",
+    "χανιά": "Chania", "chania": "Chania", "ρέθυμνο": "Rethymno",
+    # Major world cities
+    "london": "London", "λονδίνο": "London", "paris": "Paris", "παρίσι": "Paris",
+    "new york": "New York", "νέα υόρκη": "New York", "tokyo": "Tokyo", "τόκιο": "Tokyo",
+    "berlin": "Berlin", "βερολίνο": "Berlin", "rome": "Rome", "ρώμη": "Rome",
+    "madrid": "Madrid", "μαδρίτη": "Madrid", "amsterdam": "Amsterdam",
+    "dubai": "Dubai", "ντουμπάι": "Dubai", "istanbul": "Istanbul", "κωνσταντινούπολη": "Istanbul",
+    "moscow": "Moscow", "μόσχα": "Moscow", "beijing": "Beijing", "πεκίνο": "Beijing",
+    "sydney": "Sydney", "σίδνεϊ": "Sydney", "los angeles": "Los Angeles",
+    "chicago": "Chicago", "miami": "Miami", "barcelona": "Barcelona", "βαρκελώνη": "Barcelona",
+    "lisbon": "Lisbon", "λισαβόνα": "Lisbon", "vienna": "Vienna", "βιέννη": "Vienna",
+    "cairo": "Cairo", "κάιρο": "Cairo", "tel aviv": "Tel Aviv",
+    "bangkok": "Bangkok", "singapore": "Singapore",
+}
+
+
+def _extract_city(message: str) -> Optional[str]:
+    """Try to extract a city name from the message."""
+    msg = message.lower().strip()
+    # Direct city name match (longest first to catch "new york" before "york")
+    for key in sorted(_CITY_NAMES.keys(), key=len, reverse=True):
+        if key in msg:
+            return _CITY_NAMES[key]
+    # Pattern: "στη(ν) X" / "στο X" / "in X" / "at X" / "for X"
+    patterns = [
+        r'(?:στην?|στο|στα|στις|στου)\s+([α-ωά-ώ]+)',  # Greek prepositions
+        r'(?:in|at|for|of)\s+([a-z][a-z\s]{2,20})',     # English prepositions
+    ]
+    for pat in patterns:
+        m = _re.search(pat, msg)
+        if m:
+            candidate = m.group(1).strip()
+            # Check if it's a known city
+            if candidate.lower() in _CITY_NAMES:
+                return _CITY_NAMES[candidate.lower()]
+            # Return as-is (wttr.in can handle many city names)
+            if len(candidate) > 2:
+                return candidate.title()
+    return None
+
+
+async def enrich_message(message: str, language: str, student_id: str = "", history: list = None) -> tuple[str, Optional[str]]:
+    """Detect weather/news intent and inject real data into the message.
+    Returns (enriched_message, weather_city_or_None)."""
+    enriched = message
+    weather_city = None
+
+    is_weather = _detect_intent(message, WEATHER_KEYWORDS)
+    city = _extract_city(message)
+
+    # Check if this is a follow-up to a weather question (student just said a city)
+    if not is_weather and student_id in _pending_weather and _pending_weather[student_id]:
+        # Student might be answering with just a city name
+        if city:
+            is_weather = True
+            logger.info(f"🌤️ Weather follow-up: city={city}")
+        elif len(message.strip().split()) <= 3:
+            # Short message after weather ask — try it as a city name
+            candidate = message.strip()
+            if len(candidate) > 2:
+                city = candidate.title()
+                is_weather = True
+                logger.info(f"🌤️ Weather follow-up (guessing city): {city}")
+
+    if is_weather:
+        if city:
+            logger.info(f"🌤️ Weather intent: city={city}")
+            weather = await fetch_weather(city)
+            if weather:
+                enriched = f"{message}\n\n{weather}"
+                weather_city = city
+            _pending_weather.pop(student_id, None)
+        else:
+            # No city detected — mark pending, AI will ask for location
+            logger.info("🌤️ Weather intent but NO city — AI will ask")
+            _pending_weather[student_id] = True
+            # Add hint for the AI to ask for city
+            ask_hint = "Ο μαθητής ρώτησε για τον καιρό αλλά ΔΕΝ είπε πόλη. ΠΡΕΠΕΙ να ρωτήσεις σε ποια πόλη θέλει τον καιρό." if language == "el" \
+                else "The student asked about weather but did NOT specify a city. You MUST ask which city they want weather for."
+            enriched = f"{message}\n\n[SYSTEM HINT: {ask_hint}]"
+    else:
+        _pending_weather.pop(student_id, None)
 
     if _detect_intent(message, NEWS_KEYWORDS):
         logger.info("📰 News intent detected — fetching headlines")
@@ -471,7 +561,7 @@ async def enrich_message(message: str, language: str) -> str:
         if news:
             enriched = f"{enriched}\n\n{news}"
 
-    return enriched
+    return enriched, weather_city
 
 
 async def call_cloud(provider: str, message: str, history: list, age: int, language: str) -> tuple[str, str]:
@@ -483,8 +573,8 @@ async def call_cloud(provider: str, message: str, history: list, age: int, langu
     lang_hint = "Greek" if language == "el" else "English"
     system = cfg.VIRON_SYSTEM_PROMPT + f"\nStudent age: {age} ({age_mode}). Respond in {lang_hint}."
 
-    # Enrich message with weather/news data if detected
-    enriched_message = await enrich_message(message, language)
+    # Message is already enriched by the chat endpoint
+    enriched_message = message
 
     # Try primary provider
     providers_to_try = [provider] + CLOUD_FALLBACK.get(provider, [])
@@ -569,7 +659,10 @@ async def chat(req: ChatRequest):
     log_message(req.student_id, "user", req.message,
                 router_result.mode, router_result.cloud_provider, router_result.dict())
 
-    # 6. Route to appropriate backend
+    # 6. Enrich message with weather/news data (detects city, handles follow-ups)
+    enriched_msg, weather_city = await enrich_message(req.message, req.language, req.student_id, history)
+
+    # 7. Route to appropriate backend
     reply = ""
     actual_mode = router_result.mode
     actual_provider = router_result.cloud_provider
@@ -586,7 +679,7 @@ async def chat(req: ChatRequest):
     if router_result.mode == "cloud" and router_result.cloud_provider != "none":
         # Try cloud
         cloud_reply, used_provider = await call_cloud(
-            router_result.cloud_provider, req.message, history, req.age, req.language
+            router_result.cloud_provider, enriched_msg, history, req.age, req.language
         )
         if cloud_reply:
             reply = cloud_reply
@@ -595,16 +688,16 @@ async def chat(req: ChatRequest):
         else:
             # Cloud failed → fallback to local tutor
             logger.warning("All cloud providers failed, falling back to local tutor")
-            reply = await call_tutor(req.message, req.age, req.language, history)
+            reply = await call_tutor(enriched_msg, req.age, req.language, history)
             actual_mode = "local"
             actual_provider = "none"
     else:
         # Local tutor
-        reply = await call_tutor(req.message, req.age, req.language, history)
+        reply = await call_tutor(enriched_msg, req.age, req.language, history)
         actual_mode = "local"
         actual_provider = "none"
 
-    # 7. Log assistant response
+    # 8. Log assistant response
     latency = _ms(start)
     log_message(req.student_id, "assistant", reply, actual_mode, actual_provider, latency_ms=latency)
 
@@ -612,9 +705,9 @@ async def chat(req: ChatRequest):
 
     # Check if weather was in context → return structured data for visual overlay
     weather_data = None
-    if reply and "[WEATHER DATA" in reply:
+    if weather_city and reply and "[WEATHER DATA" in reply:
         try:
-            weather_data = await _get_weather_structured()
+            weather_data = await _get_weather_structured(weather_city)
         except Exception:
             pass
 
