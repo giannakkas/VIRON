@@ -1533,10 +1533,7 @@ def tts_prewarm():
 # ============ WHISPER SPEECH-TO-TEXT ENDPOINT ============
 @app.route('/api/stt', methods=['POST'])
 def speech_to_text():
-    """Transcribe audio using Whisper. Accepts audio file, returns text."""
-    if not HAS_WHISPER or whisper_model is None:
-        return jsonify({"error": "Whisper not ready", "text": ""}), 503
-    
+    """Transcribe audio — tries OpenAI Whisper API first, local fallback."""
     audio_file = request.files.get('audio')
     if not audio_file:
         return jsonify({"error": "No audio", "text": ""}), 400
@@ -1553,7 +1550,49 @@ def speech_to_text():
             audio_file.save(tmp)
         
         file_size = os.path.getsize(tmp_path)
-        print(f"🎙️ STT: received {file_size//1024}KB audio ({suffix})")
+        hint_lang = request.form.get('lang', 'el')
+        whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None
+        print(f"🎙️ STT: received {file_size//1024}KB audio ({suffix}, lang={whisper_lang})")
+        
+        t_start = time.time()
+        
+        # ── Try OpenAI Whisper API first (much more accurate for Greek) ──
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if openai_key and file_size > 500:  # skip tiny files
+            try:
+                import requests as req_lib
+                print("  ☁️ Trying OpenAI Whisper API (large-v3)...")
+                with open(tmp_path, 'rb') as f:
+                    resp = req_lib.post(
+                        "https://api.openai.com/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {openai_key}"},
+                        files={"file": (f"speech{suffix}", f, f"audio/{'wav' if suffix=='.wav' else 'webm'}")},
+                        data={
+                            "model": "whisper-1",
+                            "language": whisper_lang or "el",
+                            "temperature": 0.0,
+                            "prompt": "Αυτό είναι Ελληνικά." if whisper_lang == "el" else "",
+                        },
+                        timeout=15,
+                    )
+                if resp.status_code == 200:
+                    text = resp.json().get("text", "").strip()
+                    elapsed = time.time() - t_start
+                    print(f"  ✅ OpenAI Whisper: \"{text[:80]}\" ({elapsed:.1f}s)")
+                    if text and len(text) > 1:
+                        return jsonify({"text": text, "language": whisper_lang or "el", "duration": round(elapsed, 2), "engine": "openai"})
+                    else:
+                        print("  ⚠ OpenAI returned empty, trying local...")
+                else:
+                    print(f"  ⚠ OpenAI API error {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                print(f"  ⚠ OpenAI Whisper failed: {e}, trying local...")
+        
+        # ── Fallback to local faster-whisper ──
+        if not HAS_WHISPER or whisper_model is None:
+            return jsonify({"error": "No STT available", "text": ""}), 503
+        
+        print("  🏠 Using local Whisper (small)...")
         
         # If already WAV (from Silero VAD), use directly — no ffmpeg needed
         if suffix == '.wav':
@@ -1579,13 +1618,7 @@ def speech_to_text():
                 audio_path = tmp_path
                 print(f"  ⚠ ffmpeg error: {e}, using raw webm")
         
-        t_start = time.time()
-        
-        # Transcribe with Whisper
-        # Use language hint from client, default to Greek
-        hint_lang = request.form.get('lang', 'el')
-        # Map to Whisper language codes
-        whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None
+        t_local = time.time()
         
         with _whisper_lock:
             # First try with Silero VAD (server-side neural speech detection)
@@ -1633,15 +1666,16 @@ def speech_to_text():
                         text_parts.append(t)
         
         text = " ".join(text_parts).strip()
-        elapsed = time.time() - t_start
+        elapsed = time.time() - t_local
         lang = info.language if info else "unknown"
         
-        print(f"🎙️ Whisper: \"{text[:80]}\" (lang={lang}, {elapsed:.1f}s)")
+        print(f"🎙️ Local Whisper: \"{text[:80]}\" (lang={lang}, {elapsed:.1f}s)")
         
         return jsonify({
             "text": text,
             "language": lang,
-            "duration": round(elapsed, 2)
+            "duration": round(elapsed, 2),
+            "engine": "local"
         })
     except Exception as e:
         import traceback
@@ -1656,8 +1690,10 @@ def speech_to_text():
 
 @app.route('/api/stt/status', methods=['GET'])
 def stt_status():
-    """Check if Whisper STT is ready."""
-    return jsonify({"ready": HAS_WHISPER and whisper_model is not None})
+    """Check if any STT engine is ready."""
+    local_ready = HAS_WHISPER and whisper_model is not None
+    cloud_ready = bool(os.environ.get("OPENAI_API_KEY", ""))
+    return jsonify({"ready": local_ready or cloud_ready, "local": local_ready, "cloud": cloud_ready})
 
 # ============ DEBUG LOGGING ============
 DEBUG_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log")
