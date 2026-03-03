@@ -22,7 +22,7 @@ import numpy as np
 from collections import deque
 
 # ── Configuration ──
-THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.65"))
+THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.5"))
 CUSTOM_MODEL = os.environ.get("VIRON_WAKEWORD_MODEL", "")
 PORT = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
 
@@ -85,6 +85,11 @@ class WakeWordDetector:
             return {"detected": False}
         
         try:
+            # Energy check — skip quiet audio (TV through speakers)
+            rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
+            if rms < 300:  # int16 scale: direct speech ~2000+, TV through mic ~100-500
+                return {"detected": False}
+            
             # openWakeWord expects int16 numpy array
             predictions = self.model.predict(audio_int16)
             
