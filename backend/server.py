@@ -1787,8 +1787,8 @@ def record_from_mic():
     
     sample_rate = 16000
     chunk_ms = 80  # 80ms chunks
-    chunk_samples = sample_rate * chunk_ms // 1000  # 1280
-    bytes_per_chunk = chunk_samples * 2  # int16
+    chunk_samples = sample_rate * chunk_ms // 1000  # 1280 mono samples
+    bytes_per_chunk = chunk_samples * 4  # stereo int16: 2ch × 2 bytes
     
     # Initial thresholds — overridden by adaptive calibration below
     SPEECH_THRESHOLD = 100
@@ -1797,7 +1797,7 @@ def record_from_mic():
     cmd = [
         "arecord", "-D", RECORD_ALSA_DEVICE,
         "-f", "S16_LE", "-r", str(sample_rate),
-        "-c", "1", "-t", "raw",
+        "-c", "2", "-t", "raw",  # stereo — XVF3800 beamformed on ch0, ASR beam on ch1
     ]
     
     try:
@@ -1833,9 +1833,12 @@ def record_from_mic():
             data = proc.stdout.read(bytes_per_chunk)
             if not data or len(data) < bytes_per_chunk:
                 break
-            audio_frames.append(data)
+            # Extract right channel (ch1 = ASR-optimized beam)
+            stereo = np.frombuffer(data, dtype=np.int16)
+            samples = stereo[1::2]  # right channel
+            mono_bytes = samples.tobytes()
+            audio_frames.append(mono_bytes)
             total_chunks += 1
-            samples = np.frombuffer(data, dtype=np.int16)
             rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
             noise_rms_values.append(rms)
         
@@ -1853,10 +1856,13 @@ def record_from_mic():
             if not data or len(data) < bytes_per_chunk:
                 break
             
-            audio_frames.append(data)
+            # Extract right channel (ch1 = ASR-optimized beam)
+            stereo = np.frombuffer(data, dtype=np.int16)
+            samples = stereo[1::2]
+            mono_bytes = samples.tobytes()
+            audio_frames.append(mono_bytes)
             total_chunks += 1
             
-            samples = np.frombuffer(data, dtype=np.int16)
             rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
             
             # Log every ~0.5s

@@ -27,8 +27,9 @@ STT_URL = os.environ.get("VIRON_STT_URL", "http://127.0.0.1:5000")
 OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.5"))
 
 SAMPLE_RATE = 16000
-CHUNK_SIZE = 1280  # 80ms
-BYTES_PER_CHUNK = CHUNK_SIZE * 2
+CHUNK_SIZE = 1280  # 80ms mono samples
+# XVF3800: stereo output — ch0=beamformed+AEC, ch1=ASR-optimized beam (best for STT)
+BYTES_PER_CHUNK = CHUNK_SIZE * 4  # stereo: 2ch × 2 bytes/sample
 
 # Whisper speech segment limits
 MIN_SPEECH_CHUNKS = 3      # 240ms min
@@ -210,8 +211,11 @@ class MicCapture:
             logger.warning(f"Whisper error: {e}")
 
     def _loop(self):
+        # Record stereo — XVF3800 outputs processed audio on both channels
+        # ch0 (left)  = beamformed + AEC + noise suppressed
+        # ch1 (right) = ASR-optimized beam (best for speech recognition)
         cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE",
-               "-r", str(SAMPLE_RATE), "-c", "1", "-t", "raw"]
+               "-r", str(SAMPLE_RATE), "-c", "2", "-t", "raw"]
 
         while self.running:
             if self._paused:
@@ -229,7 +233,9 @@ class MicCapture:
                 for _ in range(8):
                     d = self.proc.stdout.read(BYTES_PER_CHUNK)
                     if not d or len(d) < BYTES_PER_CHUNK: break
-                    s = np.frombuffer(d, dtype=np.int16)
+                    # Extract right channel (ch1 = ASR beam) from stereo interleaved data
+                    stereo = np.frombuffer(d, dtype=np.int16)
+                    s = stereo[1::2]  # odd indices = right channel
                     noise_vals.append(np.sqrt(np.mean(s.astype(np.float32)**2)))
 
                 nf = np.mean(noise_vals) if noise_vals else 50
@@ -250,11 +256,14 @@ class MicCapture:
                 sil_count = 0
 
                 while self.running and not self._paused:
-                    d = self.proc.stdout.read(BYTES_PER_CHUNK)
-                    if not d or len(d) < BYTES_PER_CHUNK: break
+                    d_stereo = self.proc.stdout.read(BYTES_PER_CHUNK)
+                    if not d_stereo or len(d_stereo) < BYTES_PER_CHUNK: break
                     if self.det.is_paused: continue
 
-                    audio = np.frombuffer(d, dtype=np.int16)
+                    # Extract right channel (ch1 = ASR-optimized beam)
+                    stereo = np.frombuffer(d_stereo, dtype=np.int16)
+                    audio = stereo[1::2]   # mono: right channel only
+                    d = audio.tobytes()    # mono bytes for speech_frames / Whisper
                     rms = np.sqrt(np.mean(audio.astype(np.float32)**2))
 
                     # === openWakeWord (instant, every chunk) ===
