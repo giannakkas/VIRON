@@ -1416,7 +1416,7 @@ function startServerSideListening(){
   fetch('/api/record',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({max_duration:maxDuration,silence_duration:1.0,min_duration:0.2}),
+    body:JSON.stringify({max_duration:maxDuration,silence_duration:0.6,min_duration:0.2}),
     signal:AbortSignal.timeout((maxDuration+5)*1000)
   })
   .then(r=>{

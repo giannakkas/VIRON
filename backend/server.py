@@ -1531,6 +1531,17 @@ def tts_prewarm():
     return jsonify({"status": "warming", "name": name}), 200
 
 # ============ WHISPER SPEECH-TO-TEXT ENDPOINT ============
+def _clean_whisper_text(text: str) -> str:
+    """Clean up Whisper hallucinations: repeated chars, stutters."""
+    if not text:
+        return text
+    # Remove runs of 3+ repeated characters: "κατασκευάζειεεεεε" → "κατασκευάζει"
+    cleaned = re.sub(r'(.)\1{2,}', r'\1', text)
+    # Remove repeated words: "hello hello hello" → "hello"
+    cleaned = re.sub(r'\b(\w+)(\s+\1){2,}\b', r'\1', cleaned)
+    return cleaned.strip()
+
+
 @app.route('/api/stt', methods=['POST'])
 def speech_to_text():
     """Transcribe audio — tries OpenAI Whisper API first, local fallback."""
@@ -1577,6 +1588,8 @@ def speech_to_text():
                     )
                 if resp.status_code == 200:
                     text = resp.json().get("text", "").strip()
+                    # Clean up repeated characters (Whisper hallucination from trailing silence)
+                    text = _clean_whisper_text(text)
                     elapsed = time.time() - t_start
                     print(f"  ✅ OpenAI Whisper: \"{text[:80]}\" ({elapsed:.1f}s)")
                     # Filter hallucinations (common Whisper ghost outputs)
@@ -1678,7 +1691,7 @@ def speech_to_text():
                     if t and not re.match(r'^[\s\.\,\!\?\;\:…]+$', t) and '[' not in t:
                         text_parts.append(t)
         
-        text = " ".join(text_parts).strip()
+        text = _clean_whisper_text(" ".join(text_parts).strip())
         elapsed = time.time() - t_local
         lang = info.language if info else "unknown"
         
@@ -1726,17 +1739,17 @@ def record_from_mic():
     
     params = request.get_json(silent=True) or {}
     max_duration = min(float(params.get('max_duration', 10)), 30)
-    silence_duration = float(params.get('silence_duration', 1.0))
-    min_duration = float(params.get('min_duration', 0.3))
+    silence_duration = float(params.get('silence_duration', 0.6))
+    min_duration = float(params.get('min_duration', 0.2))
     
     sample_rate = 16000
     chunk_ms = 80  # 80ms chunks
     chunk_samples = sample_rate * chunk_ms // 1000  # 1280
     bytes_per_chunk = chunk_samples * 2  # int16
     
-    # Energy thresholds — ReSpeaker is sensitive, keep low
-    SPEECH_THRESHOLD = 150  # RMS above this = speech
-    SILENCE_THRESHOLD = 80  # RMS below this = silence
+    # Initial thresholds — overridden by adaptive calibration below
+    SPEECH_THRESHOLD = 100
+    SILENCE_THRESHOLD = 60
     
     cmd = [
         "arecord", "-D", RECORD_ALSA_DEVICE,
@@ -1768,6 +1781,29 @@ def record_from_mic():
         
         print(f"🎤 Recording from {RECORD_ALSA_DEVICE} (max {max_duration}s, silence {silence_duration}s)")
         
+        # Phase 1: Measure noise floor (first 0.5s = ~6 chunks)
+        noise_rms_values = []
+        CALIBRATION_CHUNKS = 6
+        
+        for _ in range(CALIBRATION_CHUNKS):
+            data = proc.stdout.read(bytes_per_chunk)
+            if not data or len(data) < bytes_per_chunk:
+                break
+            audio_frames.append(data)
+            total_chunks += 1
+            samples = np.frombuffer(data, dtype=np.int16)
+            rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
+            noise_rms_values.append(rms)
+        
+        if noise_rms_values:
+            noise_floor = np.mean(noise_rms_values)
+            # Speech = 3x above noise floor (minimum 50)
+            SPEECH_THRESHOLD = max(noise_floor * 3, 50)
+            # Silence = 1.5x above noise floor
+            SILENCE_THRESHOLD = max(noise_floor * 1.5, 30)
+            print(f"🎤 Noise floor={noise_floor:.0f}, speech_thresh={SPEECH_THRESHOLD:.0f}, silence_thresh={SILENCE_THRESHOLD:.0f}")
+        
+        # Phase 2: Record with adaptive VAD
         while total_chunks < max_chunks:
             data = proc.stdout.read(bytes_per_chunk)
             if not data or len(data) < bytes_per_chunk:
@@ -1776,23 +1812,26 @@ def record_from_mic():
             audio_frames.append(data)
             total_chunks += 1
             
-            # Calculate RMS energy
             samples = np.frombuffer(data, dtype=np.int16)
             rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
+            
+            # Log every ~0.5s
+            if total_chunks % 6 == 0:
+                print(f"🎤 chunk={total_chunks} rms={rms:.0f} speech={speech_started} silence_count={silence_chunks}")
             
             if not speech_started:
                 if rms > SPEECH_THRESHOLD:
                     speech_started = True
                     silence_chunks = 0
-                    print(f"🎤 Speech detected (RMS={rms:.0f}) at {total_chunks * chunk_ms}ms")
-                elif total_chunks > int(4000 / chunk_ms):  # 4s wait max
-                    print(f"🎤 No speech after 4s (last RMS={rms:.0f})")
+                    print(f"🎤 Speech START (RMS={rms:.0f}) at {total_chunks * chunk_ms}ms")
+                elif total_chunks > int(3000 / chunk_ms):  # 3s wait max
+                    print(f"🎤 No speech after 3s (last RMS={rms:.0f})")
                     break
             else:
                 if rms < SILENCE_THRESHOLD:
                     silence_chunks += 1
-                    if silence_chunks >= silence_chunks_needed and total_chunks >= min_chunks:
-                        print(f"🎤 Silence detected, stopping ({total_chunks * chunk_ms}ms)")
+                    if silence_chunks >= silence_chunks_needed:
+                        print(f"🎤 Silence END, stopping ({total_chunks * chunk_ms}ms recorded)")
                         break
                 else:
                     silence_chunks = 0
@@ -1808,7 +1847,18 @@ def record_from_mic():
             _resume_wakeword()
             return jsonify({"error": "no_speech", "duration_ms": 0}), 204
         
+        # Trim trailing silence to prevent Whisper hallucinations
+        # Remove chunks from the end where RMS < SILENCE_THRESHOLD
+        while len(audio_frames) > 3:  # Keep at least ~240ms
+            last_chunk = np.frombuffer(audio_frames[-1], dtype=np.int16)
+            rms = np.sqrt(np.mean(last_chunk.astype(np.float32) ** 2))
+            if rms < SILENCE_THRESHOLD:
+                audio_frames.pop()
+            else:
+                break
+        
         # Package as WAV
+        total_chunks = len(audio_frames)
         duration_ms = total_chunks * chunk_ms
         raw_audio = b''.join(audio_frames)
         
