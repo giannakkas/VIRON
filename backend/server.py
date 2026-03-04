@@ -1604,8 +1604,8 @@ def speech_to_text():
             audio_file.save(tmp)
         
         file_size = os.path.getsize(tmp_path)
-        hint_lang = request.form.get('lang', 'el')
-        whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None
+        hint_lang = request.form.get('lang', '')  # '' = auto-detect
+        whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None  # None = Whisper auto-detects
         print(f"🎙️ STT: received {file_size//1024}KB audio ({suffix}, lang={whisper_lang})")
         
         t_start = time.time()
@@ -1623,7 +1623,7 @@ def speech_to_text():
                         files={"file": (f"speech{suffix}", f, f"audio/{'wav' if suffix=='.wav' else 'webm'}")},
                         data={
                             "model": "whisper-1",
-                            "language": whisper_lang or "el",
+                            **( {"language": whisper_lang} if whisper_lang else {} ),  # omit = auto-detect
                             "temperature": 0.0,
                             "prompt": "Αυτό είναι Ελληνικά." if whisper_lang == "el" else "",
                         },
@@ -1647,9 +1647,9 @@ def speech_to_text():
                     ]
                     if text and any(bl in text.lower() for bl in HALLUCINATION_BLACKLIST):
                         print(f"  ⚠ Filtered hallucination: '{text[:60]}'")
-                        return jsonify({"text": "", "language": whisper_lang or "el", "duration": round(elapsed, 2), "engine": "openai", "filtered": "hallucination"})
+                        return jsonify({"text": "", "language": whisper_lang or "auto", "duration": round(elapsed, 2), "engine": "openai", "filtered": "hallucination"})
                     if text and len(text) > 1:
-                        return jsonify({"text": text, "language": whisper_lang or "el", "duration": round(elapsed, 2), "engine": "openai"})
+                        return jsonify({"text": text, "language": whisper_lang or "auto", "duration": round(elapsed, 2), "engine": "openai"})
                     else:
                         print("  ⚠ OpenAI returned empty, trying local...")
                 else:

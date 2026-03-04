@@ -1116,7 +1116,7 @@ function sendVADAudioToWhisper(audioFloat32){
   fd.append('audio',wavBlob,'speech.wav');
   // Wake-word mode: send as English so Whisper can hear "Hey VIRON"
   // Conversation mode: send in user's language preference
-  fd.append('lang',inConversation?(isGreekMode()?'el':'en'):'en');
+  fd.append('lang',isGreekMode()?'el':'en');  // send mode lang; backend auto-detects if ambiguous
   fetch('/api/stt',{method:'POST',body:fd})
   .then(r=>r.json())
   .then(data=>{
@@ -1234,7 +1234,7 @@ function startWhisperListening(){
       
       const formData=new FormData();
       formData.append('audio',blob,'speech.webm');
-      formData.append('lang',isGreekMode()?'el':'en');
+      formData.append('lang',isGreekMode()?'el':'');  // '' = auto-detect for English
       
       fetch('/api/stt',{method:'POST',body:formData})
       .then(r=>r.json())
@@ -1469,7 +1469,7 @@ function startServerSideListening(){
     
     const formData=new FormData();
     formData.append('audio',blob,'recording.wav');
-    formData.append('lang',isGreekMode()?'el':'en');
+    formData.append('lang',isGreekMode()?'el':'');  // '' = auto-detect for English
     
     return fetch('/api/stt',{method:'POST',body:formData});
   })
