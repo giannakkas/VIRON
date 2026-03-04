@@ -93,6 +93,87 @@ class Detector:
         # openWakeWord
         self.oww_model = None
         self.oww_names = []
+        # Custom mel classifier (trained on user's voice)
+        self.custom_model = None
+        self.custom_threshold = 0.70  # high threshold to avoid false triggers
+
+    def init_custom_model(self):
+        """Load custom hey_viron mel classifier (JSON or ONNX)."""
+        model_dir = os.path.join(os.path.dirname(__file__), "models")
+        json_path = os.path.join(model_dir, "hey_viron_simple.json")
+        if os.path.exists(json_path):
+            try:
+                with open(json_path) as f:
+                    data = json.load(f)
+                self.custom_model = {
+                    "type": "json",
+                    "weights": np.array(data["weights"], dtype=np.float32),
+                    "bias": float(data["bias"]),
+                    "mean": np.array(data["mean"], dtype=np.float32),
+                    "std": np.array(data["std"], dtype=np.float32),
+                    "n_mels": data.get("n_mels", 40),
+                    "n_fft": data.get("n_fft", 512),
+                    "hop": data.get("hop", 160),
+                }
+                logger.info(f"Custom 'hey viron' model loaded (acc={data.get('accuracy','?')}, {data.get('n_positive',0)} positive clips)")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to load custom model: {e}")
+        return False
+
+    def _compute_mel_features(self, audio_float):
+        """Compute mel-spectrogram features from audio (float32, -1 to 1)."""
+        if self.custom_model is None:
+            return None
+        m = self.custom_model
+        n_mels, n_fft, hop = m["n_mels"], m["n_fft"], m["hop"]
+
+        # Simple STFT
+        frames = []
+        for start in range(0, len(audio_float) - n_fft, hop):
+            frame = audio_float[start:start + n_fft]
+            windowed = frame * np.hanning(n_fft)
+            spectrum = np.abs(np.fft.rfft(windowed)) ** 2
+            frames.append(spectrum)
+        if not frames:
+            return None
+        power = np.array(frames).T  # shape: (n_fft//2+1, n_frames)
+
+        # Mel filterbank
+        mel_freqs = np.linspace(0, 2595 * np.log10(1 + SAMPLE_RATE / 2 / 700), n_mels + 2)
+        mel_freqs = 700 * (10 ** (mel_freqs / 2595) - 1)
+        bin_freqs = np.floor((n_fft + 1) * mel_freqs / SAMPLE_RATE).astype(int)
+
+        fb = np.zeros((n_mels, power.shape[0]))
+        for i in range(n_mels):
+            s, c, e = bin_freqs[i], bin_freqs[i + 1], bin_freqs[i + 2]
+            if s < power.shape[0] and e < power.shape[0]:
+                for j in range(s, c):
+                    if c > s: fb[i, j] = (j - s) / (c - s)
+                for j in range(c, e):
+                    if e > c: fb[i, j] = (e - j) / (e - c)
+
+        mel = np.dot(fb, power)
+        mel = np.log(mel + 1e-10)
+        return mel.mean(axis=1)  # average over time → fixed-size vector
+
+    def process_custom(self, audio_buffer_int16):
+        """Score audio buffer with custom mel classifier. Returns score 0-1."""
+        if self.custom_model is None or self.is_paused:
+            return 0.0
+        try:
+            audio = audio_buffer_int16.astype(np.float32) / 32768.0
+            features = self._compute_mel_features(audio)
+            if features is None:
+                return 0.0
+            m = self.custom_model
+            normed = (features - m["mean"]) / m["std"]
+            logit = float(normed @ m["weights"] + m["bias"])
+            score = 1.0 / (1.0 + np.exp(-np.clip(logit, -500, 500)))
+            return score
+        except Exception as e:
+            logger.warning(f"Custom model error: {e}")
+            return 0.0
 
     def init_oww(self):
         """Try to load openWakeWord model."""
@@ -299,6 +380,10 @@ class MicCapture:
                 speech_frames = []
                 in_speech = False
                 sil_count = 0
+                # Sliding buffer for custom mel classifier (~1.5s = 19 chunks at 80ms)
+                custom_buf = deque(maxlen=19)
+                custom_score_interval = 6  # score every ~480ms
+                custom_chunk_count = 0
 
                 while self.running and not self._paused:
                     d_stereo = self.proc.stdout.read(BYTES_PER_CHUNK)
@@ -319,6 +404,20 @@ class MicCapture:
                     # === openWakeWord (instant, every chunk) ===
                     if self.det.oww_model:
                         self.det.process_oww(audio, oww_thresh)
+
+                    # === Custom mel classifier (sliding window, every ~480ms) ===
+                    if self.det.custom_model:
+                        custom_buf.append(audio)
+                        custom_chunk_count += 1
+                        if custom_chunk_count >= custom_score_interval and len(custom_buf) >= 12:
+                            custom_chunk_count = 0
+                            # Concatenate buffer into ~1.5s clip
+                            combined = np.concatenate(list(custom_buf))
+                            score = self.det.process_custom(combined)
+                            if score > 0.15:
+                                logger.info(f"Custom: score={score:.3f} (threshold={self.det.custom_threshold})")
+                            if score >= self.det.custom_threshold:
+                                self.det.set_detection(f"hey viron (custom:{score:.2f})", score)
 
                     # === Whisper path (speech segments) ===
                     if not in_speech:
@@ -396,15 +495,19 @@ def create_app(det, mic):
 
     @app.route("/wakeword/status", methods=["GET"])
     def status():
+        models = det.oww_names + ["whisper"]
+        if det.custom_model:
+            models = ["hey_viron_custom"] + models
         return jsonify({
             "ready": True, "listening": det.is_listening,
-            "paused": det.is_paused, "models": det.oww_names + ["whisper"],
+            "paused": det.is_paused, "models": models,
             "detections": det.detection_count,
             "mic_device": ALSA_DEVICE, "mic_channel": MIC_CHANNEL,
             "server_side_mic": True,
-            "mode": "hybrid" if det.oww_model else "whisper-only",
+            "mode": "custom+whisper" if det.custom_model else ("hybrid" if det.oww_model else "whisper-only"),
             "adaptive": ADAPTIVE_ENABLED,
             "threshold": OWW_THRESHOLD,
+            "custom_threshold": det.custom_threshold if det.custom_model else None,
         })
 
     return app
@@ -413,13 +516,19 @@ def create_app(det, mic):
 def main():
     det = Detector()
     has_oww = det.init_oww()
+    has_custom = det.init_custom_model()
 
     mic = MicCapture(det)
     mic.start()
 
     app = create_app(det, mic)
 
-    mode = "HYBRID (OWW instant + Whisper)" if has_oww else "WHISPER-ONLY"
+    if has_custom:
+        mode = "CUSTOM + Whisper"
+    elif has_oww:
+        mode = "HYBRID (OWW + Whisper)"
+    else:
+        mode = "WHISPER-ONLY"
     adaptive_tag = " [adaptive]" if ADAPTIVE_ENABLED else ""
     print(f"""
     ═══════════════════════════════════════
