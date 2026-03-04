@@ -1708,6 +1708,180 @@ def stt_status():
     cloud_ready = bool(os.environ.get("OPENAI_API_KEY", ""))
     return jsonify({"ready": local_ready or cloud_ready, "local": local_ready, "cloud": cloud_ready})
 
+
+# ============ SERVER-SIDE MIC RECORDING (ReSpeaker) ============
+RECORD_ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
+
+@app.route('/api/record', methods=['POST'])
+def record_from_mic():
+    """Record audio from ReSpeaker mic with energy-based VAD.
+    Returns WAV audio blob that browser can send to /api/stt.
+    
+    POST params (JSON):
+      max_duration: max recording seconds (default 15)
+      silence_duration: seconds of silence to stop (default 1.5)
+      min_duration: minimum recording seconds (default 0.5)
+    """
+    import wave, struct, tempfile
+    
+    params = request.get_json(silent=True) or {}
+    max_duration = min(float(params.get('max_duration', 15)), 30)
+    silence_duration = float(params.get('silence_duration', 1.5))
+    min_duration = float(params.get('min_duration', 0.5))
+    
+    sample_rate = 16000
+    chunk_ms = 80  # 80ms chunks
+    chunk_samples = sample_rate * chunk_ms // 1000  # 1280
+    bytes_per_chunk = chunk_samples * 2  # int16
+    
+    # Energy thresholds for VAD
+    SPEECH_THRESHOLD = 500  # RMS above this = speech (int16 scale)
+    SILENCE_THRESHOLD = 200  # RMS below this = silence
+    
+    cmd = [
+        "arecord", "-D", RECORD_ALSA_DEVICE,
+        "-f", "S16_LE", "-r", str(sample_rate),
+        "-c", "1", "-t", "raw",
+    ]
+    
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        audio_frames = []
+        speech_started = False
+        silence_chunks = 0
+        silence_chunks_needed = int(silence_duration * 1000 / chunk_ms)
+        max_chunks = int(max_duration * 1000 / chunk_ms)
+        min_chunks = int(min_duration * 1000 / chunk_ms)
+        total_chunks = 0
+        
+        print(f"🎤 Recording from {RECORD_ALSA_DEVICE} (max {max_duration}s, silence {silence_duration}s)")
+        
+        while total_chunks < max_chunks:
+            data = proc.stdout.read(bytes_per_chunk)
+            if not data or len(data) < bytes_per_chunk:
+                break
+            
+            audio_frames.append(data)
+            total_chunks += 1
+            
+            # Calculate RMS energy
+            samples = np.frombuffer(data, dtype=np.int16)
+            rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
+            
+            if not speech_started:
+                if rms > SPEECH_THRESHOLD:
+                    speech_started = True
+                    silence_chunks = 0
+                    print(f"🎤 Speech detected (RMS={rms:.0f})")
+                elif total_chunks > int(8000 / chunk_ms):  # 8s wait max
+                    print("🎤 No speech detected after 8s")
+                    break
+            else:
+                if rms < SILENCE_THRESHOLD:
+                    silence_chunks += 1
+                    if silence_chunks >= silence_chunks_needed and total_chunks >= min_chunks:
+                        print(f"🎤 Silence detected, stopping ({total_chunks * chunk_ms}ms)")
+                        break
+                else:
+                    silence_chunks = 0
+        
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except:
+            proc.kill()
+        
+        if not audio_frames or not speech_started:
+            return jsonify({"error": "no_speech", "duration_ms": 0}), 204
+        
+        # Package as WAV
+        duration_ms = total_chunks * chunk_ms
+        raw_audio = b''.join(audio_frames)
+        
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+            wav_path = tmp.name
+            with wave.open(tmp, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(raw_audio)
+        
+        print(f"🎤 Recorded {duration_ms}ms ({len(raw_audio)//1024}KB)")
+        
+        from flask import send_file
+        return send_file(wav_path, mimetype='audio/wav', 
+                        download_name='recording.wav',
+                        as_attachment=False)
+    
+    except Exception as e:
+        print(f"❌ Record error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/record/status', methods=['GET'])
+def record_status():
+    """Check if server-side mic is available."""
+    import shutil
+    has_arecord = shutil.which('arecord') is not None
+    try:
+        import subprocess as sp
+        result = sp.run(['arecord', '-D', RECORD_ALSA_DEVICE, '-d', '0', '-f', 'S16_LE', '-r', '16000', '-c', '1', '/dev/null'],
+                       capture_output=True, timeout=3)
+        device_ok = result.returncode == 0
+    except:
+        device_ok = False
+    
+    return jsonify({
+        "available": has_arecord and device_ok,
+        "device": RECORD_ALSA_DEVICE,
+        "has_arecord": has_arecord,
+        "device_ok": device_ok,
+    })
+
+
+# ============ CAMERA (Brio 4K on /dev/video0) ============
+CAMERA_DEVICE = os.environ.get("VIRON_CAMERA_DEVICE", "/dev/video0")
+
+@app.route('/api/camera/snapshot', methods=['GET'])
+def camera_snapshot():
+    """Capture a single JPEG frame from Brio camera."""
+    import tempfile
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            snap_path = tmp.name
+        
+        # Use fswebcam or v4l2 to capture a frame
+        result = subprocess.run([
+            'fswebcam', '-d', CAMERA_DEVICE,
+            '-r', '1280x720', '--no-banner',
+            '--jpeg', '85', snap_path
+        ], capture_output=True, timeout=5)
+        
+        if result.returncode != 0:
+            # Fallback: try ffmpeg
+            result = subprocess.run([
+                'ffmpeg', '-f', 'v4l2', '-i', CAMERA_DEVICE,
+                '-frames:v', '1', '-y', snap_path
+            ], capture_output=True, timeout=5)
+        
+        if os.path.exists(snap_path) and os.path.getsize(snap_path) > 0:
+            from flask import send_file
+            return send_file(snap_path, mimetype='image/jpeg')
+        else:
+            return jsonify({"error": "Failed to capture frame"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/camera/status', methods=['GET'])
+def camera_status():
+    """Check if camera is available."""
+    cam_exists = os.path.exists(CAMERA_DEVICE)
+    return jsonify({
+        "available": cam_exists,
+        "device": CAMERA_DEVICE,
+    })
+
+
 # ============ DEBUG LOGGING ============
 DEBUG_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log")
 

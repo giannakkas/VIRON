@@ -721,15 +721,14 @@ let alwaysRec=null;
 let alwaysListening=false;
 let lastWakeTime=0; // Prevent double triggers
 
-// ===== openWakeWord Service (server-side wake word detection) =====
-// DISABLED for now — Chrome Speech API + "hey jarvis" is more reliable
-// Enable with: localStorage.setItem('viron_oww','1') then refresh
+// ===== openWakeWord Service (server-side mic on Jetson) =====
+// ReSpeaker mic connected to Jetson — service captures audio directly
 let owwReady=false;
 let owwPolling=false;
 let owwPollTimer=null;
 const OWW_URL=''; // Same origin proxy via Flask (/wakeword/*)
-const OWW_POLL_INTERVAL=250; // Poll every 250ms
-const OWW_ENABLED=false; // Set to true to use openWakeWord service
+const OWW_POLL_INTERVAL=300; // Poll every 300ms
+const OWW_ENABLED=true; // Server-side mic via ReSpeaker
 
 // Check if openWakeWord service is running
 function checkOWWService(){
@@ -754,119 +753,56 @@ if(OWW_ENABLED)setInterval(()=>{if(!owwReady)checkOWWService()},10000);
 function startOWWPolling(){
   if(owwPolling)return;
   owwPolling=true;
-  D('  🎯 Starting openWakeWord audio streaming');
+  D('  🎯 Starting openWakeWord polling (server-side mic)');
   document.getElementById("listenText").textContent='Say "Hey VIRON"';
   voiceState=VOICE_IDLE;updateListenUI();
   
   // Resume detection on service side
   fetch(OWW_URL+'/wakeword/resume',{method:'POST'}).catch(()=>{});
   
-  // Capture mic and stream audio to openWakeWord service
-  if(!window._owwStream){
-    navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}})
-    .then(stream=>{
-      window._owwStream=stream;
-      // Browser AudioContext typically runs at 48kHz — we need to downsample to 16kHz
-      const ctx=new (window.AudioContext||window.webkitAudioContext)();
-      const nativeSR=ctx.sampleRate;
-      window._owwCtx=ctx;
-      D('  🎤 OWW native sample rate: '+nativeSR+'Hz');
-      const src=ctx.createMediaStreamSource(stream);
-      // 4096 samples at 48kHz = ~85ms
-      const proc=ctx.createScriptProcessor(4096,1,1);
-      window._owwProc=proc;
-      src.connect(proc);
-      proc.connect(ctx.destination);
-      
-      // Downsample ratio
-      const ratio=nativeSR/16000;
-      let audioBuffer=new Float32Array(0); // Accumulate audio
-      // Need at least 1280 samples at 16kHz = 1280*ratio native samples
-      const MIN_NATIVE=Math.ceil(1280*ratio);
-      
-      proc.onaudioprocess=function(e){
-        if(!owwPolling)return;
-        const float32=e.inputBuffer.getChannelData(0);
+  // Poll the server for wake word detections
+  owwPollTimer=setInterval(()=>{
+    if(!owwPolling)return;
+    fetch(OWW_URL+'/wakeword/poll',{signal:AbortSignal.timeout(2000)})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.wake){
+        D('  🎯 WAKE WORD from server! model='+d.model+' score='+(d.score||0).toFixed(3));
+        stopOWWPolling();
+        stopAllRecognition();
         
-        // Accumulate audio in buffer
-        const newBuf=new Float32Array(audioBuffer.length+float32.length);
-        newBuf.set(audioBuffer);
-        newBuf.set(float32,audioBuffer.length);
-        audioBuffer=newBuf;
+        if(Date.now()-lastWakeTime<3000){D('  (wake debounced)');startOWWPolling();return}
+        lastWakeTime=Date.now();
         
-        // Wait until we have enough for 1 OWW frame
-        if(audioBuffer.length<MIN_NATIVE)return;
+        startConversation();
+        cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
+        document.getElementById("listenText").textContent='Listening...';
         
-        // Take the buffer and reset
-        const chunk=audioBuffer;
-        audioBuffer=new Float32Array(0);
-        
-        // Downsample from native rate to 16kHz
-        const outLen=Math.round(chunk.length/ratio);
-        const int16=new Int16Array(outLen);
-        for(let i=0;i<outLen;i++){
-          const srcIdx=Math.min(Math.round(i*ratio),chunk.length-1);
-          const s=Math.max(-1,Math.min(1,chunk[srcIdx]));
-          int16[i]=s<0?s*0x8000:s*0x7FFF;
-        }
-        
-        // Send to server
-        fetch(OWW_URL+'/wakeword/audio',{
-          method:'POST',
-          headers:{'Content-Type':'application/octet-stream'},
-          body:int16.buffer,
-          signal:AbortSignal.timeout(2000)
+        const pName=sEmo.recognized_person;
+        const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
+        D('  Playing ack: "'+ackText+'"');
+        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
+        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+        .then(blob=>{
+          const url=URL.createObjectURL(blob);
+          const a=new Audio(url);
+          currentAudio=a;isSpeaking=true;
+          a.volume=0.6;
+          a.onended=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+          a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+          a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
         })
-        .then(r=>r.json())
-        .then(d=>{
-          if(d.detected){
-            D('  🎯 WAKE WORD from openWakeWord! model='+d.model+' score='+(d.score||0).toFixed(3));
-            stopOWWPolling();
-            stopAllRecognition();
-            
-            if(Date.now()-lastWakeTime<3000){D('  (wake debounced)');startOWWPolling();return}
-            lastWakeTime=Date.now();
-            
-            startConversation();
-            cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
-            document.getElementById("listenText").textContent='Listening...';
-            
-            const pName=sEmo.recognized_person;
-            const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
-            D('  Playing ack: "'+ackText+'"');
-            fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
-            .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
-            .then(blob=>{
-              const url=URL.createObjectURL(blob);
-              const a=new Audio(url);
-              currentAudio=a;isSpeaking=true;
-              a.volume=0.6;
-              a.onended=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-              a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-              a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
-            })
-            .catch(e=>{D('  Ack TTS failed: '+e);startCommandListening()});
-          }
-        })
-        .catch(()=>{}); // Silently ignore network errors during streaming
-      };
-      D('  🎤 OWW mic streaming active ('+nativeSR+'Hz → 16kHz, energy filter on)');
+        .catch(e=>{D('  Ack TTS failed: '+e);startCommandListening()});
+      }
     })
-    .catch(e=>{
-      D('  ❌ OWW mic access failed: '+e+', falling back to Chrome');
-      owwReady=false;owwPolling=false;
-      startAlwaysListening();
-    });
-  }else{
-    D('  🎤 OWW mic stream already active, resuming');
-    // Stream exists, just set owwPolling=true to resume processing
-  }
+    .catch(()=>{});
+  },OWW_POLL_INTERVAL);
+  D('  🎤 Polling /wakeword/poll every '+OWW_POLL_INTERVAL+'ms');
 }
 
 function stopOWWPolling(){
   owwPolling=false;
   if(owwPollTimer){clearInterval(owwPollTimer);owwPollTimer=null}
-  // Pause detection on service side (keep mic stream alive for quick resume)
   fetch(OWW_URL+'/wakeword/pause',{method:'POST'}).catch(()=>{});
 }
 
@@ -884,7 +820,7 @@ function startAlwaysListening(){
   D('>>> startAlwaysListening, voiceState='+voiceState+', loading='+loading+', wakeLang=en-US, cmdLang='+getSRLang());
   if(loading){D('  loading, retry in 1s');setTimeout(startAlwaysListening,1000);return}
   if(synth&&synth.speaking){D('  synth speaking, retry in 1s');setTimeout(startAlwaysListening,1000);return}
-  if(alwaysListening){D('  already listening');return}
+  if(alwaysListening||owwPolling){D('  already listening');return}
   
   // PREFER openWakeWord service (server-side, reliable)
   if(owwReady){
@@ -1043,8 +979,8 @@ function startAlwaysListening(){
     wakeRetryTimeout=setTimeout(startAlwaysListening,1000);
   }
   
-  // ALSO start Silero VAD as parallel wake word detector (more reliable than Chrome)
-  if(vadReady&&sileroVAD&&!vadListening){
+  // ALSO start Silero VAD as parallel wake word detector (only when OWW not active)
+  if(!owwReady&&vadReady&&sileroVAD&&!vadListening){
     try{
       D('  🔊 Starting Silero VAD for wake word detection');
       sileroVAD.start();vadListening=true;
@@ -1060,6 +996,13 @@ let activeCmdRec=null; // Track active command recognition
 
 // ===== SERVER-SIDE STT (Whisper) =====
 let whisperReady=false;
+
+// Server-side mic (ReSpeaker on Jetson) — checked on load
+let serverMicAvailable=false;
+fetch('/api/record/status',{signal:AbortSignal.timeout(3000)})
+  .then(r=>r.json())
+  .then(d=>{serverMicAvailable=d.available;D('  🎤 Server mic: '+(d.available?'AVAILABLE ('+d.device+')':'not available'))})
+  .catch(()=>{serverMicAvailable=false});
 // Check if Whisper is available on server
 fetch('/api/stt/status').then(r=>r.json()).then(d=>{whisperReady=d.ready;D('🎙️ Whisper STT: '+(d.ready?'READY':'not available'))}).catch(()=>{});
 // Re-check periodically (model loads in background)
@@ -1203,8 +1146,10 @@ function startCommandListening(){
   voiceState=VOICE_ACTIVATED;updateListenUI();
   document.getElementById("listenText").textContent='Listening...';
   
-  // Use Silero VAD (best), Whisper fallback, Chrome last resort
-  if(whisperReady&&vadReady&&sileroVAD){
+  // Use server-side mic (ReSpeaker) if available, then Silero VAD, Whisper, Chrome
+  if(serverMicAvailable){
+    setTimeout(startServerSideListening,300);
+  }else if(whisperReady&&vadReady&&sileroVAD){
     setTimeout(startSileroListening,300);
   }else if(whisperReady){
     // Small delay to let speaker audio fade before mic opens
@@ -1460,6 +1405,64 @@ function handleWhisperNoSpeech(){
 }
 
 // ===== CHROME FALLBACK COMMAND LISTENING =====
+// ===== SERVER-SIDE MIC LISTENING (ReSpeaker on Jetson) =====
+function startServerSideListening(){
+  D('  🎤 Using server-side mic (ReSpeaker)');
+  voiceState=VOICE_HEARING;updateListenUI();
+  document.getElementById("listenText").textContent='Listening (ReSpeaker)...';
+  
+  const maxDuration=inConversation?10:15;
+  
+  fetch('/api/record',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({max_duration:maxDuration,silence_duration:1.5,min_duration:0.3}),
+    signal:AbortSignal.timeout((maxDuration+5)*1000)
+  })
+  .then(r=>{
+    if(r.status===204){
+      // No speech detected
+      D('  🔇 Server mic: no speech detected');
+      handleWhisperNoSpeech();
+      return null;
+    }
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.blob();
+  })
+  .then(blob=>{
+    if(!blob)return;
+    
+    D('  📤 Sending '+Math.round(blob.size/1024)+'KB server recording to Whisper...');
+    voiceState=VOICE_PROCESSING;updateListenUI();
+    document.getElementById("listenText").textContent='Processing...';
+    
+    const formData=new FormData();
+    formData.append('audio',blob,'recording.wav');
+    formData.append('lang',isGreekMode()?'el':'en');
+    
+    return fetch('/api/stt',{method:'POST',body:formData});
+  })
+  .then(r=>{if(r)return r.json()})
+  .then(data=>{
+    if(!data)return;
+    const speech=(data.text||'').trim();
+    const lang=data.language||'el';
+    if(!speech||speech.length<1){
+      D('  🔇 Empty Whisper result from server mic');
+      handleWhisperNoSpeech();
+      return;
+    }
+    handleWhisperResult(speech,lang);
+  })
+  .catch(e=>{
+    D('  ❌ Server mic error: '+e);
+    // Fall back to browser mic
+    if(vadReady&&sileroVAD)startSileroListening();
+    else if(whisperReady)startWhisperListening();
+    else startChromeListening();
+  });
+}
+
 function startChromeListening(){
   D('  🔄 Using Chrome SpeechRecognition (fallback)');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
