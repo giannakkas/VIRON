@@ -552,7 +552,7 @@ function sayServerTTS(text,lang,speed){
       function playSentence(idx){
         if(idx>=queue.length){
           D('  ✅ All sentences played');
-          isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,600);
+          isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,300);
           return;
         }
         function playBlob(blob){
@@ -604,9 +604,9 @@ function sayServerTTS(text,lang,speed){
     const a=new Audio(url);
     currentAudio=a; // Track for stopSpeaking()
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{D('  TTS playback ended');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
-    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,600)};
-    a.play().then(()=>{startT()}).catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,600)})
+    a.onended=()=>{D('  TTS playback ended');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,300)};
+    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,300)};
+    a.play().then(()=>{startT()}).catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,300)})
   })
   .catch(e=>{
     D('  Server TTS FAILED: '+e.message+' — falling back to browser voice');
@@ -618,8 +618,8 @@ function sayServerTTS(text,lang,speed){
     if(lang==='el'&&gkV)u.voice=gkV;
     u.rate=speed==='slow'?0.75:speed==='fast'?1.1:0.9;u.pitch=0.85;
     u.onstart=()=>{startT()};
-    u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,600)};
-    u.onerror=()=>{stopT();setTimeout(startWakeListener,600)};
+    u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,300)};
+    u.onerror=()=>{stopT();setTimeout(startWakeListener,300)};
     synth.speak(u);
   })
 }
@@ -758,7 +758,7 @@ let owwReady=false;
 let owwPolling=false;
 let owwPollTimer=null;
 const OWW_URL=''; // Same origin proxy via Flask (/wakeword/*)
-const OWW_POLL_INTERVAL=300; // Poll every 300ms
+const OWW_POLL_INTERVAL=200; // Poll every 300ms
 const OWW_ENABLED=true; // Server-side mic via ReSpeaker
 
 // Check if openWakeWord service is running
@@ -1268,9 +1268,9 @@ function startWhisperListening(){
     const dataArr=new Uint8Array(analyser.frequencyBinCount);
     
     const SPEECH_THRESHOLD=15;      // Level to count as speech
-    const SILENCE_AFTER_SPEECH=900; // ms of silence after speech to stop
+    const SILENCE_AFTER_SPEECH=500; // ms of silence after speech to stop
     const MIN_SPEECH_DURATION=300;  // min ms of speech before we accept silence-stop
-    const NO_SPEECH_TIMEOUT=4000;   // stop if no speech detected at all
+    const NO_SPEECH_TIMEOUT=3000;   // stop if no speech detected at all
     
     let speechDetected=false;
     let speechStartTime=0;
@@ -1438,56 +1438,88 @@ function handleWhisperNoSpeech(){
 // ===== CHROME FALLBACK COMMAND LISTENING =====
 // ===== SERVER-SIDE MIC LISTENING (ReSpeaker on Jetson) =====
 function startServerSideListening(){
-  D('  🎤 Using server-side mic (ReSpeaker)');
+  D('  🎤 Using server-side mic (ReSpeaker) — combined listen');
   voiceState=VOICE_HEARING;updateListenUI();
   document.getElementById("listenText").textContent='Listening (ReSpeaker)...';
   
   const maxDuration=inConversation?8:10;
   
-  fetch('/api/record',{
+  // Use combined /api/listen endpoint (record+STT in one call, saves ~500ms)
+  fetch('/api/listen',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({max_duration:maxDuration,silence_duration:0.6,min_duration:0.2}),
+    body:JSON.stringify({max_duration:maxDuration,silence_duration:0.4,min_duration:0.2,lang:isGreekMode()?'el':''}),
     signal:AbortSignal.timeout((maxDuration+5)*1000)
   })
   .then(r=>{
     if(r.status===204){
-      // No speech detected
       D('  🔇 Server mic: no speech detected');
       handleWhisperNoSpeech();
       return null;
     }
+    if(r.status===501){
+      // /api/listen not available, fall back to separate record+stt
+      D('  ⚠ /api/listen not available, using legacy path');
+      startServerSideListeningLegacy();
+      return null;
+    }
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json();
+  })
+  .then(data=>{
+    if(!data)return;
+    const speech=(data.text||'').trim();
+    const lang=data.language||'el';
+    D('  🎤 Listen result: "'+speech+'" (record='+data.record_ms+'ms, stt='+data.stt_ms+'ms, total='+data.total_ms+'ms)');
+    if(!speech||speech.length<1){
+      D('  🔇 Empty result from /api/listen');
+      handleWhisperNoSpeech();
+      return;
+    }
+    voiceState=VOICE_PROCESSING;updateListenUI();
+    document.getElementById("listenText").textContent='Processing...';
+    handleWhisperResult(speech,lang);
+  })
+  .catch(e=>{
+    D('  ❌ Server mic error: '+e);
+    if(vadReady&&sileroVAD)startSileroListening();
+    else if(whisperReady)startWhisperListening();
+    else startChromeListening();
+  });
+}
+
+// Legacy path: separate /api/record + /api/stt (fallback if /api/listen unavailable)
+function startServerSideListeningLegacy(){
+  D('  🎤 Legacy: separate record + STT');
+  const maxDuration=inConversation?8:10;
+  fetch('/api/record',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({max_duration:maxDuration,silence_duration:0.4,min_duration:0.2}),
+    signal:AbortSignal.timeout((maxDuration+5)*1000)
+  })
+  .then(r=>{
+    if(r.status===204){handleWhisperNoSpeech();return null}
     if(!r.ok)throw new Error('HTTP '+r.status);
     return r.blob();
   })
   .then(blob=>{
     if(!blob)return;
-    
-    D('  📤 Sending '+Math.round(blob.size/1024)+'KB server recording to Whisper...');
     voiceState=VOICE_PROCESSING;updateListenUI();
-    document.getElementById("listenText").textContent='Processing...';
-    
     const formData=new FormData();
     formData.append('audio',blob,'recording.wav');
-    formData.append('lang',isGreekMode()?'el':'');  // '' = auto-detect for English
-    
+    formData.append('lang',isGreekMode()?'el':'');
     return fetch('/api/stt',{method:'POST',body:formData});
   })
   .then(r=>{if(r)return r.json()})
   .then(data=>{
     if(!data)return;
     const speech=(data.text||'').trim();
-    const lang=data.language||'el';
-    if(!speech||speech.length<1){
-      D('  🔇 Empty Whisper result from server mic');
-      handleWhisperNoSpeech();
-      return;
-    }
-    handleWhisperResult(speech,lang);
+    if(!speech||speech.length<1){handleWhisperNoSpeech();return}
+    handleWhisperResult(speech,data.language||'el');
   })
   .catch(e=>{
-    D('  ❌ Server mic error: '+e);
-    // Fall back to browser mic
+    D('  ❌ Legacy server mic error: '+e);
     if(vadReady&&sileroVAD)startSileroListening();
     else if(whisperReady)startWhisperListening();
     else startChromeListening();

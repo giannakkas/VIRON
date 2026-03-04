@@ -1827,7 +1827,7 @@ def record_from_mic():
         # Phase 1: Measure noise floor (first 0.5s = ~6 chunks)
         noise_rms_values = []
         noise_floor = 0
-        CALIBRATION_CHUNKS = 6
+        CALIBRATION_CHUNKS = 4
         
         for _ in range(CALIBRATION_CHUNKS):
             data = proc.stdout.read(bytes_per_chunk)
@@ -1845,7 +1845,7 @@ def record_from_mic():
         if noise_rms_values:
             noise_floor = np.mean(noise_rms_values)
             # Speech = 3x above noise floor (minimum 50)
-            SPEECH_THRESHOLD = max(noise_floor * 3, 50)
+            SPEECH_THRESHOLD = max(noise_floor * 2.5, 50)
             # Silence = 1.5x above noise floor
             SILENCE_THRESHOLD = max(noise_floor * 1.5, 30)
             print(f"🎤 Noise floor={noise_floor:.0f}, speech_thresh={SPEECH_THRESHOLD:.0f}, silence_thresh={SILENCE_THRESHOLD:.0f}")
@@ -1874,7 +1874,7 @@ def record_from_mic():
                     speech_started = True
                     silence_chunks = 0
                     print(f"🎤 Speech START (RMS={rms:.0f}) at {total_chunks * chunk_ms}ms")
-                elif total_chunks > int(3000 / chunk_ms):  # 3s wait max
+                elif total_chunks > int(2500 / chunk_ms):  # 3s wait max
                     print(f"🎤 No speech after 3s (last RMS={rms:.0f})")
                     break
             else:
@@ -2138,6 +2138,36 @@ def wakeword_proxy(path):
         return jsonify({"error": str(e)}), 500
 
 # ============ START ============
+# ── VOICE IMPROVEMENT: Combined record+STT endpoint ──
+try:
+    from listen_endpoint import register_listen_endpoint
+    register_listen_endpoint(app)
+except ImportError:
+    # Inline fallback: register a simple /api/listen that chains record+stt
+    print("⚠ listen_endpoint.py not found, using inline /api/listen")
+    @app.route('/api/listen', methods=['POST'])
+    def api_listen_inline():
+        """Combined record+STT — inline fallback version.
+        Records from ReSpeaker, then directly calls STT."""
+        import io
+        # Record audio
+        rec_resp = record_from_mic()
+        if hasattr(rec_resp, 'status_code') and rec_resp.status_code == 204:
+            return jsonify({"text": "", "error": "no_speech"}), 204
+        if hasattr(rec_resp, 'status_code') and rec_resp.status_code != 200:
+            return jsonify({"text": "", "error": "record_failed"}), 500
+        
+        # Get the WAV data from the record response
+        from werkzeug.datastructures import FileStorage
+        params = request.get_json(silent=True) or {}
+        hint_lang = params.get('lang', '')
+        
+        # The record_from_mic returns a send_file response
+        # We need to intercept the WAV and send it to STT
+        # For the inline version, redirect to the two-step approach
+        return jsonify({"text": "", "error": "use_separate_endpoints"}), 501
+
+
 if __name__ == '__main__':
     port = config['port']
     has_key = config.get('anthropic_api_key', '') not in ['', 'YOUR_API_KEY_HERE']

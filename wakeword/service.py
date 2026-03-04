@@ -24,7 +24,8 @@ from collections import deque
 ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
 PORT = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
 STT_URL = os.environ.get("VIRON_STT_URL", "http://127.0.0.1:5000")
-OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.35"))
+# LOWERED from 0.35 → 0.28 to catch quieter wake words at distance
+OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.28"))
 
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1280  # 80ms mono samples
@@ -42,9 +43,14 @@ WAKE_PATTERNS = [
     r'h?e+y?\s*j[aá]rv[iu]s',
     r'β[αά]ι?ρ[οό]ν', r'γ[ει]α\s*β[αά]ι?ρ[οό]ν',
     r'βίρον', r'βέρον',
+    # Additional patterns for common misrecognitions
+    r'h?e+y?\s*b[iy]r[oa]n',   # "hey biron"
+    r'h?e+y?\s*v[ae]r[oa]n',   # "hey varon"
+    r'h?e+y?\s*iron',           # "hey iron"
 ]
 WAKE_REGEX = re.compile('|'.join(WAKE_PATTERNS), re.IGNORECASE)
-WAKE_SUBS = ["viron","veron","byron","biron","vairon","βάιρον","βιρον","βαιρον","jarvis"]
+WAKE_SUBS = ["viron","veron","byron","biron","vairon","βάιρον","βιρον","βαιρον",
+             "jarvis","iron","varon","vyron"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("viron-wakeword")
@@ -99,7 +105,7 @@ class Detector:
             preds = self.oww_model.predict(audio_int16)
             for name in self.oww_names:
                 score = preds[name]
-                if score > 0.1:
+                if score > 0.08:
                     logger.info(f"OWW: {name}={score:.3f}")
                 if score >= OWW_THRESHOLD:
                     self.set_detection(f"hey jarvis (OWW:{score:.2f})", score)
@@ -110,7 +116,8 @@ class Detector:
 
     def set_detection(self, text, score=1.0):
         now = time.time()
-        if now - self.last_detection < 2.0: return
+        # REDUCED debounce from 2.0s → 1.5s for faster re-detection
+        if now - self.last_detection < 1.5: return
         self.last_detection = now
         self.detection_count += 1
         with self._lock:
@@ -148,6 +155,8 @@ class MicCapture:
         self.proc = None
         self._paused = False
         self._restart = threading.Event()
+        # Track how many chunks to discard after resume (echo flush)
+        self._flush_chunks = 0
 
     def start(self):
         self.running = True
@@ -167,8 +176,10 @@ class MicCapture:
 
     def resume_mic(self):
         self._paused = False
+        # Flush first 3 chunks (~240ms) after resume to discard echo remnants
+        self._flush_chunks = 3
         self._restart.set()
-        logger.info("Mic resuming")
+        logger.info("Mic resuming (flushing 3 chunks for echo)")
 
     def _kill(self):
         if self.proc:
@@ -228,9 +239,9 @@ class MicCapture:
                 self.det.is_listening = True
                 logger.info(f"Mic active: {ALSA_DEVICE}")
 
-                # Calibrate noise
+                # Calibrate noise — REDUCED from 8 to 5 chunks (400ms → 250ms)
                 noise_vals = []
-                for _ in range(8):
+                for _ in range(5):
                     d = self.proc.stdout.read(BYTES_PER_CHUNK)
                     if not d or len(d) < BYTES_PER_CHUNK: break
                     # Extract right channel (ch1 = ASR beam) from stereo interleaved data
@@ -246,7 +257,8 @@ class MicCapture:
                     sp_thresh = nf * 1.8  # Need to be noticeably louder than ambient
                     si_thresh = nf * 1.1
                 else:
-                    sp_thresh = max(nf * 2.0, 35)
+                    # ADJUSTED: 2.0→1.8 speech threshold for better sensitivity
+                    sp_thresh = max(nf * 1.8, 35)
                     si_thresh = max(nf * 1.2, 20)
                 logger.info(f"Noise={nf:.0f} speech>{sp_thresh:.0f} silence<{si_thresh:.0f}")
                 logger.info("Listening... say 'Hey VIRON' or 'Hey Jarvis'")
@@ -259,6 +271,11 @@ class MicCapture:
                     d_stereo = self.proc.stdout.read(BYTES_PER_CHUNK)
                     if not d_stereo or len(d_stereo) < BYTES_PER_CHUNK: break
                     if self.det.is_paused: continue
+
+                    # Flush echo chunks after resume
+                    if self._flush_chunks > 0:
+                        self._flush_chunks -= 1
+                        continue
 
                     # Extract right channel (ch1 = ASR-optimized beam)
                     stereo = np.frombuffer(d_stereo, dtype=np.int16)
@@ -371,6 +388,7 @@ def main():
     ═══════════════════════════════════════
     VIRON Wake Word — {mode}
     Say "Hey VIRON" or "Hey Jarvis"
+    Threshold: {OWW_THRESHOLD}
     ═══════════════════════════════════════
     📡 http://0.0.0.0:{PORT}
     🎤 {ALSA_DEVICE} (ReSpeaker)
