@@ -23,7 +23,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "40"))
 
 # ─── Persistence ───────────────────────────────────
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.expanduser("~"), "VIRON", "data", "viron.db"))
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "viron.db"))
 
 # ─── Gateway Server ───────────────────────────────
 GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "8080"))

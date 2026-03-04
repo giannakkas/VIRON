@@ -31,9 +31,9 @@ CHUNK_SIZE = 1280  # 80ms
 BYTES_PER_CHUNK = CHUNK_SIZE * 2
 
 # Whisper speech segment limits
-MIN_SPEECH_CHUNKS = 4      # 320ms min
-MAX_WAKE_CHUNKS = 40       # 3.2s max
-SILENCE_END_CHUNKS = 6     # 480ms silence = end of phrase
+MIN_SPEECH_CHUNKS = 3      # 240ms min
+MAX_WAKE_CHUNKS = 25       # 2.0s max (wake word is short)
+SILENCE_END_CHUNKS = 4     # 320ms silence = end of phrase
 
 # "hey viron" patterns
 WAKE_PATTERNS = [
@@ -233,8 +233,8 @@ class MicCapture:
                     noise_vals.append(np.sqrt(np.mean(s.astype(np.float32)**2)))
 
                 nf = np.mean(noise_vals) if noise_vals else 50
-                sp_thresh = max(nf * 2.5, 40)
-                si_thresh = max(nf * 1.3, 25)
+                sp_thresh = max(nf * 2.0, 35)
+                si_thresh = max(nf * 1.2, 20)
                 logger.info(f"Noise={nf:.0f} speech>{sp_thresh:.0f} silence<{si_thresh:.0f}")
                 logger.info("Listening... say 'Hey VIRON' or 'Hey Jarvis'")
 

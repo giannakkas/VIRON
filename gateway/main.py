@@ -128,11 +128,30 @@ async def call_router(message: str, age: int, language: str) -> Optional[RouterR
 
 def default_routing(message: str) -> RouterResult:
     """Fallback routing when Gemma router is unavailable."""
+    msg = message.lower()
     words = len(message.split())
-    if words <= 6:
+    
+    # Identity/personal questions → ALWAYS local (instant response)
+    identity_patterns = [
+        "ποιος σε", "πώς σε λένε", "πως σε λενε", "τι είσαι", "τι εισαι",
+        "ποιος σε δημιούργησε", "ποιος σε εφτιαξε", "ποιος σε έφτιαξε",
+        "who made you", "who created you", "who are you", "what is your name",
+        "what's your name", "who built you", "are you a robot",
+        "πες μου για σένα", "tell me about yourself",
+    ]
+    for pat in identity_patterns:
+        if pat in msg:
+            return RouterResult(
+                intent_type="casual_chat", subject="general",
+                complexity_level="very_simple", mode="local",
+                cloud_provider="none", safety_flag="safe"
+            )
+    
+    # Short messages → local
+    if words <= 10:
         return RouterResult(
             intent_type="casual_chat", subject="general",
-            complexity_level="very_simple", mode="local",
+            complexity_level="simple", mode="local",
             cloud_provider="none", safety_flag="safe"
         )
     # Complex → cloud chatgpt as default
@@ -210,6 +229,23 @@ _EXPLAIN_WORDS = [
 def override_routing(router_result: RouterResult, message: str) -> RouterResult:
     """Override Gemma router if it misclassifies known educational topics."""
     msg_lower = message.lower()
+
+    # Identity/personal questions → ALWAYS local (fast response)
+    _IDENTITY_PATTERNS = [
+        "ποιος σε", "πώς σε λένε", "πως σε λενε", "τι είσαι", "τι εισαι",
+        "ποιος σε δημιούργησε", "ποιος σε εφτιαξε", "ποιος σε έφτιαξε",
+        "who made you", "who created you", "who are you", "what is your name",
+        "what's your name", "who built you", "πες μου για σένα",
+        "tell me about yourself", "are you a robot",
+    ]
+    for pat in _IDENTITY_PATTERNS:
+        if pat in msg_lower:
+            logger.info(f"  🔄 Override: identity question → local")
+            router_result.mode = "local"
+            router_result.cloud_provider = "none"
+            router_result.intent_type = "casual_chat"
+            router_result.complexity_level = "very_simple"
+            return router_result
 
     # Subjects that ALWAYS force cloud (no explain-word needed)
     ALWAYS_CLOUD = {"weather", "news", "music"}
