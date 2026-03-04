@@ -233,8 +233,15 @@ class MicCapture:
                     noise_vals.append(np.sqrt(np.mean(s.astype(np.float32)**2)))
 
                 nf = np.mean(noise_vals) if noise_vals else 50
-                sp_thresh = max(nf * 2.0, 35)
-                si_thresh = max(nf * 1.2, 20)
+                # Cap noise floor — if ambient is very high (TV, music), 
+                # use fixed thresholds instead of adaptive
+                if nf > 500:
+                    logger.warning(f"High ambient noise ({nf:.0f})! Using fixed thresholds. Turn off TV for best results.")
+                    sp_thresh = nf * 1.8  # Need to be noticeably louder than ambient
+                    si_thresh = nf * 1.1
+                else:
+                    sp_thresh = max(nf * 2.0, 35)
+                    si_thresh = max(nf * 1.2, 20)
                 logger.info(f"Noise={nf:.0f} speech>{sp_thresh:.0f} silence<{si_thresh:.0f}")
                 logger.info("Listening... say 'Hey VIRON' or 'Hey Jarvis'")
 

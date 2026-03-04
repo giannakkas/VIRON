@@ -5,8 +5,8 @@ All settings via environment variables with sensible defaults.
 import os
 
 # ─── Local LLM (llama.cpp servers) ─────────────────
-ROUTER_URL = os.getenv("ROUTER_URL", "http://llama-router:8081")
-TUTOR_URL = os.getenv("TUTOR_URL", "http://llama-tutor:8082")
+ROUTER_URL = os.getenv("ROUTER_URL", "http://127.0.0.1:8081")
+TUTOR_URL = os.getenv("TUTOR_URL", "http://127.0.0.1:8082")
 ROUTER_TIMEOUT = int(os.getenv("ROUTER_TIMEOUT", "10"))
 TUTOR_TIMEOUT = int(os.getenv("TUTOR_TIMEOUT", "30"))
 
