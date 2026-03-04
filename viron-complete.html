@@ -1758,6 +1758,16 @@ function processStudentSpeech(text){
     'bye':['[happy] Bye! See you soon!','[happy] Take care!','[happy] Goodbye! Have a great time!'],
     'whats up':['[happy] Not much! You?','[happy] Hey! What\'s going on?'],
     "what's up":['[happy] Not much! You?','[happy] All good! What about you?'],
+    // Creator / identity — always instant
+    'ποιος σε εφτιαξε':['[proud] Με δημιούργησαν ο Χρήστος Γιαννακκάς και ο γιος του Ανδρέας Γιαννακκάς, από την Κύπρο!'],
+    'ποιος σε δημιουργησε':['[proud] Με δημιούργησαν ο Χρήστος Γιαννακκάς και ο γιος του Ανδρέας Γιαννακκάς, από την Κύπρο!'],
+    'ποιος σε εκανε':['[proud] Με έφτιαξαν ο Χρήστος και ο Ανδρέας Γιαννακκάς από την Κύπρο!'],
+    'πως σε λενε':['[happy] Με λένε VIRON! Είμαι ο φίλος σου ρομπότ!'],
+    'ποιος εισαι':['[happy] Είμαι ο VIRON! Με έφτιαξαν ο Χρήστος και ο Ανδρέας Γιαννακκάς.'],
+    'who made you':['[proud] I was created by Christos Giannakkas and his son Andreas from Cyprus!'],
+    'who created you':['[proud] Christos Giannakkas and his son Andreas built me!'],
+    'who are you':['[happy] I am VIRON! Created by Christos and Andreas Giannakkas from Cyprus.'],
+    'what is your name':['[happy] My name is VIRON!'],
   };
   
   // Fuzzy greeting matching: Whisper often mishears Greek greetings
@@ -1777,6 +1787,11 @@ function processStudentSpeech(text){
     'τι γινετε':'τι γινεται','τιγινεται':'τι γινεται',
     // "καλησπέρα" variants
     'καλισπερα':'καλησπερα',
+    // Creator / identity variants
+    'ποιος σε κατασκευασε':'ποιος σε εφτιαξε',
+    'ποιος σε δημιουργισε':'ποιος σε δημιουργησε',
+    'πως λεγεσαι':'πως σε λενε','πως σε λεγουν':'πως σε λενε',
+    'ποιος εισαι εσυ':'ποιος εισαι','ποιος εισε':'ποιος εισαι',
   };
 
   // Try exact match first
