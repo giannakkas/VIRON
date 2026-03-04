@@ -1725,18 +1725,18 @@ def record_from_mic():
     import wave, struct, tempfile
     
     params = request.get_json(silent=True) or {}
-    max_duration = min(float(params.get('max_duration', 15)), 30)
-    silence_duration = float(params.get('silence_duration', 1.5))
-    min_duration = float(params.get('min_duration', 0.5))
+    max_duration = min(float(params.get('max_duration', 10)), 30)
+    silence_duration = float(params.get('silence_duration', 1.0))
+    min_duration = float(params.get('min_duration', 0.3))
     
     sample_rate = 16000
     chunk_ms = 80  # 80ms chunks
     chunk_samples = sample_rate * chunk_ms // 1000  # 1280
     bytes_per_chunk = chunk_samples * 2  # int16
     
-    # Energy thresholds for VAD
-    SPEECH_THRESHOLD = 500  # RMS above this = speech (int16 scale)
-    SILENCE_THRESHOLD = 200  # RMS below this = silence
+    # Energy thresholds — ReSpeaker is sensitive, keep low
+    SPEECH_THRESHOLD = 150  # RMS above this = speech
+    SILENCE_THRESHOLD = 80  # RMS below this = silence
     
     cmd = [
         "arecord", "-D", RECORD_ALSA_DEVICE,
@@ -1784,9 +1784,9 @@ def record_from_mic():
                 if rms > SPEECH_THRESHOLD:
                     speech_started = True
                     silence_chunks = 0
-                    print(f"🎤 Speech detected (RMS={rms:.0f})")
-                elif total_chunks > int(8000 / chunk_ms):  # 8s wait max
-                    print("🎤 No speech detected after 8s")
+                    print(f"🎤 Speech detected (RMS={rms:.0f}) at {total_chunks * chunk_ms}ms")
+                elif total_chunks > int(4000 / chunk_ms):  # 4s wait max
+                    print(f"🎤 No speech after 4s (last RMS={rms:.0f})")
                     break
             else:
                 if rms < SILENCE_THRESHOLD:
