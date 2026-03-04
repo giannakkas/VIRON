@@ -134,6 +134,8 @@ class MicCapture:
         self.proc = None
         self._pending_detection = None
         self._pending_lock = threading.Lock()
+        self._restart_event = threading.Event()
+        self._paused = False
 
     def start(self):
         self.running = True
@@ -142,14 +144,34 @@ class MicCapture:
 
     def stop(self):
         self.running = False
+        self._restart_event.set()
+        self._kill_arecord()
+        if self.thread:
+            self.thread.join(timeout=3)
+
+    def pause_mic(self):
+        """Stop arecord to release the ALSA device for conversation recording."""
+        self._paused = True
+        self._kill_arecord()
+        logger.info("Mic released for conversation recording")
+
+    def resume_mic(self):
+        """Restart arecord after conversation recording is done."""
+        self._paused = False
+        self._restart_event.set()
+        logger.info("Mic resuming for wake word detection")
+
+    def _kill_arecord(self):
         if self.proc:
             try:
                 self.proc.terminate()
                 self.proc.wait(timeout=2)
             except Exception:
-                pass
-        if self.thread:
-            self.thread.join(timeout=3)
+                try:
+                    self.proc.kill()
+                except:
+                    pass
+            self.proc = None
 
     def _capture_loop(self):
         cmd = [
@@ -158,43 +180,44 @@ class MicCapture:
             "-c", "1", "-t", "raw",
         ]
         logger.info(f"Starting mic: {' '.join(cmd)}")
+        bytes_per_chunk = CHUNK_SIZE * 2
 
-        try:
-            self.proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            self.detector.is_listening = True
-            logger.info(f"Mic active on {ALSA_DEVICE} — listening for wake word...")
+        while self.running:
+            if self._paused:
+                # Wait until resumed
+                self._restart_event.wait(timeout=1)
+                self._restart_event.clear()
+                continue
 
-            bytes_per_chunk = CHUNK_SIZE * 2  # int16 = 2 bytes per sample
+            try:
+                self.proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.detector.is_listening = True
+                logger.info(f"Mic active on {ALSA_DEVICE} — listening for wake word...")
 
-            while self.running:
-                data = self.proc.stdout.read(bytes_per_chunk)
-                if not data:
-                    if not self.running:
+                while self.running and not self._paused:
+                    data = self.proc.stdout.read(bytes_per_chunk)
+                    if not data:
                         break
-                    # arecord died — try to restart
-                    logger.warning("arecord stopped, restarting in 2s...")
-                    time.sleep(2)
-                    self.proc = subprocess.Popen(
-                        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    )
-                    continue
+                    if len(data) < bytes_per_chunk:
+                        continue
 
-                if len(data) < bytes_per_chunk:
-                    continue
+                    audio = np.frombuffer(data, dtype=np.int16)
+                    result = self.detector.process_audio(audio)
 
-                audio = np.frombuffer(data, dtype=np.int16)
-                result = self.detector.process_audio(audio)
+                    if result.get("detected"):
+                        with self._pending_lock:
+                            self._pending_detection = result
 
-                if result.get("detected"):
-                    with self._pending_lock:
-                        self._pending_detection = result
+                # Clean up current arecord
+                self._kill_arecord()
+                self.detector.is_listening = False
 
-        except Exception as e:
-            logger.error(f"Mic capture error: {e}")
-        finally:
-            self.detector.is_listening = False
+            except Exception as e:
+                logger.error(f"Mic capture error: {e}")
+                self.detector.is_listening = False
+                time.sleep(2)
 
     def consume_detection(self) -> dict:
         with self._pending_lock:
@@ -225,11 +248,13 @@ def create_app(detector: WakeWordDetector, mic: MicCapture):
     @app.route("/wakeword/pause", methods=["POST"])
     def pause():
         detector.pause()
+        mic.pause_mic()  # Release ALSA device
         return jsonify({"status": "paused"})
 
     @app.route("/wakeword/resume", methods=["POST"])
     def resume():
         detector.resume()
+        mic.resume_mic()  # Restart arecord
         return jsonify({"status": "listening"})
 
     @app.route("/wakeword/status", methods=["GET"])

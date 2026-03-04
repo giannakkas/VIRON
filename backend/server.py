@@ -1745,6 +1745,17 @@ def record_from_mic():
     ]
     
     try:
+        # Pause wakeword service to release ALSA device
+        oww_port = int(os.environ.get('VIRON_WAKEWORD_PORT', '8085'))
+        try:
+            import urllib.request
+            req = urllib.request.Request(f'http://127.0.0.1:{oww_port}/wakeword/pause', method='POST',
+                                        data=b'{}', headers={'Content-Type': 'application/json'})
+            urllib.request.urlopen(req, timeout=2)
+            time.sleep(0.3)  # Give arecord time to release device
+        except Exception as e:
+            print(f"⚠ Could not pause wakeword: {e}")
+        
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         audio_frames = []
@@ -1793,6 +1804,8 @@ def record_from_mic():
             proc.kill()
         
         if not audio_frames or not speech_started:
+            # Resume wakeword before returning
+            _resume_wakeword()
             return jsonify({"error": "no_speech", "duration_ms": 0}), 204
         
         # Package as WAV
@@ -1809,6 +1822,7 @@ def record_from_mic():
         
         print(f"🎤 Recorded {duration_ms}ms ({len(raw_audio)//1024}KB)")
         
+        # Note: wakeword resumes when browser calls /wakeword/resume after conversation
         from flask import send_file
         return send_file(wav_path, mimetype='audio/wav', 
                         download_name='recording.wav',
@@ -1816,26 +1830,33 @@ def record_from_mic():
     
     except Exception as e:
         print(f"❌ Record error: {e}")
+        _resume_wakeword()
         return jsonify({"error": str(e)}), 500
+
+
+def _resume_wakeword():
+    """Resume wakeword service after recording."""
+    try:
+        import urllib.request
+        oww_port = int(os.environ.get('VIRON_WAKEWORD_PORT', '8085'))
+        req = urllib.request.Request(f'http://127.0.0.1:{oww_port}/wakeword/resume', method='POST',
+                                    data=b'{}', headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=2)
+    except Exception:
+        pass
 
 @app.route('/api/record/status', methods=['GET'])
 def record_status():
     """Check if server-side mic is available."""
     import shutil
     has_arecord = shutil.which('arecord') is not None
-    try:
-        import subprocess as sp
-        result = sp.run(['arecord', '-D', RECORD_ALSA_DEVICE, '-d', '0', '-f', 'S16_LE', '-r', '16000', '-c', '1', '/dev/null'],
-                       capture_output=True, timeout=3)
-        device_ok = result.returncode == 0
-    except:
-        device_ok = False
+    # Check if ALSA device node exists (don't try to open it — wakeword service has it)
+    device_exists = os.path.exists('/dev/snd') and has_arecord
     
     return jsonify({
-        "available": has_arecord and device_ok,
+        "available": device_exists,
         "device": RECORD_ALSA_DEVICE,
         "has_arecord": has_arecord,
-        "device_ok": device_ok,
     })
 
 
