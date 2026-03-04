@@ -65,26 +65,21 @@ def record_clip(device, channel, duration=2.0):
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=int(duration) + 5)
         if result.returncode != 0:
-            err = result.stderr.decode(errors="replace")
-            # Check for device busy
-            if "busy" in err.lower() or "resource" in err.lower():
-                print(f"\n  ❌ Mic busy! Trying to pause wakeword service...")
-                if pause_wakeword():
-                    time.sleep(0.5)
-                    result = subprocess.run(cmd, capture_output=True, timeout=int(duration) + 5)
-                    if result.returncode != 0:
-                        return None
-                else:
-                    print(f"  Run: pkill -f 'wakeword/service.py'")
-                    return None
-            else:
-                return None
+            err = result.stderr.decode(errors="replace").strip()
+            print(f"\n  ❌ arecord error (code {result.returncode}): {err[:200]}")
+            return None
+        if len(result.stdout) < 1000:
+            print(f"\n  ❌ Too little data: {len(result.stdout)} bytes")
+            return None
         stereo = np.frombuffer(result.stdout, dtype=np.int16)
         mono = stereo[channel::2]
-        # Trim to exact duration
         max_samples = int(duration * RATE)
         return mono[:max_samples]
+    except subprocess.TimeoutExpired:
+        print(f"\n  ❌ Recording timed out!")
+        return None
     except Exception as e:
+        print(f"\n  ❌ Recording exception: {e}")
         return None
 
 
@@ -126,19 +121,8 @@ def save_wav(audio, path):
 
 
 def play_beep():
-    """Play a short beep to signal recording start."""
-    try:
-        # Generate a 200ms 880Hz beep
-        t = np.linspace(0, 0.2, int(RATE * 0.2))
-        beep = (np.sin(2 * np.pi * 880 * t) * 8000).astype(np.int16)
-        with open("/tmp/beep.raw", "wb") as f:
-            f.write(beep.tobytes())
-        subprocess.run(
-            ["aplay", "-f", "S16_LE", "-r", str(RATE), "-c", "1", "/tmp/beep.raw"],
-            capture_output=True, timeout=3
-        )
-    except Exception:
-        pass  # beep is optional
+    """Signal recording start — terminal bell only (avoids ALSA device conflict)."""
+    print("\a", end="", flush=True)
 
 
 def main():
