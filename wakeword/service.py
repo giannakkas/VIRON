@@ -37,20 +37,33 @@ MIN_SPEECH_CHUNKS = 3      # 240ms min
 MAX_WAKE_CHUNKS = 25       # 2.0s max (wake word is short)
 SILENCE_END_CHUNKS = 4     # 320ms silence = end of phrase
 
-# "hey viron" patterns
+# "hey viron" patterns — MUST catch common Whisper misrecognitions
+# Real Whisper outputs observed: "Hey, Vero", "Bye", "Hey Jarvis"
 WAKE_PATTERNS = [
-    r'h?e+y?\s*v[iy]r[oa]n', r'v[iy]+r[oa]+n', r'b[iy]r[oa]n',
-    r'h?e+y?\s*j[aá]rv[iu]s',
-    r'β[αά]ι?ρ[οό]ν', r'γ[ει]α\s*β[αά]ι?ρ[οό]ν',
+    r'h?e+y?,?\s*v[iy]r[oa]n',  # hey viron, hey vyron
+    r'v[iy]+r[oa]+n',            # viron, vyron
+    r'b[iy]r[oa]n',              # biron, byron
+    r'h?e+y?,?\s*j[aá]rv[iu]s', # hey jarvis
+    r'β[αά]ι?ρ[οό]ν',           # βαίρον (Greek)
+    r'γ[ει]α\s*β[αά]ι?ρ[οό]ν', # γεια βαίρον (Greek)
     r'βίρον', r'βέρον',
-    # Additional patterns for common misrecognitions
-    r'h?e+y?\s*b[iy]r[oa]n',   # "hey biron"
-    r'h?e+y?\s*v[ae]r[oa]n',   # "hey varon"
-    r'h?e+y?\s*iron',           # "hey iron"
+    # Common Whisper misrecognitions (observed from real testing)
+    r'h?e+y?,?\s*ver[oa]',       # "hey vero" ← MOST COMMON MISS
+    r'h?e+y?,?\s*b[iy]r[oa]n?',  # "hey biron", "hey biro"
+    r'h?e+y?,?\s*v[ae]r[oa]n?',  # "hey varon", "hey varo"
+    r'h?e+y?,?\s*iron',           # "hey iron"
+    r'h?e+y?,?\s*v[iy]r[oa]$',   # "hey viro" (truncated)
+    r'h?e+y?,?\s*v[iy]run',      # "hey virun"
+    r'h?e+y?,?\s*ver[oa]n',      # "hey veron"
+    r'h?e+y?,?\s*byr[oa]n',      # "hey byron"
+    r'h?e+y?,?\s*bar[oa]n',      # "hey baron"
+    r'h?e+y?,?\s*brian',          # "hey brian"
 ]
 WAKE_REGEX = re.compile('|'.join(WAKE_PATTERNS), re.IGNORECASE)
 WAKE_SUBS = ["viron","veron","byron","biron","vairon","βάιρον","βιρον","βαιρον",
-             "jarvis","iron","varon","vyron"]
+             "jarvis","iron","varon","vyron",
+             # Critical additions from real Whisper testing:
+             "vero","viro","biro","vera","baron","brian","verone","virun"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("viron-wakeword")
@@ -252,13 +265,13 @@ class MicCapture:
                 nf = np.mean(noise_vals) if noise_vals else 50
                 # Cap noise floor — if ambient is very high (TV, music), 
                 # use fixed thresholds instead of adaptive
-                if nf > 500:
-                    logger.warning(f"High ambient noise ({nf:.0f})! Using fixed thresholds. Turn off TV for best results.")
-                    sp_thresh = nf * 1.8  # Need to be noticeably louder than ambient
-                    si_thresh = nf * 1.1
+                if nf > 300:
+                    logger.warning(f"High ambient noise ({nf:.0f})! Using capped thresholds. Turn off TV for best results.")
+                    sp_thresh = min(nf * 1.5, 400)  # Cap speech threshold
+                    si_thresh = min(nf * 1.1, 250)
                 else:
-                    # ADJUSTED: 2.0→1.8 speech threshold for better sensitivity
-                    sp_thresh = max(nf * 1.8, 35)
+                    # ADJUSTED: 1.8→1.5 for better sensitivity to short wake words
+                    sp_thresh = max(nf * 1.5, 35)
                     si_thresh = max(nf * 1.2, 20)
                 logger.info(f"Noise={nf:.0f} speech>{sp_thresh:.0f} silence<{si_thresh:.0f}")
                 logger.info("Listening... say 'Hey VIRON' or 'Hey Jarvis'")
@@ -316,7 +329,7 @@ class MicCapture:
                                 np.sqrt(np.mean(np.frombuffer(f, dtype=np.int16).astype(np.float32)**2))
                                 for f in speech_frames
                             )
-                            if peak_rms < sp_thresh * 1.2:
+                            if peak_rms < sp_thresh * 1.0:
                                 logger.debug(f"Skipped weak segment (peak={peak_rms:.0f} < {sp_thresh*1.5:.0f})")
                                 in_speech = False; speech_frames = []; sil_count = 0
                                 continue
