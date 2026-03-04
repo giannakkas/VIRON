@@ -1498,12 +1498,34 @@ def text_to_speech():
                        headers={'Content-Disposition': 'inline'})
     except ImportError:
         print("⚠ edge-tts not installed")
-        return jsonify({"error": "edge-tts not available"}), 500
     except Exception as e:
         import traceback
         print(f"⚠ edge-tts error: {e}")
         traceback.print_exc()
-        return jsonify({"error": f"TTS failed: {e}"}), 500
+    
+    # Final fallback: gTTS (Google Translate TTS — slower but always works)
+    if HAS_GTTS:
+        try:
+            import tempfile
+            tts_lang = 'el' if lang == 'el' else 'en'
+            print(f"🎙️ gTTS fallback: lang={tts_lang}, text='{text[:50]}'")
+            tts = gTTS(text=text, lang=tts_lang)
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+                tmp_path = tmp.name
+                tts.save(tmp_path)
+            with open(tmp_path, 'rb') as f:
+                audio_bytes = f.read()
+            os.unlink(tmp_path)
+            print(f"✅ gTTS OK: {len(audio_bytes)} bytes")
+            if len(text) < 200:
+                with _tts_cache_lock:
+                    _tts_cache[cache_key] = audio_bytes
+            return Response(audio_bytes, mimetype='audio/mpeg',
+                           headers={'Content-Disposition': 'inline'})
+        except Exception as e:
+            print(f"⚠ gTTS error: {e}")
+    
+    return jsonify({"error": "All TTS engines failed"}), 500
 
 @app.route('/api/tts/prewarm', methods=['POST'])
 def tts_prewarm():

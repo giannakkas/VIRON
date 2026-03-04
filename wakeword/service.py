@@ -1,141 +1,140 @@
 """
-VIRON Wake Word Service — openWakeWord + ReSpeaker (Server-Side Mic)
-====================================================================
-Captures mic audio directly on Jetson via ReSpeaker array,
-runs openWakeWord detection. Browser polls /wakeword/poll endpoint.
+VIRON Wake Word Service — Whisper-Based (Server-Side Mic)
+=========================================================
+Captures mic from ReSpeaker, uses energy VAD to detect speech,
+sends short segments to Whisper for "hey viron" recognition.
+
+Architecture:
+  arecord (ReSpeaker) → energy VAD → Whisper STT → pattern match → poll
 
 Usage:
   python3 wakeword/service.py
 
 Environment:
-  VIRON_WAKEWORD_THRESHOLD=0.5    Detection threshold (0-1)
-  VIRON_WAKEWORD_MODEL=            Path to custom .onnx model (optional)
   VIRON_MIC_DEVICE=plughw:2,0      ALSA device (ReSpeaker = card 2)
   VIRON_WAKEWORD_PORT=8085         HTTP port
+  VIRON_STT_URL=http://127.0.0.1:5000  Flask server for STT
 """
 
 import os
 import sys
+import re
 import time
+import wave
 import threading
 import logging
 import subprocess
+import tempfile
 import numpy as np
 from collections import deque
 
 # — Configuration —
-THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.5"))
-CUSTOM_MODEL = os.environ.get("VIRON_WAKEWORD_MODEL", "")
 ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
 PORT = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
+STT_URL = os.environ.get("VIRON_STT_URL", "http://127.0.0.1:5000")
 
 SAMPLE_RATE = 16000
-CHUNK_SIZE = 1280  # 80ms frames — openWakeWord requirement
+CHUNK_SIZE = 1280  # 80ms frames
+BYTES_PER_CHUNK = CHUNK_SIZE * 2  # int16
+
+# VAD settings
+CALIBRATION_CHUNKS = 10    # 0.8s calibration
+SPEECH_MULT = 2.5          # Speech = noise_floor * this
+SILENCE_MULT = 1.3         # Silence = noise_floor * this
+MIN_SPEECH_CHUNKS = 4      # Min 320ms to count as speech
+MAX_WAKE_CHUNKS = 40       # Max 3.2s for a wake word (ignore longer)
+SILENCE_END_CHUNKS = 8     # 640ms silence = end of phrase
+
+# Wake word patterns
+WAKE_PATTERNS = [
+    # English
+    r'\bh?e+y?\s*v[iy]r[oa]n\b',     # hey viron, viron
+    r'\bv[iy]+r[oa]+n\b',             # viron, veron, byron
+    r'\bb[iy]r[oa]n\b',               # biron, byron
+    r'\bh?e+y?\s*j[aá]rv[iu]s\b',    # hey jarvis (legacy)
+    # Greek transliterations
+    r'\bβ[αά]ι?ρ[οό]ν\b',            # βάιρον
+    r'\bγ[ει]α\s*β[αά]ι?ρ[οό]ν\b',  # γεια βάιρον
+    r'\bχ[εέ]ι\s*β[αά]ι?ρ[οό]ν\b',  # χέι βάιρον
+    r'\bβ[ιί]ρ[οό]ν\b',              # βίρον
+]
+WAKE_REGEX = re.compile('|'.join(WAKE_PATTERNS), re.IGNORECASE)
+
+# Simple substring fallback
+WAKE_SUBSTRINGS = [
+    "viron", "veron", "byron", "biron", "vairon",
+    "βάιρον", "βιρον", "βαιρον", "βέρον",
+    "jarvis",  # legacy
+]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("viron-wakeword")
 
 
+def matches_wake_word(text: str) -> bool:
+    """Check if transcript contains a wake word."""
+    if not text:
+        return False
+    t = text.lower().strip()
+    # Regex check
+    if WAKE_REGEX.search(t):
+        return True
+    # Substring check
+    for sub in WAKE_SUBSTRINGS:
+        if sub in t:
+            return True
+    return False
+
+
 class WakeWordDetector:
     def __init__(self):
-        self.model = None
-        self.model_names = []
-        self.last_detection = 0
-        self.detection_count = 0
-        self.detections = deque(maxlen=50)
         self.is_listening = False
         self.is_paused = False
+        self.detection_count = 0
+        self.last_detection = 0
+        self._pending_detection = None
         self._lock = threading.Lock()
 
-    def init_model(self):
-        try:
-            import openwakeword
-            from openwakeword.model import Model
+    def set_detection(self, text: str, score: float = 1.0):
+        now = time.time()
+        if now - self.last_detection < 2.0:
+            return  # debounce
+        self.last_detection = now
+        self.detection_count += 1
+        with self._lock:
+            self._pending_detection = {
+                "detected": True,
+                "model": "whisper",
+                "text": text,
+                "score": score,
+                "time": now,
+                "count": self.detection_count,
+            }
+        logger.info(f"WAKE WORD DETECTED: '{text}'")
 
-            openwakeword.utils.download_models()
-
-            custom_model_path = CUSTOM_MODEL or os.path.join(
-                os.path.dirname(__file__), "models", "hey_viron.onnx"
-            )
-
-            if os.path.exists(custom_model_path):
-                logger.info(f"Loading custom model: {custom_model_path}")
-                self.model = Model(wakeword_models=[custom_model_path], vad_threshold=0.5)
-            else:
-                logger.info("Using 'hey jarvis' model (train custom 'hey viron' for best results)")
-                self.model = Model(wakeword_models=["hey_jarvis_v0.1"], vad_threshold=0.5)
-
-            self.model_names = list(self.model.models.keys())
-            logger.info(f"openWakeWord loaded: models={self.model_names}, threshold={THRESHOLD}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to init openWakeWord: {e}")
-            return False
-
-    def process_audio(self, audio_int16: np.ndarray) -> dict:
-        if self.model is None or self.is_paused:
-            return {"detected": False}
-
-        try:
-            predictions = self.model.predict(audio_int16)
-
-            for name in self.model_names:
-                score = predictions[name]
-
-                if score > 0.1:
-                    logger.info(f"Score: {name}={score:.3f} (threshold={THRESHOLD})")
-
-                if score >= THRESHOLD:
-                    now = time.time()
-                    if now - self.last_detection > 2.0:
-                        self.last_detection = now
-                        self.detection_count += 1
-                        detection = {
-                            "detected": True,
-                            "model": name,
-                            "score": float(score),
-                            "time": now,
-                            "count": self.detection_count,
-                        }
-                        with self._lock:
-                            self.detections.append(detection)
-                        logger.info(f"WAKE WORD DETECTED: {name} (score={score:.3f})")
-                        return detection
-
-            return {"detected": False}
-        except Exception as e:
-            logger.warning(f"Prediction error: {e}")
-            return {"detected": False}
+    def consume_detection(self) -> dict:
+        with self._lock:
+            d = self._pending_detection
+            self._pending_detection = None
+            return d
 
     def pause(self):
         self.is_paused = True
-        try:
-            if self.model:
-                self.model.reset()
-        except Exception:
-            pass
 
     def resume(self):
         self.is_paused = False
-        try:
-            if self.model:
-                self.model.reset()
-        except Exception:
-            pass
 
 
 class MicCapture:
-    """Capture audio from ALSA device using arecord (no PyAudio needed)."""
+    """Capture audio, detect speech segments, send to Whisper."""
 
     def __init__(self, detector: WakeWordDetector):
         self.detector = detector
         self.running = False
         self.thread = None
         self.proc = None
-        self._pending_detection = None
-        self._pending_lock = threading.Lock()
-        self._restart_event = threading.Event()
         self._paused = False
+        self._restart_event = threading.Event()
 
     def start(self):
         self.running = True
@@ -150,28 +149,76 @@ class MicCapture:
             self.thread.join(timeout=3)
 
     def pause_mic(self):
-        """Stop arecord to release the ALSA device for conversation recording."""
         self._paused = True
         self._kill_arecord()
-        logger.info("Mic released for conversation recording")
+        logger.info("Mic released for conversation")
 
     def resume_mic(self):
-        """Restart arecord after conversation recording is done."""
         self._paused = False
         self._restart_event.set()
-        logger.info("Mic resuming for wake word detection")
+        logger.info("Mic resuming for wake word")
 
     def _kill_arecord(self):
         if self.proc:
             try:
                 self.proc.terminate()
                 self.proc.wait(timeout=2)
-            except Exception:
+            except:
                 try:
                     self.proc.kill()
                 except:
                     pass
             self.proc = None
+
+    def _send_to_whisper(self, audio_frames: list) -> str:
+        """Save audio to WAV, send to Flask /api/stt, return transcript."""
+        try:
+            raw = b''.join(audio_frames)
+            duration_ms = len(audio_frames) * 80
+
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+                with wave.open(tmp, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(SAMPLE_RATE)
+                    wf.writeframes(raw)
+
+            # POST to Flask STT
+            import urllib.request
+            import json
+
+            boundary = '----WakeWordBoundary'
+            with open(wav_path, 'rb') as f:
+                file_data = f.read()
+            os.unlink(wav_path)
+
+            # Build multipart form data
+            body = (
+                f'--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="audio"; filename="wake.wav"\r\n'
+                f'Content-Type: audio/wav\r\n\r\n'
+            ).encode() + file_data + (
+                f'\r\n--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="lang"\r\n\r\n'
+                f'el\r\n'
+                f'--{boundary}--\r\n'
+            ).encode()
+
+            req = urllib.request.Request(
+                f'{STT_URL}/api/stt',
+                data=body,
+                headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
+            )
+            resp = urllib.request.urlopen(req, timeout=8)
+            result = json.loads(resp.read())
+            text = result.get('text', '').strip()
+            logger.info(f"Whisper ({duration_ms}ms): '{text}'")
+            return text
+
+        except Exception as e:
+            logger.warning(f"Whisper call failed: {e}")
+            return ""
 
     def _capture_loop(self):
         cmd = [
@@ -179,12 +226,9 @@ class MicCapture:
             "-f", "S16_LE", "-r", str(SAMPLE_RATE),
             "-c", "1", "-t", "raw",
         ]
-        logger.info(f"Starting mic: {' '.join(cmd)}")
-        bytes_per_chunk = CHUNK_SIZE * 2
 
         while self.running:
             if self._paused:
-                # Wait until resumed
                 self._restart_event.wait(timeout=1)
                 self._restart_event.clear()
                 continue
@@ -194,36 +238,94 @@ class MicCapture:
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 self.detector.is_listening = True
-                logger.info(f"Mic active on {ALSA_DEVICE} — listening for wake word...")
+                logger.info(f"Mic active on {ALSA_DEVICE}")
+
+                # Calibrate noise floor
+                noise_values = []
+                for _ in range(CALIBRATION_CHUNKS):
+                    data = self.proc.stdout.read(BYTES_PER_CHUNK)
+                    if not data or len(data) < BYTES_PER_CHUNK:
+                        break
+                    samples = np.frombuffer(data, dtype=np.int16)
+                    rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
+                    noise_values.append(rms)
+
+                noise_floor = np.mean(noise_values) if noise_values else 50
+                speech_thresh = max(noise_floor * SPEECH_MULT, 40)
+                silence_thresh = max(noise_floor * SILENCE_MULT, 25)
+                logger.info(f"Noise={noise_floor:.0f}, speech>{speech_thresh:.0f}, silence<{silence_thresh:.0f}")
+                logger.info("Listening for 'Hey VIRON'...")
+
+                # Main detection loop
+                speech_frames = []
+                in_speech = False
+                silence_count = 0
+                whisper_busy = False
 
                 while self.running and not self._paused:
-                    data = self.proc.stdout.read(bytes_per_chunk)
-                    if not data:
+                    data = self.proc.stdout.read(BYTES_PER_CHUNK)
+                    if not data or len(data) < BYTES_PER_CHUNK:
                         break
-                    if len(data) < bytes_per_chunk:
+
+                    if self.detector.is_paused:
                         continue
 
-                    audio = np.frombuffer(data, dtype=np.int16)
-                    result = self.detector.process_audio(audio)
+                    samples = np.frombuffer(data, dtype=np.int16)
+                    rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
 
-                    if result.get("detected"):
-                        with self._pending_lock:
-                            self._pending_detection = result
+                    if not in_speech:
+                        if rms > speech_thresh:
+                            in_speech = True
+                            silence_count = 0
+                            speech_frames = [data]  # Start collecting
+                    else:
+                        speech_frames.append(data)
 
-                # Clean up current arecord
+                        if rms < silence_thresh:
+                            silence_count += 1
+                        else:
+                            silence_count = 0
+
+                        n = len(speech_frames)
+
+                        # Too long → not a wake word, reset
+                        if n > MAX_WAKE_CHUNKS:
+                            in_speech = False
+                            speech_frames = []
+                            silence_count = 0
+                            continue
+
+                        # End of phrase detected
+                        if silence_count >= SILENCE_END_CHUNKS and n >= MIN_SPEECH_CHUNKS:
+                            # Trim trailing silence
+                            trim = min(silence_count, len(speech_frames) - MIN_SPEECH_CHUNKS)
+                            if trim > 0:
+                                speech_frames = speech_frames[:-trim]
+
+                            duration_ms = len(speech_frames) * 80
+                            logger.info(f"Speech segment: {duration_ms}ms ({len(speech_frames)} chunks)")
+
+                            # Send to Whisper in background
+                            frames_copy = list(speech_frames)
+                            def check_wake(frames=frames_copy):
+                                text = self._send_to_whisper(frames)
+                                if matches_wake_word(text):
+                                    self.detector.set_detection(text)
+
+                            t = threading.Thread(target=check_wake, daemon=True)
+                            t.start()
+
+                            in_speech = False
+                            speech_frames = []
+                            silence_count = 0
+
                 self._kill_arecord()
                 self.detector.is_listening = False
 
             except Exception as e:
-                logger.error(f"Mic capture error: {e}")
+                logger.error(f"Mic error: {e}")
                 self.detector.is_listening = False
                 time.sleep(2)
-
-    def consume_detection(self) -> dict:
-        with self._pending_lock:
-            d = self._pending_detection
-            self._pending_detection = None
-            return d
 
 
 def create_app(detector: WakeWordDetector, mic: MicCapture):
@@ -235,42 +337,39 @@ def create_app(detector: WakeWordDetector, mic: MicCapture):
 
     @app.route("/wakeword/poll", methods=["GET"])
     def poll():
-        detection = mic.consume_detection()
+        detection = detector.consume_detection()
         if detection:
             return jsonify({"wake": True, **detection})
         return jsonify({"wake": False})
 
     @app.route("/wakeword/audio", methods=["POST"])
     def audio():
-        # Legacy endpoint — no longer needed with server-side mic
         return jsonify({"detected": False})
 
     @app.route("/wakeword/pause", methods=["POST"])
     def pause():
         detector.pause()
-        mic.pause_mic()  # Release ALSA device
+        mic.pause_mic()
         return jsonify({"status": "paused"})
 
     @app.route("/wakeword/resume", methods=["POST"])
     def resume():
         detector.resume()
-        mic.resume_mic()  # Restart arecord
+        mic.resume_mic()
         return jsonify({"status": "listening"})
 
     @app.route("/wakeword/status", methods=["GET"])
     def status():
         return jsonify({
-            "ready": detector.model is not None,
+            "ready": True,
             "listening": detector.is_listening,
             "paused": detector.is_paused,
-            "models": detector.model_names,
-            "threshold": THRESHOLD,
+            "models": ["whisper-wake"],
+            "threshold": 0,
             "detections": detector.detection_count,
             "mic_device": ALSA_DEVICE,
             "server_side_mic": True,
-            "has_custom_model": bool(CUSTOM_MODEL) or os.path.exists(
-                os.path.join(os.path.dirname(__file__), "models", "hey_viron.onnx")
-            ),
+            "mode": "whisper",
         })
 
     return app
@@ -279,15 +378,11 @@ def create_app(detector: WakeWordDetector, mic: MicCapture):
 def main():
     print(f"""
     ═══════════════════════════════════════
-    VIRON Wake Word Service (Server-Side Mic)
-    ReSpeaker → openWakeWord → Browser polls
+    VIRON Wake Word (Whisper-Based)
+    Say "Hey VIRON" → ReSpeaker → Whisper
     ═══════════════════════════════════════""")
 
     detector = WakeWordDetector()
-    if not detector.init_model():
-        logger.error("Failed to initialize wake word model")
-        sys.exit(1)
-
     mic = MicCapture(detector)
     mic.start()
 
@@ -297,8 +392,8 @@ def main():
     📡 http://0.0.0.0:{PORT}
     🎤 Mic: {ALSA_DEVICE} (ReSpeaker)
     🔍 Poll: GET /wakeword/poll
-    🎯 Models: {detector.model_names}
-    📊 Threshold: {THRESHOLD}
+    🎯 Wake: "Hey VIRON" (+ variants)
+    🧠 STT: {STT_URL}/api/stt
     ═══════════════════════════════════════
 """)
 
