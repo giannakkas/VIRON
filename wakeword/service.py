@@ -194,7 +194,7 @@ class MicCapture:
 
             body = (f'--{boundary}\r\nContent-Disposition: form-data; name="audio"; filename="w.wav"\r\n'
                     f'Content-Type: audio/wav\r\n\r\n').encode() + fdata + (
-                    f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="lang"\r\n\r\nel'
+                    f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="lang"\r\n\r\nen'
                     f'\r\n--{boundary}--\r\n').encode()
 
             req = urllib.request.Request(f'{STT_URL}/api/stt', data=body,
@@ -283,6 +283,17 @@ class MicCapture:
                             # Trim trailing silence
                             trim = min(sil_count, n - MIN_SPEECH_CHUNKS)
                             if trim > 0: speech_frames = speech_frames[:-trim]
+
+                            # Check peak RMS — skip if not significantly louder than noise
+                            # (filters out TV noise that barely crosses threshold)
+                            peak_rms = max(
+                                np.sqrt(np.mean(np.frombuffer(f, dtype=np.int16).astype(np.float32)**2))
+                                for f in speech_frames
+                            )
+                            if peak_rms < sp_thresh * 1.5:
+                                logger.debug(f"Skipped weak segment (peak={peak_rms:.0f} < {sp_thresh*1.5:.0f})")
+                                in_speech = False; speech_frames = []; sil_count = 0
+                                continue
 
                             # Send to Whisper in background
                             fc = list(speech_frames)

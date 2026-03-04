@@ -144,6 +144,6 @@ sleep 1
 echo "Status:"
 curl -sf http://localhost:8081/health >/dev/null 2>&1 && echo "   ✅ Gemma 2B (8081)" || echo "   ❌ Gemma 2B (8081)"
 curl -sf http://localhost:8085/wakeword/status >/dev/null 2>&1 && echo "   ✅ Wake word (8085)" || echo "   ❌ Wake word (8085)"
-curl -sf http://localhost:5000/api/health >/dev/null 2>&1 && echo "   ✅ Flask (5000)" || echo "   ❌ Flask (5000)"
+curl -sf http://localhost:5000/ping >/dev/null 2>&1 && echo "   ✅ Flask (5000)" || echo "   ❌ Flask (5000)"
 curl -sf http://localhost:8080/health >/dev/null 2>&1 && echo "   ✅ Gateway (8080)" || echo "   ❌ Gateway (8080)"
 echo ""

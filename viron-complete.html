@@ -305,7 +305,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <div class="yt-container" id="ytC"><div class="yt-header"><span class="yt-title" id="ytT">♪</span><button class="yt-close" onclick="document.getElementById('ytP').src='';document.getElementById('ytC').classList.remove('visible')">✕</button></div><iframe id="ytP" width="280" height="158" src="" allow="autoplay;encrypted-media" allowfullscreen style="border:none;border-radius:10px"></iframe></div>
 <div class="listen-indicator wake" id="listenInd">
   <div class="listen-bars"><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div></div>
-  <span class="listen-text" id="listenText">Say "Hey VIRON"</span>
+  <span class="listen-text" id="listenText">Say "Hey VIRON" or press Space</span>
 </div>
 <div class="subtitle" id="subtitle"></div>
 <svg id="face" viewBox="0 0 800 500"></svg>
@@ -393,7 +393,7 @@ function updateListenUI(){
   }
   else if(voiceState===VOICE_IDLE){
     ind.className="listen-indicator wake";
-    txt.textContent='Say "Hey VIRON"';
+    txt.textContent='Say "Hey VIRON" or press Space';
   }
   else if(voiceState===VOICE_ACTIVATED){ind.className="listen-indicator active";txt.textContent="Listening..."}
   else if(voiceState===VOICE_PROCESSING){ind.className="listen-indicator active";txt.textContent="Thinking..."}
@@ -490,6 +490,37 @@ function unlockAudio(){
 document.addEventListener('click',unlockAudio,{once:false});
 document.addEventListener('touchstart',unlockAudio,{once:false});
 document.addEventListener('keydown',unlockAudio,{once:false});
+
+// ── Spacebar = manual wake trigger ──
+document.addEventListener('keydown',(e)=>{
+  if(e.code==='Space' && !e.repeat && !inConversation && !isSpeaking && !loading){
+    e.preventDefault();
+    D('⌨️ SPACEBAR WAKE');
+    // Simulate wake word detection
+    stopOWWPolling();
+    stopAllRecognition();
+    if(Date.now()-lastWakeTime<3000){D('  (debounced)');return}
+    lastWakeTime=Date.now();
+    startConversation();
+    cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
+    document.getElementById("listenText").textContent='Listening...';
+    // Pause wakeword mic, then start recording
+    fetch(OWW_URL+'/wakeword/pause',{method:'POST'}).catch(()=>{});
+    const pName=sEmo.recognized_person;
+    const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
+    fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
+    .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+    .then(blob=>{
+      const url=URL.createObjectURL(blob);
+      const a=new Audio(url);
+      currentAudio=a;isSpeaking=true;a.volume=0.6;
+      a.onended=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+      a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
+      a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
+    })
+    .catch(e=>{D('  Ack TTS failed: '+e);startCommandListening()});
+  }
+});
 
 function sayServerTTS(text,lang,speed){
   D('  sayServerTTS('+lang+', speed='+(speed||'normal')+'): "'+text.substring(0,60)+'"');
@@ -754,7 +785,7 @@ function startOWWPolling(){
   if(owwPolling)return;
   owwPolling=true;
   D('  🎯 Starting openWakeWord polling (server-side mic)');
-  document.getElementById("listenText").textContent='Say "Hey VIRON"';
+  document.getElementById("listenText").textContent='Say "Hey VIRON" or press Space';
   voiceState=VOICE_IDLE;updateListenUI();
   
   // Resume detection on service side
@@ -849,7 +880,7 @@ function startAlwaysListening(){
   alwaysRec.onstart=()=>{
     alwaysListening=true;
     wakeDetectedInSession=false;
-    document.getElementById("listenText").textContent='Say "Hey VIRON"';
+    document.getElementById("listenText").textContent='Say "Hey VIRON" or press Space';
   };
   
   alwaysRec.onresult=(e)=>{
