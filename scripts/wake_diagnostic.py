@@ -121,6 +121,22 @@ def test_mic_audio(model, names, seconds=5):
     """Test 4: Record from mic and score with OWW."""
     print(f"\nTEST 4: Recording {seconds}s from mic — say 'Hey Jarvis'...")
     print(f"  Device: {ALSA_DEVICE}, Channel: {MIC_CHANNEL}")
+    
+    # Pause wakeword service to free mic
+    try:
+        import urllib.request
+        port = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/wakeword/pause",
+            method="POST", data=b"{}",
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=3)
+        time.sleep(0.3)
+        print("  (Paused wakeword service)")
+    except Exception:
+        pass
+    
     print(f"  🗣️  SAY 'HEY JARVIS' NOW!")
 
     cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE", "-r", str(RATE),
@@ -188,6 +204,19 @@ def test_mic_audio(model, names, seconds=5):
         print(f"  ❌ Recording timed out")
     except Exception as e:
         print(f"  ❌ Mic test failed: {e}")
+    finally:
+        # Resume wakeword service
+        try:
+            import urllib.request
+            port = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/wakeword/resume",
+                method="POST", data=b"{}",
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
 
 
 def main():

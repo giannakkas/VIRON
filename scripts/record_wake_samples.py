@@ -26,6 +26,38 @@ OUTPUT_DIR = SCRIPT_DIR / "training_data" / "personal"
 RATE = 16000
 
 
+def pause_wakeword():
+    """Pause wakeword service to free the mic."""
+    try:
+        import urllib.request
+        port = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/wakeword/pause",
+            method="POST", data=b"{}",
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=3)
+        time.sleep(0.3)  # Wait for mic release
+        return True
+    except Exception:
+        return False
+
+
+def resume_wakeword():
+    """Resume wakeword service."""
+    try:
+        import urllib.request
+        port = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/wakeword/resume",
+            method="POST", data=b"{}",
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        pass
+
+
 def record_clip(device, channel, duration=2.0):
     """Record a short clip from the mic."""
     cmd = ["arecord", "-D", device, "-f", "S16_LE", "-r", str(RATE),
@@ -33,13 +65,26 @@ def record_clip(device, channel, duration=2.0):
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=int(duration) + 5)
         if result.returncode != 0:
-            return None
+            err = result.stderr.decode(errors="replace")
+            # Check for device busy
+            if "busy" in err.lower() or "resource" in err.lower():
+                print(f"\n  ❌ Mic busy! Trying to pause wakeword service...")
+                if pause_wakeword():
+                    time.sleep(0.5)
+                    result = subprocess.run(cmd, capture_output=True, timeout=int(duration) + 5)
+                    if result.returncode != 0:
+                        return None
+                else:
+                    print(f"  Run: pkill -f 'wakeword/service.py'")
+                    return None
+            else:
+                return None
         stereo = np.frombuffer(result.stdout, dtype=np.int16)
         mono = stereo[channel::2]
         # Trim to exact duration
         max_samples = int(duration * RATE)
         return mono[:max_samples]
-    except Exception:
+    except Exception as e:
         return None
 
 
@@ -106,6 +151,15 @@ def main():
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Pause wakeword service to free the mic
+    woke_paused = pause_wakeword()
+    if woke_paused:
+        print("  (Paused wakeword service to free mic)")
+    else:
+        # Try killing it
+        subprocess.run(["pkill", "-f", "wakeword/service.py"], capture_output=True)
+        time.sleep(0.5)
 
     # Count existing samples
     existing = list(OUTPUT_DIR.glob("*.wav"))
@@ -195,6 +249,10 @@ def main():
     print(f"     Skipped: {skipped}")
     print(f"     Location: {OUTPUT_DIR}")
     print()
+    
+    # Resume wakeword service
+    resume_wakeword()
+    
     if total >= 20:
         print("  Next step — train the model:")
         print("  python3 wakeword/train_hey_viron.py")
