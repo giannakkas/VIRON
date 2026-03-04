@@ -83,6 +83,7 @@ def register_listen_endpoint(app):
         silence_duration = float(params.get('silence_duration', 0.25))
         min_duration = float(params.get('min_duration', 0.2))
         hint_lang = params.get('lang', '')
+        no_speech_ms = int(params.get('no_speech_ms', NO_SPEECH_MS))
         
         sample_rate = 16000
         chunk_ms = CHUNK_MS
@@ -129,7 +130,7 @@ def register_listen_endpoint(app):
             silence_chunks_needed = max(int(silence_duration * 1000 / chunk_ms), 2)
             max_chunks = int(max_duration * 1000 / chunk_ms)
             min_chunks = int(min_duration * 1000 / chunk_ms)
-            no_speech_chunks = int(NO_SPEECH_MS / chunk_ms)
+            no_speech_chunks = int(no_speech_ms / chunk_ms)
             total_chunks = 0
             
             # FAST calibration: 3 chunks

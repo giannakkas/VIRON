@@ -1443,12 +1443,14 @@ function startServerSideListening(){
   document.getElementById("listenText").textContent='Listening (ReSpeaker)...';
   
   const maxDuration=inConversation?8:10;
+  // After wake word, user needs ~2s pause before speaking command
+  const noSpeechMs=inConversation?2000:3000;
   
   // Use combined /api/listen endpoint (record+STT in one call, saves ~500ms)
   fetch('/api/listen',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({max_duration:maxDuration,silence_duration:0.25,min_duration:0.2,lang:isGreekMode()?'el':''}),
+    body:JSON.stringify({max_duration:maxDuration,silence_duration:0.3,min_duration:0.2,no_speech_ms:noSpeechMs,lang:isGreekMode()?'el':''}),
     signal:AbortSignal.timeout((maxDuration+5)*1000)
   })
   .then(r=>{
