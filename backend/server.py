@@ -1826,6 +1826,7 @@ def record_from_mic():
         
         # Phase 1: Measure noise floor (first 0.5s = ~6 chunks)
         noise_rms_values = []
+        noise_floor = 0
         CALIBRATION_CHUNKS = 6
         
         for _ in range(CALIBRATION_CHUNKS):
@@ -1891,14 +1892,27 @@ def record_from_mic():
             return jsonify({"error": "no_speech", "duration_ms": 0}), 204
         
         # Trim trailing silence to prevent Whisper hallucinations
-        # Remove chunks from the end where RMS < SILENCE_THRESHOLD
-        while len(audio_frames) > 3:  # Keep at least ~240ms
+        while len(audio_frames) > 3:
             last_chunk = np.frombuffer(audio_frames[-1], dtype=np.int16)
             rms = np.sqrt(np.mean(last_chunk.astype(np.float32) ** 2))
             if rms < SILENCE_THRESHOLD:
                 audio_frames.pop()
             else:
                 break
+        
+        # SNR check: reject if speech wasn't significantly louder than noise
+        # This filters out TV audio that barely crosses the adaptive threshold
+        if noise_floor > 0:
+            peak_rms = max(
+                np.sqrt(np.mean(np.frombuffer(f, dtype=np.int16).astype(np.float32)**2))
+                for f in audio_frames
+            )
+            snr = peak_rms / noise_floor
+            print(f"🎤 SNR check: peak={peak_rms:.0f}, noise={noise_floor:.0f}, ratio={snr:.1f}")
+            if snr < 2.0:
+                print(f"🎤 Rejected: SNR too low ({snr:.1f} < 2.0) — probably TV noise")
+                _resume_wakeword()
+                return jsonify({"error": "noise_rejected", "snr": round(snr, 1), "duration_ms": len(audio_frames) * chunk_ms}), 204
         
         # Package as WAV
         total_chunks = len(audio_frames)

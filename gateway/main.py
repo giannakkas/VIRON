@@ -674,37 +674,41 @@ async def chat(req: ChatRequest):
             router=router_result, latency_ms=_ms(start)
         )
 
-    # 2.5 FAST PATH: Skip router for obviously simple messages (saves ~3s)
+    # 2.5 FAST PATH: Skip router for simple messages → send to cloud directly
     words = len(req.message.split())
     msg_lower = req.message.lower()
-    _FAST_LOCAL_PATTERNS = [
+    _FAST_PATTERNS = [
         "γεια", "γειά", "γεια σου", "τι κάνεις", "τι κανεις", "πώς είσαι", "πως εισαι",
         "ποιος είσαι", "ποιος εισαι", "πώς σε λένε", "πως σε λενε",
         "ποιος σε δημιούργησε", "ποιος σε εφτιαξε", "ποιος σε έφτιαξε",
         "hi", "hello", "hey", "how are you", "what's up", "who are you",
         "what is your name", "who made you", "who created you",
         "καλημέρα", "καλησπέρα", "καληνύχτα", "good morning", "good night",
-        "ευχαριστώ", "thanks", "thank you", "bye", "γεια σου", "αντίο",
+        "ευχαριστώ", "thanks", "thank you", "bye", "αντίο",
     ]
-    is_fast_local = words <= 8 and any(p in msg_lower for p in _FAST_LOCAL_PATTERNS)
+    is_fast = words <= 12 and any(p in msg_lower for p in _FAST_PATTERNS)
     
-    if is_fast_local:
-        logger.info(f"⚡ FAST PATH: '{req.message[:40]}' → local (skipping router)")
-        # Skip router, go straight to tutor
-        history = get_recent_messages(req.student_id, limit=4)
-        log_message(req.student_id, "user", req.message, "local", "none")
+    if is_fast:
+        logger.info(f"⚡ FAST PATH: '{req.message[:40]}' → cloud/chatgpt (skip router)")
+        history = get_recent_messages(req.student_id, limit=6)
+        log_message(req.student_id, "user", req.message, "cloud", "chatgpt")
         
-        reply = await call_tutor(req.message, req.age, req.language, history)
+        cloud_reply, used = await call_cloud("chatgpt", req.message, history, req.age, req.language)
+        if not cloud_reply:
+            # Cloud failed, try local as last resort
+            cloud_reply = await call_tutor(req.message, req.age, req.language, history)
+            used = "none"
+        
         latency = _ms(start)
-        log_message(req.student_id, "assistant", reply, "local", "none", latency_ms=latency)
-        logger.info(f"[{req.student_id}] FAST local | {latency:.0f}ms | '{req.message[:60]}'")
+        log_message(req.student_id, "assistant", cloud_reply, "cloud", used, latency_ms=latency)
+        logger.info(f"[{req.student_id}] FAST cloud/{used} | {latency:.0f}ms | '{req.message[:60]}'")
         
         return ChatResponse(
-            reply=reply, mode="local", cloud_provider="none",
+            reply=cloud_reply, mode="cloud", cloud_provider=used or "chatgpt",
             router=RouterResult(
                 intent_type="casual_chat", subject="general",
-                complexity_level="very_simple", mode="local",
-                cloud_provider="none", safety_flag="safe"
+                complexity_level="simple", mode="cloud",
+                cloud_provider="chatgpt", safety_flag="safe"
             ),
             latency_ms=latency
         )
@@ -750,8 +754,9 @@ async def chat(req: ChatRequest):
     actual_mode = router_result.mode
     actual_provider = router_result.cloud_provider
 
-    # Force cloud mode when local CPU is too slow (disable with FORCE_CLOUD=0)
-    force_cloud = os.environ.get("FORCE_CLOUD", "0") == "1"
+    # Force cloud: Gemma 2B is too small for good answers, use it only as router
+    # Set FORCE_CLOUD=0 to allow local responses (not recommended on Jetson)
+    force_cloud = os.environ.get("FORCE_CLOUD", "1") == "1"
     if force_cloud and router_result.mode == "local":
         logger.info("FORCE_CLOUD: overriding local → cloud/chatgpt")
         router_result.mode = "cloud"
