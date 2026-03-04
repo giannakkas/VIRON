@@ -861,6 +861,162 @@ async def health():
     }
 
 
+# ─── Streaming Chat (SSE) ────────────────────────────
+
+from fastapi.responses import StreamingResponse
+
+async def _stream_chatgpt(messages: list, system_prompt: str):
+    """Stream tokens from OpenAI ChatGPT."""
+    msgs = [{"role": "system", "content": system_prompt}]
+    msgs.extend(messages)
+    async with httpx.AsyncClient(timeout=60.0) as sc:
+        async with sc.stream(
+            "POST", "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.OPENAI_API_KEY}"},
+            json={"model": cfg.OPENAI_MODEL, "messages": msgs, "max_tokens": 1500,
+                  "temperature": 0.7, "stream": True},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        yield text
+                except json.JSONDecodeError:
+                    continue
+
+
+async def _stream_claude(messages: list, system_prompt: str):
+    """Stream tokens from Anthropic Claude."""
+    async with httpx.AsyncClient(timeout=60.0) as sc:
+        async with sc.stream(
+            "POST", "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": cfg.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={"model": cfg.ANTHROPIC_MODEL, "max_tokens": 1500,
+                  "system": system_prompt, "messages": messages, "stream": True},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    event = json.loads(line[6:])
+                    if event.get("type") == "content_block_delta":
+                        text = event.get("delta", {}).get("text", "")
+                        if text:
+                            yield text
+                except json.JSONDecodeError:
+                    continue
+
+
+STREAM_DISPATCH = {
+    "chatgpt": _stream_chatgpt,
+    "claude": _stream_claude,
+    # gemini streaming uses a different protocol; fall back to non-streaming
+}
+
+
+@app.post("/v1/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """Streaming chat endpoint — returns Server-Sent Events.
+    
+    Each SSE event is JSON: {"token": "...", "done": false}
+    Final event: {"token": "", "done": true, "provider": "...", "latency_ms": ...}
+    
+    TTS can begin after receiving the first sentence-ending token (.!?).
+    """
+    start = time.time()
+    
+    # Safety check
+    is_safe, reason = check_safety(req.message, req.age)
+    if not is_safe:
+        blocked = get_blocked_response(req.age, req.language)
+        async def _blocked_gen():
+            yield f"data: {json.dumps({'token': blocked, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'token': '', 'done': True, 'provider': 'none', 'latency_ms': _ms(start)})}\n\n"
+        return StreamingResponse(_blocked_gen(), media_type="text/event-stream")
+    
+    # Quick routing (skip full router for streaming — use default)
+    router_result = default_routing(req.message)
+    
+    # Force cloud if configured
+    force_cloud = os.environ.get("FORCE_CLOUD", "1") == "1"
+    if force_cloud and router_result.mode == "local":
+        router_result.mode = "cloud"
+        router_result.cloud_provider = "chatgpt"
+    
+    provider = router_result.cloud_provider or "chatgpt"
+    history = get_recent_messages(req.student_id, limit=8)
+    
+    # Build messages for the cloud API
+    ensure_student(req.student_id, req.age, req.language)
+    log_message(req.student_id, "user", req.message, "cloud", provider)
+    
+    system_prompt = cfg.VIRON_SYSTEM_PROMPT + f"\nStudent age: {req.age} ({age_mode_from_age(req.age)}). Respond in {'Greek' if req.language == 'el' else 'English'}."
+    msgs = []
+    for h in history[-10:]:
+        msgs.append({"role": h["role"], "content": h["content"]})
+    msgs.append({"role": "user", "content": req.message})
+    
+    stream_fn = STREAM_DISPATCH.get(provider)
+    
+    if not stream_fn:
+        # Fall back to non-streaming for unsupported providers (e.g. gemini)
+        try:
+            cloud_fn = CLOUD_DISPATCH.get(provider, call_chatgpt)
+            reply = await cloud_fn(req.message, history, system_prompt)
+        except Exception:
+            reply = await call_tutor(req.message, req.age, req.language, history)
+            provider = "local"
+        
+        async def _non_stream():
+            yield f"data: {json.dumps({'token': reply, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'token': '', 'done': True, 'provider': provider, 'latency_ms': _ms(start)})}\n\n"
+        return StreamingResponse(_non_stream(), media_type="text/event-stream")
+    
+    # Streaming path
+    async def _generate():
+        full_reply = []
+        try:
+            async for token in stream_fn(msgs, system_prompt):
+                full_reply.append(token)
+                yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+        except Exception as e:
+            logger.error(f"Stream error ({provider}): {e}")
+            # Try non-streaming fallback
+            try:
+                fallback_providers = CLOUD_FALLBACK.get(provider, ["chatgpt"])
+                for fb in fallback_providers:
+                    try:
+                        fb_fn = CLOUD_DISPATCH[fb]
+                        reply = await fb_fn(req.message, history, system_prompt)
+                        full_reply = [reply]
+                        yield f"data: {json.dumps({'token': reply, 'done': False})}\n\n"
+                        break
+                    except Exception:
+                        continue
+            except Exception:
+                err = "[confused] Something went wrong."
+                full_reply = [err]
+                yield f"data: {json.dumps({'token': err, 'done': False})}\n\n"
+        
+        complete_reply = "".join(full_reply)
+        latency = _ms(start)
+        log_message(req.student_id, "assistant", complete_reply, "cloud", provider, latency_ms=latency)
+        yield f"data: {json.dumps({'token': '', 'done': True, 'provider': provider, 'latency_ms': latency})}\n\n"
+    
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
 def _ms(start: float) -> float:
     return round((time.time() - start) * 1000, 1)
 

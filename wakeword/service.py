@@ -26,6 +26,12 @@ PORT = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
 STT_URL = os.environ.get("VIRON_STT_URL", "http://127.0.0.1:5000")
 # LOWERED from 0.35 → 0.28 to catch quieter wake words at distance
 OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.28"))
+# Which stereo channel to use: 0=left (beamformed+AEC), 1=right (ASR beam)
+MIC_CHANNEL = int(os.environ.get("VIRON_MIC_CHANNEL", "1"))
+# Adaptive threshold: adjusts OWW threshold based on ambient noise
+ADAPTIVE_ENABLED = os.environ.get("VIRON_WAKEWORD_ADAPTIVE", "1") == "1"
+ADAPTIVE_MIN = 0.18
+ADAPTIVE_MAX = 0.45
 
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1280  # 80ms mono samples
@@ -110,17 +116,18 @@ class Detector:
             logger.warning(f"openWakeWord not available: {e}")
             return False
 
-    def process_oww(self, audio_int16):
+    def process_oww(self, audio_int16, threshold=None):
         """Run openWakeWord on audio chunk. Returns True if wake detected."""
         if not self.oww_model or self.is_paused:
             return False
+        thresh = threshold if threshold is not None else OWW_THRESHOLD
         try:
             preds = self.oww_model.predict(audio_int16)
             for name in self.oww_names:
                 score = preds[name]
                 if score > 0.08:
                     logger.info(f"OWW: {name}={score:.3f}")
-                if score >= OWW_THRESHOLD:
+                if score >= thresh:
                     self.set_detection(f"hey jarvis (OWW:{score:.2f})", score)
                     return True
         except Exception as e:
@@ -170,6 +177,7 @@ class MicCapture:
         self._restart = threading.Event()
         # Track how many chunks to discard after resume (echo flush)
         self._flush_chunks = 0
+        self._current_oww_thresh = OWW_THRESHOLD
 
     def start(self):
         self.running = True
@@ -257,9 +265,9 @@ class MicCapture:
                 for _ in range(5):
                     d = self.proc.stdout.read(BYTES_PER_CHUNK)
                     if not d or len(d) < BYTES_PER_CHUNK: break
-                    # Extract right channel (ch1 = ASR beam) from stereo interleaved data
+                    # Extract selected channel from stereo interleaved data
                     stereo = np.frombuffer(d, dtype=np.int16)
-                    s = stereo[1::2]  # odd indices = right channel
+                    s = stereo[MIC_CHANNEL::2]  # configurable via VIRON_MIC_CHANNEL
                     noise_vals.append(np.sqrt(np.mean(s.astype(np.float32)**2)))
 
                 nf = np.mean(noise_vals) if noise_vals else 50
@@ -274,6 +282,18 @@ class MicCapture:
                     sp_thresh = max(nf * 1.5, 35)
                     si_thresh = max(nf * 1.2, 20)
                 logger.info(f"Noise={nf:.0f} speech>{sp_thresh:.0f} silence<{si_thresh:.0f}")
+                
+                # Adaptive OWW threshold: lower in quiet rooms, raise in noisy ones
+                oww_thresh = OWW_THRESHOLD
+                if ADAPTIVE_ENABLED and self.det.oww_model:
+                    if nf < 50:
+                        oww_thresh = max(OWW_THRESHOLD - 0.06, ADAPTIVE_MIN)
+                    elif nf > 300:
+                        oww_thresh = min(OWW_THRESHOLD + 0.08, ADAPTIVE_MAX)
+                    if oww_thresh != OWW_THRESHOLD:
+                        logger.info(f"Adaptive OWW threshold: {OWW_THRESHOLD:.2f} → {oww_thresh:.2f} (noise={nf:.0f})")
+                self._current_oww_thresh = oww_thresh
+                
                 logger.info("Listening... say 'Hey VIRON' or 'Hey Jarvis'")
 
                 speech_frames = []
@@ -290,15 +310,15 @@ class MicCapture:
                         self._flush_chunks -= 1
                         continue
 
-                    # Extract right channel (ch1 = ASR-optimized beam)
+                    # Extract selected channel (configurable via VIRON_MIC_CHANNEL)
                     stereo = np.frombuffer(d_stereo, dtype=np.int16)
-                    audio = stereo[1::2]   # mono: right channel only
+                    audio = stereo[MIC_CHANNEL::2]   # mono: selected channel
                     d = audio.tobytes()    # mono bytes for speech_frames / Whisper
                     rms = np.sqrt(np.mean(audio.astype(np.float32)**2))
 
                     # === openWakeWord (instant, every chunk) ===
                     if self.det.oww_model:
-                        self.det.process_oww(audio)
+                        self.det.process_oww(audio, oww_thresh)
 
                     # === Whisper path (speech segments) ===
                     if not in_speech:
@@ -380,8 +400,11 @@ def create_app(det, mic):
             "ready": True, "listening": det.is_listening,
             "paused": det.is_paused, "models": det.oww_names + ["whisper"],
             "detections": det.detection_count,
-            "mic_device": ALSA_DEVICE, "server_side_mic": True,
+            "mic_device": ALSA_DEVICE, "mic_channel": MIC_CHANNEL,
+            "server_side_mic": True,
             "mode": "hybrid" if det.oww_model else "whisper-only",
+            "adaptive": ADAPTIVE_ENABLED,
+            "threshold": OWW_THRESHOLD,
         })
 
     return app
@@ -397,14 +420,15 @@ def main():
     app = create_app(det, mic)
 
     mode = "HYBRID (OWW instant + Whisper)" if has_oww else "WHISPER-ONLY"
+    adaptive_tag = " [adaptive]" if ADAPTIVE_ENABLED else ""
     print(f"""
     ═══════════════════════════════════════
     VIRON Wake Word — {mode}
     Say "Hey VIRON" or "Hey Jarvis"
-    Threshold: {OWW_THRESHOLD}
+    Threshold: {OWW_THRESHOLD}{adaptive_tag}
     ═══════════════════════════════════════
     📡 http://0.0.0.0:{PORT}
-    🎤 {ALSA_DEVICE} (ReSpeaker)
+    🎤 {ALSA_DEVICE} ch{MIC_CHANNEL} (ReSpeaker)
     ═══════════════════════════════════════
 """)
     try:

@@ -630,6 +630,57 @@ def chat_router_status():
         return jsonify(ai_router.get_status())
     return jsonify({"error": "Router not loaded"}), 500
 
+
+@app.route('/api/chat/stream', methods=['POST'])
+def chat_stream_proxy():
+    """SSE streaming chat — proxies to gateway /v1/chat/stream.
+    Allows browser to start TTS after first sentence instead of waiting for full response.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data"}), 400
+
+    user_msg = data.get("messages", [{}])[-1].get("content", "")
+    forced_lang = data.get("language", "")
+    print(f"\n💬 CHAT STREAM: '{user_msg[:80]}' (lang={forced_lang})")
+
+    _gw_url = os.environ.get("HYBRID_GATEWAY_URL", "http://localhost:8080")
+
+    _student_id = "anonymous"
+    _student_age = int(os.environ.get("DEFAULT_STUDENT_AGE", "12"))
+    if HAS_PROFILES and detector.current_state.get("recognized_person"):
+        _student_id = detector.current_state["recognized_person"]
+        try:
+            _prof = get_student_profile(_student_id)
+            if _prof and _prof.get("age"):
+                _student_age = _prof["age"]
+        except Exception:
+            pass
+
+    def generate():
+        try:
+            resp = http_requests.post(
+                f"{_gw_url}/v1/chat/stream",
+                json={
+                    "student_id": _student_id,
+                    "age": _student_age,
+                    "message": user_msg,
+                    "language": forced_lang or "en",
+                },
+                timeout=90,
+                stream=True,
+            )
+            for line in resp.iter_lines(decode_unicode=True):
+                if line:
+                    yield line + "\n\n"
+        except Exception as e:
+            print(f"  ❌ Stream proxy error: {e}")
+            yield f"data: {json.dumps({'token': '[confused] Connection error.', 'done': False})}\n\n"
+            yield f"data: {json.dumps({'token': '', 'done': True, 'provider': 'error'})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     safe = {k: v for k, v in config.items() if 'key' not in k.lower()}

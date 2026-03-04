@@ -7,6 +7,12 @@ the browser roundtrip for WAV upload.
 
 Import this in server.py and call register_listen_endpoint(app)
 after the existing routes.
+
+Env vars:
+  VIRON_MIC_DEVICE     - ALSA device (default: plughw:2,0)
+  VIRON_MIC_CHANNEL    - Stereo channel: 0=left, 1=right (default: 1)
+  VIRON_LISTEN_CHUNK_MS - Audio chunk size in ms (default: 40)
+  VIRON_NO_SPEECH_MS   - Max wait for speech start in ms (default: 1200)
 """
 
 import os
@@ -24,6 +30,13 @@ def register_listen_endpoint(app):
     """Register the /api/listen endpoint on the Flask app."""
     
     RECORD_ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
+    MIC_CHANNEL = int(os.environ.get("VIRON_MIC_CHANNEL", "1"))
+    CHUNK_MS = int(os.environ.get("VIRON_LISTEN_CHUNK_MS", "40"))
+    NO_SPEECH_MS = int(os.environ.get("VIRON_NO_SPEECH_MS", "1200"))
+    # Pre-roll: keep this many chunks before speech starts to avoid clipping first syllable
+    PREROLL_CHUNKS = 4  # 4x40ms = 160ms pre-roll buffer
+    
+    print(f"🎤 Listen endpoint: device={RECORD_ALSA_DEVICE} ch{MIC_CHANNEL} chunk={CHUNK_MS}ms no_speech={NO_SPEECH_MS}ms preroll={PREROLL_CHUNKS}")
     
     def _clean_whisper_text(text):
         """Clean up Whisper hallucinations."""
@@ -56,24 +69,24 @@ def register_listen_endpoint(app):
         
         POST params (JSON):
           max_duration: max recording seconds (default 8)
-          silence_duration: seconds of silence to stop (default 0.4)
+          silence_duration: seconds of silence to stop (default 0.25)
           min_duration: minimum recording seconds (default 0.2)
           lang: language hint ('el', 'en', or '' for auto)
         
         Returns JSON:
-          { text, language, duration, engine, record_ms }
+          { text, language, duration, engine, record_ms, stt_ms, total_ms, vad_ms }
         """
         from flask import request, jsonify
         
         params = request.get_json(silent=True) or {}
         max_duration = min(float(params.get('max_duration', 8)), 30)
-        silence_duration = float(params.get('silence_duration', 0.4))
+        silence_duration = float(params.get('silence_duration', 0.25))
         min_duration = float(params.get('min_duration', 0.2))
         hint_lang = params.get('lang', '')
         
         sample_rate = 16000
-        chunk_ms = 80
-        chunk_samples = sample_rate * chunk_ms // 1000  # 1280
+        chunk_ms = CHUNK_MS
+        chunk_samples = sample_rate * chunk_ms // 1000
         bytes_per_chunk = chunk_samples * 4  # stereo int16
         
         # Language mapping
@@ -103,22 +116,24 @@ def register_listen_endpoint(app):
                     headers={'Content-Type': 'application/json'}
                 )
                 urllib.request.urlopen(req, timeout=2)
-                time.sleep(0.2)  # Brief pause for device release
+                time.sleep(0.15)  # Brief pause for device release
             except Exception as e:
                 print(f"⚠ Could not pause wakeword: {e}")
             
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             audio_frames = []
+            preroll_buf = []  # circular buffer for pre-speech audio
             speech_started = False
             silence_chunks = 0
-            silence_chunks_needed = int(silence_duration * 1000 / chunk_ms)
+            silence_chunks_needed = max(int(silence_duration * 1000 / chunk_ms), 2)
             max_chunks = int(max_duration * 1000 / chunk_ms)
             min_chunks = int(min_duration * 1000 / chunk_ms)
+            no_speech_chunks = int(NO_SPEECH_MS / chunk_ms)
             total_chunks = 0
             
-            # FAST calibration: 4 chunks = 320ms (down from 6 = 480ms)
-            CALIBRATION_CHUNKS = 4
+            # FAST calibration: 3 chunks
+            CALIBRATION_CHUNKS = 3
             SPEECH_THRESHOLD = 80
             SILENCE_THRESHOLD = 40
             
@@ -128,8 +143,11 @@ def register_listen_endpoint(app):
                 if not data or len(data) < bytes_per_chunk:
                     break
                 stereo = np.frombuffer(data, dtype=np.int16)
-                samples = stereo[1::2]  # right channel (ASR beam)
-                audio_frames.append(samples.tobytes())
+                samples = stereo[MIC_CHANNEL::2]  # configurable channel
+                # Add to preroll buffer (calibration audio can contain speech start)
+                preroll_buf.append(samples.tobytes())
+                if len(preroll_buf) > PREROLL_CHUNKS:
+                    preroll_buf.pop(0)
                 total_chunks += 1
                 rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
                 noise_rms_values.append(rms)
@@ -137,10 +155,11 @@ def register_listen_endpoint(app):
             noise_floor = 0
             if noise_rms_values:
                 noise_floor = np.mean(noise_rms_values)
-                # ADJUSTED: 2.5x noise (down from 3x) for better sensitivity
-                SPEECH_THRESHOLD = max(noise_floor * 2.5, 50)
-                SILENCE_THRESHOLD = max(noise_floor * 1.5, 30)
-                print(f"🎤 Listen: noise={noise_floor:.0f} speech>{SPEECH_THRESHOLD:.0f} silence<{SILENCE_THRESHOLD:.0f}")
+                SPEECH_THRESHOLD = max(noise_floor * 2.0, 45)
+                SILENCE_THRESHOLD = max(noise_floor * 1.3, 25)
+                print(f"🎤 Listen: noise={noise_floor:.0f} speech>{SPEECH_THRESHOLD:.0f} silence<{SILENCE_THRESHOLD:.0f} (ch{MIC_CHANNEL})")
+            
+            t_vad_start = time.time()
             
             # Record with VAD
             while total_chunks < max_chunks:
@@ -149,22 +168,30 @@ def register_listen_endpoint(app):
                     break
                 
                 stereo = np.frombuffer(data, dtype=np.int16)
-                samples = stereo[1::2]
-                audio_frames.append(samples.tobytes())
+                samples = stereo[MIC_CHANNEL::2]
+                mono_bytes = samples.tobytes()
                 total_chunks += 1
                 
                 rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
                 
                 if not speech_started:
+                    # Maintain pre-roll buffer
+                    preroll_buf.append(mono_bytes)
+                    if len(preroll_buf) > PREROLL_CHUNKS:
+                        preroll_buf.pop(0)
+                    
                     if rms > SPEECH_THRESHOLD:
                         speech_started = True
                         silence_chunks = 0
-                        print(f"🎤 Speech START (RMS={rms:.0f}) at {total_chunks * chunk_ms}ms")
-                    # REDUCED no-speech timeout: 2.5s (from 3s)
-                    elif total_chunks > int(2500 / chunk_ms):
-                        print(f"🎤 No speech after 2.5s (last RMS={rms:.0f})")
+                        # Prepend pre-roll buffer to avoid clipping first syllable
+                        audio_frames = list(preroll_buf)
+                        audio_frames.append(mono_bytes)
+                        print(f"🎤 Speech START (RMS={rms:.0f}) at {total_chunks * chunk_ms}ms (+{len(preroll_buf)-1} preroll)")
+                    elif total_chunks > no_speech_chunks:
+                        print(f"🎤 No speech after {NO_SPEECH_MS}ms (last RMS={rms:.0f})")
                         break
                 else:
+                    audio_frames.append(mono_bytes)
                     if rms < SILENCE_THRESHOLD:
                         silence_chunks += 1
                         if silence_chunks >= silence_chunks_needed:
@@ -172,6 +199,8 @@ def register_listen_endpoint(app):
                             break
                     else:
                         silence_chunks = 0
+            
+            vad_ms = int((time.time() - t_vad_start) * 1000)
             
             proc.terminate()
             try:
@@ -185,10 +214,12 @@ def register_listen_endpoint(app):
                 _resume_wakeword()
                 return jsonify({"text": "", "language": "", "duration": 0,
                                "engine": "none", "record_ms": record_ms,
+                               "vad_ms": vad_ms,
                                "error": "no_speech"}), 204
             
-            # Trim trailing silence
-            while len(audio_frames) > 3:
+            # Trim trailing silence (keep at least min_chunks)
+            min_keep = max(3, min_chunks)
+            while len(audio_frames) > min_keep:
                 last = np.frombuffer(audio_frames[-1], dtype=np.int16)
                 rms = np.sqrt(np.mean(last.astype(np.float32) ** 2))
                 if rms < SILENCE_THRESHOLD:
@@ -203,12 +234,12 @@ def register_listen_endpoint(app):
                     for f in audio_frames
                 )
                 snr = peak_rms / noise_floor
-                if snr < 2.0:
+                if snr < 1.8:
                     print(f"🎤 Listen: rejected low SNR ({snr:.1f})")
                     _resume_wakeword()
                     return jsonify({"text": "", "language": "",
                                    "error": "noise_rejected", "snr": round(snr, 1),
-                                   "record_ms": record_ms}), 204
+                                   "record_ms": record_ms, "vad_ms": vad_ms}), 204
             
             # Package as WAV
             raw_audio = b''.join(audio_frames)
@@ -223,7 +254,7 @@ def register_listen_endpoint(app):
             duration_ms = len(audio_frames) * chunk_ms
             print(f"🎤 Listen: recorded {duration_ms}ms ({len(raw_audio) // 1024}KB), now transcribing...")
             
-            # ── DIRECT STT (no browser roundtrip) ──
+            # == DIRECT STT (no browser roundtrip) ==
             t_stt = time.time()
             
             # Try OpenAI Whisper API first
@@ -266,12 +297,11 @@ def register_listen_endpoint(app):
                                 "duration": round(stt_ms / 1000, 2),
                                 "engine": "openai", "filtered": "hallucination",
                                 "record_ms": record_ms, "stt_ms": stt_ms,
-                                "total_ms": total_ms,
+                                "total_ms": total_ms, "vad_ms": vad_ms,
                             })
                         
                         if text and len(text) > 1:
-                            print(f"  ✅ Listen: \"{text[:80]}\" (record={record_ms}ms, stt={stt_ms}ms, total={total_ms}ms)")
-                            # Don't resume wakeword yet — browser handles that after conversation
+                            print(f"  ✅ Listen: \"{text[:80]}\" (rec={record_ms}ms stt={stt_ms}ms vad={vad_ms}ms total={total_ms}ms)")
                             return jsonify({
                                 "text": text,
                                 "language": whisper_lang or "auto",
@@ -280,6 +310,7 @@ def register_listen_endpoint(app):
                                 "record_ms": record_ms,
                                 "stt_ms": stt_ms,
                                 "total_ms": total_ms,
+                                "vad_ms": vad_ms,
                             })
                         else:
                             print("  ⚠ OpenAI returned empty, trying local...")
@@ -290,7 +321,6 @@ def register_listen_endpoint(app):
             
             # Fallback to local faster-whisper
             try:
-                # Import from the main server module's globals
                 from __main__ import HAS_WHISPER, whisper_model, _whisper_lock
                 if not HAS_WHISPER or whisper_model is None:
                     _resume_wakeword()
@@ -326,16 +356,15 @@ def register_listen_endpoint(app):
                 total_ms = int((time.time() - t_start) * 1000)
                 lang = info.language if info else "unknown"
                 
-                print(f"  🏠 Listen (local): \"{text[:80]}\" (record={record_ms}ms, stt={stt_ms}ms, total={total_ms}ms)")
+                print(f"  🏠 Listen (local): \"{text[:80]}\" (rec={record_ms}ms stt={stt_ms}ms vad={vad_ms}ms total={total_ms}ms)")
                 return jsonify({
                     "text": text, "language": lang,
                     "duration": round(stt_ms / 1000, 2),
                     "engine": "local",
                     "record_ms": record_ms, "stt_ms": stt_ms,
-                    "total_ms": total_ms,
+                    "total_ms": total_ms, "vad_ms": vad_ms,
                 })
             except ImportError:
-                # Can't access main module globals — use standalone approach
                 print("  ⚠ Can't access whisper model from listen endpoint, falling back")
                 _resume_wakeword()
                 return jsonify({"text": "", "error": "local_stt_unavailable"}), 503
