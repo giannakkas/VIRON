@@ -39,9 +39,9 @@ CHUNK_SIZE = 1280  # 80ms mono samples
 BYTES_PER_CHUNK = CHUNK_SIZE * 4  # stereo: 2ch × 2 bytes/sample
 
 # Whisper speech segment limits
-MIN_SPEECH_CHUNKS = 3      # 240ms min
+MIN_SPEECH_CHUNKS = 8      # 640ms min (was 240ms — "Hey VIRON" needs ~800ms)
 MAX_WAKE_CHUNKS = 25       # 2.0s max (wake word is short)
-SILENCE_END_CHUNKS = 4     # 320ms silence = end of phrase
+SILENCE_END_CHUNKS = 6     # 480ms silence = end of phrase (was 320ms — allows brief pauses)
 
 # "hey viron" patterns — MUST catch common Whisper misrecognitions
 # Real Whisper outputs observed: "Hey, Vero", "Bye", "Hey Jarvis"
@@ -384,6 +384,8 @@ class MicCapture:
                 custom_buf = deque(maxlen=19)
                 custom_score_interval = 6  # score every ~480ms
                 custom_chunk_count = 0
+                # Pre-roll buffer: keeps last few chunks before speech starts
+                preroll_buf = deque(maxlen=3)  # 240ms pre-roll
 
                 while self.running and not self._paused:
                     d_stereo = self.proc.stdout.read(BYTES_PER_CHUNK)
@@ -421,10 +423,12 @@ class MicCapture:
 
                     # === Whisper path (speech segments) ===
                     if not in_speech:
+                        preroll_buf.append(d)
                         if rms > sp_thresh:
                             in_speech = True
                             sil_count = 0
-                            speech_frames = [d]
+                            # Prepend pre-roll to capture start of "Hey"
+                            speech_frames = list(preroll_buf)
                     else:
                         speech_frames.append(d)
                         if rms < si_thresh:
@@ -442,14 +446,16 @@ class MicCapture:
                             trim = min(sil_count, n - MIN_SPEECH_CHUNKS)
                             if trim > 0: speech_frames = speech_frames[:-trim]
 
+                            dur_ms = len(speech_frames) * 80
+                            logger.info(f"Speech segment: {dur_ms}ms ({len(speech_frames)} chunks)")
+
                             # Check peak RMS — skip if not significantly louder than noise
-                            # (filters out TV noise that barely crosses threshold)
                             peak_rms = max(
                                 np.sqrt(np.mean(np.frombuffer(f, dtype=np.int16).astype(np.float32)**2))
                                 for f in speech_frames
                             )
                             if peak_rms < sp_thresh * 1.0:
-                                logger.debug(f"Skipped weak segment (peak={peak_rms:.0f} < {sp_thresh*1.5:.0f})")
+                                logger.debug(f"Skipped weak segment (peak={peak_rms:.0f})")
                                 in_speech = False; speech_frames = []; sil_count = 0
                                 continue
 
