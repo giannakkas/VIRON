@@ -1616,6 +1616,8 @@ function endConversation(){
   silenceCount=0;
   clearTimeout(conversationTimer);
   voiceState=VOICE_IDLE;
+  // Resume wakeword service mic — it was paused during recording
+  if(owwReady)fetch(OWW_URL+'/wakeword/resume',{method:'POST'}).catch(()=>{});
   startAlwaysListening();
 }
 

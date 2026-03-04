@@ -24,7 +24,7 @@ from collections import deque
 ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
 PORT = int(os.environ.get("VIRON_WAKEWORD_PORT", "8085"))
 STT_URL = os.environ.get("VIRON_STT_URL", "http://127.0.0.1:5000")
-OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.5"))
+OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.35"))
 
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1280  # 80ms mono samples
@@ -299,7 +299,7 @@ class MicCapture:
                                 np.sqrt(np.mean(np.frombuffer(f, dtype=np.int16).astype(np.float32)**2))
                                 for f in speech_frames
                             )
-                            if peak_rms < sp_thresh * 1.5:
+                            if peak_rms < sp_thresh * 1.2:
                                 logger.debug(f"Skipped weak segment (peak={peak_rms:.0f} < {sp_thresh*1.5:.0f})")
                                 in_speech = False; speech_frames = []; sil_count = 0
                                 continue
