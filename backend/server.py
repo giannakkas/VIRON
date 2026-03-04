@@ -1525,6 +1525,27 @@ def text_to_speech():
         except Exception as e:
             print(f"⚠ gTTS error: {e}")
     
+    # Last resort: espeak (always available, robotic but works offline)
+    try:
+        import shutil as _sh
+        espeak_cmd = 'espeak-ng' if _sh.which('espeak-ng') else ('espeak' if _sh.which('espeak') else None)
+        if espeak_cmd:
+            import tempfile
+            espeak_lang = 'el' if lang == 'el' else 'en'
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                tmp_path = tmp.name
+            subprocess.run([espeak_cmd, '-v', espeak_lang, '-w', tmp_path, text],
+                          capture_output=True, timeout=10)
+            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 100:
+                with open(tmp_path, 'rb') as f:
+                    audio_bytes = f.read()
+                os.unlink(tmp_path)
+                print(f"✅ espeak OK: {len(audio_bytes)} bytes")
+                return Response(audio_bytes, mimetype='audio/wav',
+                               headers={'Content-Disposition': 'inline'})
+    except Exception as e:
+        print(f"⚠ espeak error: {e}")
+    
     return jsonify({"error": "All TTS engines failed"}), 500
 
 @app.route('/api/tts/prewarm', methods=['POST'])
