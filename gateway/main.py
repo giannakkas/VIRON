@@ -106,7 +106,7 @@ async def call_router(message: str, age: int, language: str) -> Optional[RouterR
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.0,
-                "max_tokens": 256,
+                "max_tokens": 128,
                 "stream": False,
             },
             timeout=cfg.ROUTER_TIMEOUT,
@@ -284,15 +284,23 @@ def override_routing(router_result: RouterResult, message: str) -> RouterResult:
 
 def _tutor_system_prompt(age: int, language: str) -> str:
     if language == "el":
-        return f"""Είσαι ο VIRON, ένας φιλικός AI δάσκαλος για παιδί {age} ετών.
-Σε δημιούργησαν ο Χρήστος Γιαννακκάς και ο γιος του Ανδρέας Γιαννακκάς από την Κύπρο.
-ΑΠΑΝΤΑ ΠΑΝΤΑ ΣΤΑ ΕΛΛΗΝΙΚΑ. ΠΟΤΕ μην απαντήσεις στα Αγγλικά.
-Μέγιστο 4 προτάσεις. Να είσαι ζεστός και ενθαρρυντικός.
-Ξεκίνα με [emotion] tag όπως [happy] ή [thinking]. Χωρίς emojis."""
-    return f"""You are VIRON, a friendly AI tutor for a {age}-year-old.
-You were created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus.
-Reply in English. Max 4 sentences. Be warm and encouraging.
-Start with [emotion] tag like [happy] or [thinking]. No emojis."""
+        return f"""Είσαι ο VIRON, φιλικός AI ρομπότ για παιδί {age} ετών.
+Δημιουργοί: Χρήστος και Ανδρέας Γιαννακκάς, Κύπρος.
+ΚΑΝΟΝΕΣ:
+- ΠΑΝΤΑ Ελληνικά. ΠΟΤΕ Αγγλικά.
+- Ξεκίνα με [emotion] tag: [happy] [thinking] [excited] [calm]
+- Χαιρετισμοί/απλές ερωτήσεις: ΜΟΝΟ 1 πρόταση!
+- Σύνθετες ερωτήσεις: μέγιστο 2-3 προτάσεις.
+- Χωρίς emojis. Χωρίς αστερίσκους.
+Παράδειγμα: [happy] Καλά είμαι, ευχαριστώ! Εσύ;"""
+    return f"""You are VIRON, a friendly AI robot for a {age}-year-old.
+Created by Christos and Andreas Giannakkas, Cyprus.
+RULES:
+- Start with [emotion] tag: [happy] [thinking] [excited] [calm]
+- Greetings/simple questions: ONLY 1 sentence!
+- Complex questions: max 2-3 sentences.
+- No emojis. No asterisks.
+Example: [happy] I'm doing great, thanks! How about you?"""
 
 
 async def call_tutor(message: str, age: int, language: str, history: list) -> str:
@@ -303,10 +311,12 @@ async def call_tutor(message: str, age: int, language: str, history: list) -> st
     # Add last few turns of history
     for h in history[-4:]:  # Shorter history for smaller model
         messages.append({"role": h["role"], "content": h["content"]})
-    # Reinforce language in user message for Greek
+    # Reinforce brevity in user message
     user_content = message
     if language == "el":
-        user_content = f"{message}\n(Απάντησε στα Ελληνικά. Μέγιστο 2 προτάσεις.)"
+        user_content = f"{message}\n(Σύντομα, 1-2 προτάσεις μόνο!)"
+    else:
+        user_content = f"{message}\n(Keep it short, 1-2 sentences!)"
     messages.append({"role": "user", "content": user_content})
 
     # Try Gemma 2B (router model) — it's on GPU and fast for simple responses
@@ -318,7 +328,7 @@ async def call_tutor(message: str, age: int, language: str, history: list) -> st
                 "model": "gemma-local",
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 100,  # Keep responses short for 2B model
+                "max_tokens": 60,  # Very short — this is a 2B model for simple chat
                 "stream": False,
             },
             timeout=cfg.TUTOR_TIMEOUT,
@@ -662,6 +672,41 @@ async def chat(req: ChatRequest):
         return ChatResponse(
             reply=blocked_reply, mode="local", cloud_provider="none",
             router=router_result, latency_ms=_ms(start)
+        )
+
+    # 2.5 FAST PATH: Skip router for obviously simple messages (saves ~3s)
+    words = len(req.message.split())
+    msg_lower = req.message.lower()
+    _FAST_LOCAL_PATTERNS = [
+        "γεια", "γειά", "γεια σου", "τι κάνεις", "τι κανεις", "πώς είσαι", "πως εισαι",
+        "ποιος είσαι", "ποιος εισαι", "πώς σε λένε", "πως σε λενε",
+        "ποιος σε δημιούργησε", "ποιος σε εφτιαξε", "ποιος σε έφτιαξε",
+        "hi", "hello", "hey", "how are you", "what's up", "who are you",
+        "what is your name", "who made you", "who created you",
+        "καλημέρα", "καλησπέρα", "καληνύχτα", "good morning", "good night",
+        "ευχαριστώ", "thanks", "thank you", "bye", "γεια σου", "αντίο",
+    ]
+    is_fast_local = words <= 8 and any(p in msg_lower for p in _FAST_LOCAL_PATTERNS)
+    
+    if is_fast_local:
+        logger.info(f"⚡ FAST PATH: '{req.message[:40]}' → local (skipping router)")
+        # Skip router, go straight to tutor
+        history = get_recent_messages(req.student_id, limit=4)
+        log_message(req.student_id, "user", req.message, "local", "none")
+        
+        reply = await call_tutor(req.message, req.age, req.language, history)
+        latency = _ms(start)
+        log_message(req.student_id, "assistant", reply, "local", "none", latency_ms=latency)
+        logger.info(f"[{req.student_id}] FAST local | {latency:.0f}ms | '{req.message[:60]}'")
+        
+        return ChatResponse(
+            reply=reply, mode="local", cloud_provider="none",
+            router=RouterResult(
+                intent_type="casual_chat", subject="general",
+                complexity_level="very_simple", mode="local",
+                cloud_provider="none", safety_flag="safe"
+            ),
+            latency_ms=latency
         )
 
     # 3. Call local router (Gemma 2B) for intent classification
