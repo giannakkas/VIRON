@@ -306,9 +306,13 @@ class MicCapture:
             with open(p, 'rb') as f: fdata = f.read()
             os.unlink(p)
 
+            # Prompt hint helps Whisper expect "Hey VIRON" instead of hallucinating
+            wake_prompt = "Hey VIRON. Hey Viron. Hey Byron. Hey Veron."
+
             body = (f'--{boundary}\r\nContent-Disposition: form-data; name="audio"; filename="w.wav"\r\n'
                     f'Content-Type: audio/wav\r\n\r\n').encode() + fdata + (
                     f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="lang"\r\n\r\nen'
+                    f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\n{wake_prompt}'
                     f'\r\n--{boundary}--\r\n').encode()
 
             req = urllib.request.Request(f'{STT_URL}/api/stt', data=body,
@@ -318,6 +322,18 @@ class MicCapture:
 
             ms = len(frames) * 80
             logger.info(f"Whisper ({ms}ms): '{text}'")
+            
+            # Filter common Whisper hallucinations on short clips
+            WHISPER_HALLUCINATIONS = {
+                "thank you", "thank you.", "thanks", "thank you so much",
+                "thank you. that's great.", "cool", "cool.", "bye", "bye.",
+                "oh", "oh.", "you", "you.", "yeah", "okay", "ok",
+                "subtitles by", "like and subscribe", "music",
+            }
+            if text.lower().strip().rstrip('.!,') in {h.rstrip('.!,') for h in WHISPER_HALLUCINATIONS}:
+                logger.debug(f"Filtered hallucination: '{text}'")
+                return
+            
             if matches_wake(text):
                 self.det.set_detection(f"hey viron (Whisper: '{text}')")
         except Exception as e:

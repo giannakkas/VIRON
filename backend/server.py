@@ -1656,8 +1656,9 @@ def speech_to_text():
         
         file_size = os.path.getsize(tmp_path)
         hint_lang = request.form.get('lang', '')  # '' = auto-detect
+        hint_prompt = request.form.get('prompt', '')  # caller can provide context hint
         whisper_lang = 'el' if hint_lang in ('el', 'el-GR') else 'en' if hint_lang in ('en', 'en-US', 'en-GB') else None  # None = Whisper auto-detects
-        print(f"🎙️ STT: received {file_size//1024}KB audio ({suffix}, lang={whisper_lang})")
+        print(f"🎙️ STT: received {file_size//1024}KB audio ({suffix}, lang={whisper_lang}, prompt={hint_prompt[:40] if hint_prompt else 'none'})")
         
         t_start = time.time()
         
@@ -1676,7 +1677,7 @@ def speech_to_text():
                             "model": "whisper-1",
                             **( {"language": whisper_lang} if whisper_lang else {} ),  # omit = auto-detect
                             "temperature": 0.0,
-                            "prompt": "Αυτό είναι Ελληνικά." if whisper_lang == "el" else "",
+                            "prompt": hint_prompt if hint_prompt else ("Αυτό είναι Ελληνικά." if whisper_lang == "el" else ""),
                         },
                         timeout=15,
                     )
