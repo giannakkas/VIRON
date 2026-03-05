@@ -648,25 +648,18 @@ def ww_status():
 
 @app.route("/wakeword/poll", methods=["GET"])
 def ww_poll():
-    d = state.consume_wake()
-    if d:
-        return jsonify(d)
+    # Pipeline handles full conversation (wake → record → STT → LLM → TTS)
+    # Don't tell browser about wake - it would try to record and steal the mic
     return jsonify({"wake": False})
 
 @app.route("/wakeword/pause", methods=["POST"])
 def ww_pause():
-    state.is_paused = True
+    # Ignore browser pause requests - pipeline manages its own state
     return jsonify({"status": "paused"})
 
 @app.route("/wakeword/resume", methods=["POST"])
 def ww_resume():
-    state.is_paused = False
-    state.last_tts_end = time.time()  # reset echo cooldown
-    if silero_vad:
-        try:
-            silero_vad.reset_states()
-        except:
-            pass
+    # Ignore browser resume requests
     return jsonify({"status": "resumed"})
 
 @app.route("/health", methods=["GET"])
