@@ -331,6 +331,7 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
         resp = requests.post(
             f"{GATEWAY_URL}/v1/chat",
             json={
+                "message": user_message,
                 "messages": [{"role": "user", "content": user_message}],
                 "system": system,
             },
@@ -344,7 +345,7 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
             log.info(f"💬 LLM ({provider}): \"{reply[:80]}\"")
             return reply
         else:
-            log.error(f"LLM error {resp.status_code}: {resp.text[:100]}")
+            log.error(f"LLM error {resp.status_code}: {resp.text[:200]}")
             return "Συγγνώμη, δεν μπορώ να απαντήσω τώρα." if lang == "el" else "Sorry, I can't respond right now."
     except Exception as e:
         log.error(f"LLM failed: {e}")
