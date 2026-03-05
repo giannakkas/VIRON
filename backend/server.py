@@ -2197,6 +2197,18 @@ def wakeword_proxy(path):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/pipeline/response', methods=['GET'])
+def pipeline_response_proxy():
+    """Proxy to voice pipeline's response queue."""
+    import urllib.request
+    import urllib.error
+    try:
+        url = f'http://127.0.0.1:{OWW_PORT}/pipeline/response'
+        resp = urllib.request.urlopen(url, timeout=2)
+        return jsonify(json.loads(resp.read()))
+    except:
+        return jsonify({"has_response": False})
+
 # ============ START ============
 # ── VOICE IMPROVEMENT: Combined record+STT endpoint ──
 try:

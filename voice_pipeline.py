@@ -382,53 +382,27 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
         return "Sorry, I can't respond right now."
 
 # ═══════════════════════════════════════════════════════════
-# 5. TTS
+# 5. TTS — Queue response for browser playback
 # ═══════════════════════════════════════════════════════════
 
+# Response queue: pipeline stores LLM replies here, browser picks them up
+_response_queue = []
+_response_lock = threading.Lock()
+
 def speak(text, lang="el"):
-    """Send text to TTS and play audio. Blocks until playback complete."""
+    """Queue response for browser to play via TTS. Don't play locally."""
     if not text:
         return
-    
     state.tts_start()
-    try:
-        import requests
-        
-        # Split into sentences for streaming feel
-        import re
-        sentences = re.split(r'(?<=[.!;?])\s+', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        
-        for i, sentence in enumerate(sentences):
-            if not state.is_speaking:  # interrupted
-                break
-            
-            try:
-                resp = requests.post(
-                    TTS_URL,
-                    json={"text": sentence, "lang": lang, "speed": "normal"},
-                    timeout=15,
-                )
-                
-                if resp.status_code == 200 and len(resp.content) > 1000:
-                    # Save to temp file and play
-                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-                        tmp.write(resp.content)
-                        tmp_path = tmp.name
-                    
-                    # Play with ffplay (non-blocking detection of end)
-                    proc = subprocess.run(
-                        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
-                        timeout=30,
-                    )
-                    os.unlink(tmp_path)
-                else:
-                    log.warning(f"TTS failed for sentence {i}: status={resp.status_code}")
-            except Exception as e:
-                log.warning(f"TTS/playback error: {e}")
-    finally:
-        state.tts_end()
-        log.info("🔇 TTS playback complete")
+    with _response_lock:
+        _response_queue.append({"text": text, "lang": lang, "time": time.time()})
+    log.info(f"📤 Response queued for browser: \"{text[:60]}...\"")
+    # Wait for browser to finish playing (estimate based on text length)
+    # ~100ms per character for TTS playback
+    wait_time = min(len(text) * 0.08, 30)
+    time.sleep(wait_time)
+    state.tts_end()
+    log.info("🔇 TTS wait complete")
 
 # ═══════════════════════════════════════════════════════════
 # MIC CAPTURE + MAIN LOOP
@@ -652,14 +626,21 @@ def ww_poll():
     # Don't tell browser about wake - it would try to record and steal the mic
     return jsonify({"wake": False})
 
+@app.route("/pipeline/response", methods=["GET"])
+def pipeline_response():
+    """Browser polls this to get LLM responses for TTS playback."""
+    with _response_lock:
+        if _response_queue:
+            resp = _response_queue.pop(0)
+            return jsonify({"has_response": True, "text": resp["text"], "lang": resp["lang"]})
+    return jsonify({"has_response": False})
+
 @app.route("/wakeword/pause", methods=["POST"])
 def ww_pause():
-    # Ignore browser pause requests - pipeline manages its own state
     return jsonify({"status": "paused"})
 
 @app.route("/wakeword/resume", methods=["POST"])
 def ww_resume():
-    # Ignore browser resume requests
     return jsonify({"status": "resumed"})
 
 @app.route("/health", methods=["GET"])

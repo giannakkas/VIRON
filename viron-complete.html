@@ -781,6 +781,33 @@ if(OWW_ENABLED)checkOWWService();
 // Re-check every 10s in case service starts later
 if(OWW_ENABLED)setInterval(()=>{if(!owwReady)checkOWWService()},10000);
 
+// ===== PIPELINE RESPONSE POLLING =====
+// Voice pipeline handles: wake → record → STT → LLM
+// Browser handles: TTS playback (speakers are on browser's computer)
+let pipelinePolling=true;
+setInterval(()=>{
+  if(!pipelinePolling||isSpeaking)return;
+  fetch('/pipeline/response',{signal:AbortSignal.timeout(2000)})
+  .then(r=>r.json())
+  .then(d=>{
+    if(d.has_response&&d.text){
+      D('📢 Pipeline response: "'+d.text.substring(0,60)+'..." lang='+d.lang);
+      pipelinePolling=false; // pause polling while speaking
+      cE("happy");
+      sayServerTTS(d.text, d.lang||'el', 'normal');
+      // Resume polling after TTS finishes
+      const checkDone=setInterval(()=>{
+        if(!isSpeaking&&!(synth&&synth.speaking)){
+          clearInterval(checkDone);
+          pipelinePolling=true;
+          D('📢 Pipeline TTS done, resuming poll');
+        }
+      },500);
+    }
+  })
+  .catch(()=>{});
+},500);
+
 function startOWWPolling(){
   if(owwPolling)return;
   owwPolling=true;
