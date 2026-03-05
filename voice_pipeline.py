@@ -42,7 +42,7 @@ from flask import Flask, jsonify, request
 ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
 MIC_CHANNEL = int(os.environ.get("VIRON_MIC_CHANNEL", "1"))
 SAMPLE_RATE = 16000
-FRAME_LENGTH = 1280  # 80ms at 16kHz — matches openWakeWord expectations
+FRAME_LENGTH = 512  # Porcupine requires 512 samples at 16kHz (32ms)
 
 WHISPER_MODEL = os.environ.get("VIRON_WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.environ.get("VIRON_WHISPER_DEVICE", "auto")  # auto, cuda, cpu
@@ -114,44 +114,56 @@ class PipelineState:
 state = PipelineState()
 
 # ═══════════════════════════════════════════════════════════
-# 1. WAKE WORD (openWakeWord — works on ARM64/Jetson)
+# 1. PORCUPINE WAKE WORD
 # ═══════════════════════════════════════════════════════════
 
-oww_model = None
-oww_names = []
-OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.3"))
+porcupine = None
+PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
+PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
+PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.6"))
 
 def init_wake():
-    global oww_model, oww_names
+    global porcupine
+    if not PICOVOICE_KEY:
+        log.error("❌ PICOVOICE_ACCESS_KEY not set!")
+        log.error("   Add to ~/VIRON/.env: PICOVOICE_ACCESS_KEY=your_key")
+        return False
+    
     try:
-        import openwakeword
-        from openwakeword.model import Model
-        openwakeword.utils.download_models()
+        import pvporcupine
         
-        # Use hey_jarvis built-in (closest to "Hey VIRON")
-        oww_model = Model(wakeword_models=["hey_jarvis_v0.1"], vad_threshold=0.5)
-        oww_names = list(oww_model.models.keys())
-        log.info(f"✅ openWakeWord ready: {oww_names}, threshold={OWW_THRESHOLD}")
+        # Try custom .ppn first, fallback to built-in keyword
+        if PORCUPINE_CUSTOM_PATH and os.path.exists(PORCUPINE_CUSTOM_PATH):
+            log.info(f"Loading custom wake word: {PORCUPINE_CUSTOM_PATH}")
+            porcupine = pvporcupine.create(
+                access_key=PICOVOICE_KEY,
+                keyword_paths=[PORCUPINE_CUSTOM_PATH],
+                sensitivities=[PORCUPINE_SENSITIVITY],
+            )
+            log.info(f"✅ Porcupine ready: custom model, sensitivity={PORCUPINE_SENSITIVITY}")
+        else:
+            log.info(f"Using built-in keyword: '{PORCUPINE_KEYWORD}'")
+            porcupine = pvporcupine.create(
+                access_key=PICOVOICE_KEY,
+                keywords=[PORCUPINE_KEYWORD],
+                sensitivities=[PORCUPINE_SENSITIVITY],
+            )
+            log.info(f"✅ Porcupine ready: '{PORCUPINE_KEYWORD}', sensitivity={PORCUPINE_SENSITIVITY}")
+        
         return True
     except Exception as e:
-        log.error(f"❌ openWakeWord failed: {e}")
+        log.error(f"❌ Porcupine init failed: {e}")
         return False
 
 
 def check_wake(audio_int16):
     """Check audio frame for wake word. Returns True if detected."""
-    if oww_model is None:
+    if porcupine is None:
         return False
     try:
-        preds = oww_model.predict(audio_int16)
-        for name in oww_names:
-            score = preds[name]
-            if score > 0.08:
-                log.debug(f"OWW: {name}={score:.3f}")
-            if score >= OWW_THRESHOLD:
-                log.info(f"🔔 OWW: {name}={score:.3f} (threshold={OWW_THRESHOLD})")
-                return True
-        return False
+        result = porcupine.process(audio_int16)
+        return result >= 0
     except Exception:
         return False
 
@@ -515,29 +527,30 @@ def conversation_turn(mic, text, lang):
 
 
 def main_loop(mic):
-    """Main voice assistant loop — openWakeWord + Silero VAD + Whisper."""
-    if oww_model is None:
-        log.error("❌ Wake word engine not available!")
+    """Main voice assistant loop — Porcupine + Silero VAD + Whisper."""
+    if porcupine is None:
+        log.error("❌ Porcupine not available! Cannot start.")
         sys.exit(1)
+    
+    wake_name = PORCUPINE_CUSTOM_PATH.split('/')[-1] if PORCUPINE_CUSTOM_PATH else f"'{PORCUPINE_KEYWORD}'"
     
     log.info("=" * 50)
     log.info("🤖 VIRON Voice Pipeline Active")
-    log.info(f"   Wake: openWakeWord (threshold={OWW_THRESHOLD})")
+    log.info(f"   Wake: Porcupine ({wake_name})")
     log.info(f"   VAD: {'Silero' if silero_vad else 'RMS'}")
     log.info(f"   STT: {'Local Whisper ('+WHISPER_DEVICE+')' if whisper_model else 'Cloud'}")
     log.info(f"   Mic: {ALSA_DEVICE} ch{MIC_CHANNEL}")
     log.info("=" * 50)
-    log.info("🎤 Say 'Hey VIRON'...")
+    log.info(f"🎤 Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
     
     while True:
         try:
-            # Skip if speaking or in cooldown
             if state.is_speaking or state.is_processing or state.is_paused:
                 time.sleep(0.1)
                 continue
             
             if time.time() - state.last_tts_end < ECHO_COOLDOWN:
-                mic.read_frame()  # drain echo audio
+                mic.read_frame()
                 continue
             
             frame = mic.read_frame()
@@ -548,18 +561,10 @@ def main_loop(mic):
                 mic.start()
                 continue
             
-            # === openWakeWord detection ===
             if check_wake(frame):
-                if state.set_wake("openwakeword", 1.0):
+                if state.set_wake("porcupine", 1.0):
                     log.info("🎯 Wake word detected!")
                     
-                    # Reset OWW model state
-                    try:
-                        oww_model.reset()
-                    except:
-                        pass
-                    
-                    # Record command with Silero VAD
                     audio = record_command(mic)
                     if len(audio) > SAMPLE_RATE * 0.3:
                         text, lang = transcribe(audio)
@@ -572,12 +577,14 @@ def main_loop(mic):
                     else:
                         log.info("  (no speech in command)")
                     
-                    # Reset OWW after conversation
-                    try:
-                        oww_model.reset()
-                    except:
-                        pass
-                    log.info("🎤 Listening for wake word...")
+                    log.info(f"🎤 Listening for wake word...")
+        
+        except KeyboardInterrupt:
+            log.info("Shutting down...")
+            break
+        except Exception as e:
+            log.error(f"Pipeline error: {e}")
+            time.sleep(1)
         
         except KeyboardInterrupt:
             log.info("Shutting down...")
@@ -612,12 +619,12 @@ app = Flask(__name__)
 @app.route("/wakeword/status", methods=["GET"])
 def ww_status():
     return jsonify({
-        "ready": oww_model is not None,
+        "ready": porcupine is not None,
         "listening": not state.is_speaking and not state.is_paused,
         "paused": state.is_paused or state.is_speaking,
-        "models": oww_names or ["none"],
+        "models": ["porcupine"],
         "detections": state.detection_count,
-        "mode": "openwakeword",
+        "mode": "porcupine",
         "mic_device": ALSA_DEVICE,
         "mic_channel": MIC_CHANNEL,
         "server_side_mic": True,
@@ -652,7 +659,7 @@ def health():
     return jsonify({
         "status": "ok",
         "pipeline_version": 2,
-        "wake_engine": "openwakeword" if oww_model else "none",
+        "wake_engine": "porcupine" if porcupine else "none",
         "vad_engine": "silero" if silero_vad else "rms",
         "stt_engine": f"faster-whisper-{WHISPER_DEVICE}" if whisper_model else "cloud",
         "speaking": state.is_speaking,
@@ -682,7 +689,7 @@ def main():
     has_whisper = init_whisper()
     
     print()
-    print(f"  Wake:    {'✅ openWakeWord' if has_wake else '❌ NOT AVAILABLE'}")
+    print(f"  Wake:    {'✅ Porcupine' if has_wake else '❌ NOT AVAILABLE'}")
     print(f"  VAD:     {'✅ Silero' if has_vad else '⚠ RMS fallback'}")
     print(f"  STT:     {'✅ Local Whisper (' + WHISPER_DEVICE + ')' if has_whisper else '⚠ Cloud only'}")
     print(f"  Gateway: {GATEWAY_URL}")
@@ -711,6 +718,8 @@ def main():
         main_loop(mic)
     finally:
         mic.stop()
+        if porcupine:
+            porcupine.delete()
         log.info("Pipeline stopped.")
 
 
