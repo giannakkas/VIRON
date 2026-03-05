@@ -6,10 +6,19 @@ VIRON_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$VIRON_DIR"
 
 # Load environment
-if [ -f "$VIRON_DIR/.env" ]; then
-    set -a
-    source "$VIRON_DIR/.env"
-    set +a
+for envfile in "$VIRON_DIR/.env" "$HOME/VIRON/.env" "$HOME/.env"; do
+    if [ -f "$envfile" ]; then
+        echo "   Loading $envfile"
+        set -a
+        source "$envfile"
+        set +a
+        break
+    fi
+done
+
+if [ -z "$OPENAI_API_KEY" ]; then
+    echo "⚠️  WARNING: OPENAI_API_KEY not set! STT and Chat won't work."
+    echo "   Create ~/VIRON/.env with your API keys (see .env.example)"
 fi
 
 BACKEND_PORT=${VIRON_BACKEND_PORT:-5000}
@@ -21,6 +30,7 @@ stop_all() {
     pkill -f "backend/server.py" 2>/dev/null
     pkill -f "gateway/main.py" 2>/dev/null
     pkill -f "wakeword/service.py" 2>/dev/null
+    pkill -f "voice_pipeline.py" 2>/dev/null
     # Free ports
     fuser -k $BACKEND_PORT/tcp 2>/dev/null
     fuser -k $GATEWAY_PORT/tcp 2>/dev/null
@@ -61,10 +71,17 @@ start_all() {
         echo "   ❌ Gateway failed! Check: tail /tmp/viron_gateway.log"
     fi
     
-    # 3. Wakeword (Flask, port 8085)
-    echo "   [3/3] Wakeword (port $WAKEWORD_PORT)..."
+    # 3. Wakeword / Voice Pipeline (port 8085)
+    # Use new pipeline if available, fallback to old wakeword service
+    echo "   [3/3] Voice Pipeline (port $WAKEWORD_PORT)..."
     cd "$VIRON_DIR"
-    python3 wakeword/service.py > /tmp/viron_wakeword.log 2>&1 &
+    if [ -f "$VIRON_DIR/voice_pipeline.py" ] && [ -n "$PICOVOICE_ACCESS_KEY" ]; then
+        echo "   Using NEW voice pipeline (Porcupine + Silero VAD + Faster-Whisper)"
+        python3 voice_pipeline.py > /tmp/viron_wakeword.log 2>&1 &
+    else
+        echo "   Using legacy wakeword service"
+        python3 wakeword/service.py > /tmp/viron_wakeword.log 2>&1 &
+    fi
     WAKEWORD_PID=$!
     sleep 2
     if kill -0 $WAKEWORD_PID 2>/dev/null; then
