@@ -519,23 +519,21 @@ def conversation_turn(mic, text, lang):
 
 
 def main_loop(mic):
-    """Main voice assistant loop."""
-    has_porcupine = porcupine is not None
+    """Main voice assistant loop — Porcupine only."""
+    if porcupine is None:
+        log.error("❌ Porcupine not available! Cannot start pipeline.")
+        log.error("   Set PICOVOICE_ACCESS_KEY in ~/VIRON/.env")
+        log.error("   Get free key: https://console.picovoice.ai/")
+        sys.exit(1)
     
     log.info("=" * 50)
     log.info("🤖 VIRON Voice Pipeline Active")
-    log.info(f"   Wake: {'Porcupine' if has_porcupine else 'Whisper fallback'}")
+    log.info(f"   Wake: Porcupine (sensitivity={PORCUPINE_SENSITIVITY})")
     log.info(f"   VAD: {'Silero' if silero_vad else 'RMS'}")
     log.info(f"   STT: {'Local Whisper ('+WHISPER_DEVICE+')' if whisper_model else 'Cloud'}")
     log.info(f"   Mic: {ALSA_DEVICE} ch{MIC_CHANNEL}")
     log.info("=" * 50)
-    log.info("🎤 Say 'Hey VIRON' (or 'Hey Jarvis')...")
-    
-    # Accumulate audio for Whisper-based wake detection if no Porcupine
-    whisper_buf = deque(maxlen=int(SAMPLE_RATE * 1.5 / FRAME_LENGTH))  # 1.5s
-    whisper_check_interval = int(SAMPLE_RATE * 0.5 / FRAME_LENGTH)  # every 0.5s
-    whisper_frame_count = 0
-    last_whisper_check = 0
+    log.info("🎤 Say 'Hey VIRON'...")
     
     while True:
         try:
@@ -545,8 +543,7 @@ def main_loop(mic):
                 continue
             
             if time.time() - state.last_tts_end < ECHO_COOLDOWN:
-                # Drain audio during cooldown (discard echo)
-                mic.read_frame()
+                mic.read_frame()  # drain echo audio
                 continue
             
             frame = mic.read_frame()
@@ -557,58 +554,29 @@ def main_loop(mic):
                 mic.start()
                 continue
             
-            # === PORCUPINE WAKE DETECTION ===
-            if has_porcupine:
-                try:
-                    result = porcupine.process(frame)
-                    if result >= 0:
-                        if state.set_wake("porcupine", 1.0):
-                            # Wake detected! Record command.
-                            log.info("🎯 Porcupine wake word detected!")
-                            audio = record_command(mic)
-                            if len(audio) > SAMPLE_RATE * 0.3:  # at least 300ms
-                                text, lang = transcribe(audio)
-                                if text and len(text) > 1:
-                                    lang = detect_language(text)
-                                    log.info(f"📝 Command: \"{text}\" (lang={lang})")
-                                    conversation_turn(mic, text, lang)
-                                else:
-                                    log.info("  (empty transcription)")
+            # === PORCUPINE WAKE DETECTION (only method) ===
+            try:
+                result = porcupine.process(frame)
+                if result >= 0:
+                    if state.set_wake("porcupine", 1.0):
+                        log.info("🎯 Wake word detected!")
+                        
+                        # Record command with Silero VAD
+                        audio = record_command(mic)
+                        if len(audio) > SAMPLE_RATE * 0.3:
+                            text, lang = transcribe(audio)
+                            if text and len(text) > 1:
+                                lang = detect_language(text)
+                                log.info(f"📝 Command: \"{text}\" (lang={lang})")
+                                conversation_turn(mic, text, lang)
                             else:
-                                log.info("  (no speech in command)")
-                            log.info("🎤 Listening for wake word...")
-                except Exception as e:
-                    log.warning(f"Porcupine error: {e}")
-            
-            # === WHISPER FALLBACK WAKE DETECTION ===
-            else:
-                whisper_buf.append(frame)
-                whisper_frame_count += 1
-                
-                # Check for wake word every 0.5s when speech detected
-                rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
-                
-                if rms > 200 and whisper_frame_count >= whisper_check_interval:
-                    now = time.time()
-                    if now - last_whisper_check >= 3.0:  # rate limit
-                        last_whisper_check = now
-                        whisper_frame_count = 0
+                                log.info("  (empty transcription)")
+                        else:
+                            log.info("  (no speech in command)")
                         
-                        # Transcribe buffer
-                        combined = np.concatenate(list(whisper_buf))
-                        text, _ = transcribe(combined, lang="en")
-                        
-                        if text and _is_wake_word(text):
-                            if state.set_wake("whisper", 0.8):
-                                log.info(f"🎯 Whisper wake: \"{text}\"")
-                                audio = record_command(mic)
-                                if len(audio) > SAMPLE_RATE * 0.3:
-                                    cmd_text, lang = transcribe(audio)
-                                    if cmd_text and len(cmd_text) > 1:
-                                        lang = detect_language(cmd_text)
-                                        log.info(f"📝 Command: \"{cmd_text}\" (lang={lang})")
-                                        conversation_turn(mic, cmd_text, lang)
-                                log.info("🎤 Listening for wake word...")
+                        log.info("🎤 Listening for wake word...")
+            except Exception as e:
+                log.warning(f"Porcupine error: {e}")
         
         except KeyboardInterrupt:
             log.info("Shutting down...")
@@ -643,12 +611,12 @@ app = Flask(__name__)
 @app.route("/wakeword/status", methods=["GET"])
 def ww_status():
     return jsonify({
-        "ready": True,
+        "ready": porcupine is not None,
         "listening": not state.is_speaking and not state.is_paused,
         "paused": state.is_paused or state.is_speaking,
-        "models": ["porcupine"] if porcupine else ["whisper"],
+        "models": ["porcupine"],
         "detections": state.detection_count,
-        "mode": "porcupine" if porcupine else "whisper",
+        "mode": "porcupine",
         "mic_device": ALSA_DEVICE,
         "mic_channel": MIC_CHANNEL,
         "server_side_mic": True,

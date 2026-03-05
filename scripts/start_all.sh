@@ -71,17 +71,10 @@ start_all() {
         echo "   ❌ Gateway failed! Check: tail /tmp/viron_gateway.log"
     fi
     
-    # 3. Wakeword / Voice Pipeline (port 8085)
-    # Use new pipeline if available, fallback to old wakeword service
+    # 3. Voice Pipeline — Porcupine + Silero VAD + Faster-Whisper (port 8085)
     echo "   [3/3] Voice Pipeline (port $WAKEWORD_PORT)..."
     cd "$VIRON_DIR"
-    if [ -f "$VIRON_DIR/voice_pipeline.py" ] && [ -n "$PICOVOICE_ACCESS_KEY" ]; then
-        echo "   Using NEW voice pipeline (Porcupine + Silero VAD + Faster-Whisper)"
-        python3 voice_pipeline.py > /tmp/viron_wakeword.log 2>&1 &
-    else
-        echo "   Using legacy wakeword service"
-        python3 wakeword/service.py > /tmp/viron_wakeword.log 2>&1 &
-    fi
+    python3 voice_pipeline.py > /tmp/viron_wakeword.log 2>&1 &
     WAKEWORD_PID=$!
     sleep 2
     if kill -0 $WAKEWORD_PID 2>/dev/null; then
