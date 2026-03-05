@@ -552,7 +552,7 @@ function sayServerTTS(text,lang,speed){
       function playSentence(idx){
         if(idx>=queue.length){
           D('  ✅ All sentences played');
-          isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,300);
+          isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,1500);
           return;
         }
         function playBlob(blob){
@@ -604,9 +604,9 @@ function sayServerTTS(text,lang,speed){
     const a=new Audio(url);
     currentAudio=a; // Track for stopSpeaking()
     a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{D('  TTS playback ended');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,300)};
-    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,300)};
-    a.play().then(()=>{startT()}).catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,300)})
+    a.onended=()=>{D('  TTS playback ended');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,1500)};
+    a.onerror=(e)=>{D('  TTS playback ERROR: '+e.type);isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);stopT();setTimeout(startWakeListener,1500)};
+    a.play().then(()=>{startT()}).catch(e=>{D('  TTS play() ERROR: '+e.message);isSpeaking=false;currentAudio=null;stopT();setTimeout(startWakeListener,1500)})
   })
   .catch(e=>{
     D('  Server TTS FAILED: '+e.message+' — falling back to browser voice');
@@ -618,8 +618,8 @@ function sayServerTTS(text,lang,speed){
     if(lang==='el'&&gkV)u.voice=gkV;
     u.rate=speed==='slow'?0.75:speed==='fast'?1.1:0.9;u.pitch=0.85;
     u.onstart=()=>{startT()};
-    u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,300)};
-    u.onerror=()=>{stopT();setTimeout(startWakeListener,300)};
+    u.onend=()=>{isSpeaking=false;stopT();setTimeout(startWakeListener,1500)};
+    u.onerror=()=>{stopT();setTimeout(startWakeListener,1500)};
     synth.speak(u);
   })
 }

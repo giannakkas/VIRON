@@ -96,6 +96,7 @@ class Detector:
         # Custom mel classifier (trained on user's voice)
         self.custom_model = None
         self.custom_threshold = 0.70  # high threshold to avoid false triggers
+        self._resume_time = 0  # track resume time for echo cooldown
 
     def init_custom_model(self):
         """Load custom hey_viron mel classifier (JSON or ONNX)."""
@@ -243,6 +244,7 @@ class Detector:
 
     def resume(self):
         self.is_paused = False
+        self._resume_time = time.time()  # track when resumed for cooldown
         try:
             if self.oww_model: self.oww_model.reset()
         except: pass
@@ -338,6 +340,7 @@ class MicCapture:
                 "thank you. that's great.", "cool", "cool.", "bye", "bye.",
                 "oh", "oh.", "you", "you.", "yeah", "okay", "ok",
                 "subtitles by", "like and subscribe", "music",
+                "beep", "beep.", "hmm", "uh", "um", "ah",
             }
             if text.lower().strip().rstrip('.!,') in {h.rstrip('.!,') for h in WHISPER_HALLUCINATIONS}:
                 logger.debug(f"Filtered hallucination: '{text}'")
@@ -416,6 +419,10 @@ class MicCapture:
                     d_stereo = self.proc.stdout.read(BYTES_PER_CHUNK)
                     if not d_stereo or len(d_stereo) < BYTES_PER_CHUNK: break
                     if self.det.is_paused: continue
+                    # Post-resume cooldown: discard audio for 2s after resume
+                    # (prevents VIRON's own TTS echo from triggering wake word)
+                    resume_cooldown = getattr(self.det, '_resume_time', 0)
+                    if time.time() - resume_cooldown < 2.0: continue
 
                     # Flush echo chunks after resume
                     if self._flush_chunks > 0:
