@@ -1687,8 +1687,10 @@ def speech_to_text():
                     text = _clean_whisper_text(text)
                     elapsed = time.time() - t_start
                     print(f"  ✅ OpenAI Whisper: \"{text[:80]}\" ({elapsed:.1f}s)")
-                    # Filter hallucinations (common Whisper ghost outputs)
-                    HALLUCINATION_BLACKLIST = [
+                    # Filter hallucinations (common Whisper ghost outputs on silence/noise)
+                    # ONLY filter if text is SHORT and matches a known ghost phrase
+                    # Long text with blacklisted words is likely real speech
+                    HALLUCINATION_EXACT = {
                         "υπότιτλοι", "authorwave", "σας ευχαριστούμε",
                         "ευχαριστώ που παρακολουθήσατε", "εγγραφείτε στο κανάλι",
                         "like and subscribe", "thank you for watching",
@@ -1696,8 +1698,14 @@ def speech_to_text():
                         "σας ευχαριστώ για την παρακολούθηση",
                         "παρακαλώ εγγραφείτε", "κάντε like",
                         "music", "♪", "...", "…",
-                    ]
-                    if text and any(bl in text.lower() for bl in HALLUCINATION_BLACKLIST):
+                        "thank you", "thanks", "bye",
+                    }
+                    text_clean = text.lower().strip().rstrip('.!,;')
+                    is_hallucination = (
+                        text_clean in HALLUCINATION_EXACT or
+                        (len(text) < 15 and any(bl in text_clean for bl in HALLUCINATION_EXACT))
+                    )
+                    if text and is_hallucination:
                         print(f"  ⚠ Filtered hallucination: '{text[:60]}'")
                         return jsonify({"text": "", "language": whisper_lang or "auto", "duration": round(elapsed, 2), "engine": "openai", "filtered": "hallucination"})
                     if text and len(text) > 1:

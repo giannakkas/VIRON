@@ -282,15 +282,20 @@ def register_listen_endpoint(app):
                         stt_ms = int((time.time() - t_stt) * 1000)
                         total_ms = int((time.time() - t_start) * 1000)
                         
-                        # Hallucination filter
-                        HALLUCINATION_BLACKLIST = [
+                        # Hallucination filter — only catch SHORT ghost outputs
+                        HALLUCINATION_EXACT = {
                             "υπότιτλοι", "authorwave", "σας ευχαριστούμε",
                             "ευχαριστώ που παρακολουθήσατε", "εγγραφείτε στο κανάλι",
                             "like and subscribe", "thank you for watching",
                             "subtitles by", "translated by", "amara.org",
-                            "music", "♪", "...", "…",
-                        ]
-                        if text and any(bl in text.lower() for bl in HALLUCINATION_BLACKLIST):
+                            "music", "♪", "...", "…", "thank you", "bye",
+                        }
+                        text_clean = text.lower().strip().rstrip('.!,;')
+                        is_hallucination = (
+                            text_clean in HALLUCINATION_EXACT or
+                            (len(text) < 15 and any(bl in text_clean for bl in HALLUCINATION_EXACT))
+                        )
+                        if text and is_hallucination:
                             print(f"  ⚠ Filtered hallucination: '{text[:60]}'")
                             _resume_wakeword()
                             return jsonify({
