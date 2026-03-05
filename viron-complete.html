@@ -809,21 +809,12 @@ function startOWWPolling(){
         cE("hopeful");voiceState=VOICE_ACTIVATED;updateListenUI();
         document.getElementById("listenText").textContent='Listening...';
         
-        const pName=sEmo.recognized_person;
-        const ackText=pName?(isGreekMode()?'Ορίστε '+pName+';':'Yes '+pName+'?'):(isGreekMode()?'Ορίστε;':'Yes?');
-        D('  Playing ack: "'+ackText+'"');
-        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
-        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
-        .then(blob=>{
-          const url=URL.createObjectURL(blob);
-          const a=new Audio(url);
-          currentAudio=a;isSpeaking=true;
-          a.volume=0.6;
-          a.onended=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-          a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-          a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
-        })
-        .catch(e=>{D('  Ack TTS failed: '+e);startCommandListening()});
+        // Start listening IMMEDIATELY — don't wait for ack TTS
+        // (User speaks within 1-2s of wake word, TTS ack wastes that time)
+        startCommandListening();
+        
+        // Play a quick visual indicator instead of TTS ack
+        showSub(isGreekMode()?'Ορίστε;':'Yes?');
       }
     })
     .catch(()=>{});
@@ -948,26 +939,10 @@ function startAlwaysListening(){
         const pName=sEmo.recognized_person;
         const ackText=pName?(isGreekMode()?`Ορίστε ${pName};`:`Yes ${pName}?`):(isGreekMode()?"Ορίστε;":"Yes?");
         D('  Playing ack: "'+ackText+'"');
-        fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ackText,lang:isGreekMode()?'el':'en'})})
-        .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
-        .then(blob=>{
-          const url=URL.createObjectURL(blob);
-          const a=new Audio(url);
-          currentAudio=a;isSpeaking=true;
-          a.volume=0.6;
-          a.onended=()=>{D('  Ack ended, starting command listen');isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-          a.onerror=()=>{isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);startCommandListening()};
-          a.play().catch(()=>{isSpeaking=false;currentAudio=null;startCommandListening()});
-        })
-        .catch(e=>{
-          D('  Ack TTS failed: '+e+', using browser voice');
-          const ack=new SpeechSynthesisUtterance(ackText);
-          ack.lang=isGreekMode()?'el-GR':'en-US';if(isGreekMode()&&gkV)ack.voice=gkV;else if(enV)ack.voice=enV;
-          ack.volume=0.6;ack.rate=1.0;ack.pitch=0.85;
-          ack.onend=()=>startCommandListening();
-          ack.onerror=()=>startCommandListening();
-          synth.speak(ack);
-        });
+        
+        // Start listening IMMEDIATELY — show visual ack instead of TTS
+        startCommandListening();
+        showSub(ackText);
       }
       return;
     }
