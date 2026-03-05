@@ -814,7 +814,6 @@ function startOWWPolling(){
         startCommandListening();
         
         // Play a quick visual indicator instead of TTS ack
-        showSub(isGreekMode()?'Ορίστε;':'Yes?');
       }
     })
     .catch(()=>{});
@@ -942,7 +941,6 @@ function startAlwaysListening(){
         
         // Start listening IMMEDIATELY — show visual ack instead of TTS
         startCommandListening();
-        showSub(ackText);
       }
       return;
     }
