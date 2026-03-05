@@ -36,6 +36,25 @@ from collections import deque
 from flask import Flask, jsonify, request
 
 # ═══════════════════════════════════════════════════════════
+# LOAD .env FILE DIRECTLY (no python-dotenv needed)
+# ═══════════════════════════════════════════════════════════
+
+def _load_env():
+    for p in [Path.home() / "VIRON" / ".env", Path(__file__).parent / ".env"]:
+        if p.exists():
+            with open(p) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, val = line.partition("=")
+                        val = val.strip().strip("'\"")
+                        if key.strip() not in os.environ:
+                            os.environ[key.strip()] = val
+            print(f"  Loaded {p}")
+            return
+_load_env()
+
+# ═══════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 
@@ -127,7 +146,16 @@ def init_wake():
     global porcupine
     if not PICOVOICE_KEY:
         log.error("❌ PICOVOICE_ACCESS_KEY not set!")
-        log.error("   Add to ~/VIRON/.env: PICOVOICE_ACCESS_KEY=your_key")
+        log.error("   Check ~/VIRON/.env has: PICOVOICE_ACCESS_KEY=your_key")
+        log.error("   Current env value: '%s'" % os.environ.get("PICOVOICE_ACCESS_KEY", "EMPTY"))
+        # List .env contents (redacted)
+        env_path = Path.home() / "VIRON" / ".env"
+        if env_path.exists():
+            with open(env_path) as f:
+                for line in f:
+                    if "KEY" in line and "=" in line:
+                        k, _, v = line.strip().partition("=")
+                        log.error(f"   .env has: {k}={v[:8]}...")
         return False
     
     try:
@@ -595,22 +623,6 @@ def main_loop(mic):
             time.sleep(1)
 
 
-import re
-WAKE_PATTERNS = re.compile(
-    r'hey\s*v[iy]r[oa]n|hey\s*jar[vu]is|hey\s*byr[oa]n|hey\s*ver[oa]n?'
-    r'|hey\s*iron|hey\s*brian|hey\s*bar[oa]n|hey\s*v[iy]ro$',
-    re.IGNORECASE
-)
-
-def _is_wake_word(text):
-    t = text.lower().strip()
-    if WAKE_PATTERNS.search(t):
-        return True
-    for w in ["viron", "jarvis", "byron", "veron", "biron", "viro", "baron", "brian"]:
-        if w in t:
-            return True
-    return False
-
 # ═══════════════════════════════════════════════════════════
 # HTTP API (for browser frontend)
 # ═══════════════════════════════════════════════════════════
@@ -690,7 +702,7 @@ def main():
     has_whisper = init_whisper()
     
     print()
-    print(f"  Wake:    {'✅ Porcupine' if has_wake else '❌ NOT AVAILABLE'}")
+    print(f"  Wake:    {'✅ Porcupine' if has_wake else '❌ PORCUPINE FAILED - check PICOVOICE_ACCESS_KEY'}")
     print(f"  VAD:     {'✅ Silero' if has_vad else '⚠ RMS fallback'}")
     print(f"  STT:     {'✅ Local Whisper (' + WHISPER_DEVICE + ')' if has_whisper else '⚠ Cloud only'}")
     print(f"  Gateway: {GATEWAY_URL}")
