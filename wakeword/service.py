@@ -217,8 +217,8 @@ class Detector:
 
     def set_detection(self, text, score=1.0):
         now = time.time()
-        # REDUCED debounce from 2.0s → 1.5s for faster re-detection
-        if now - self.last_detection < 1.5: return
+        # After wake detection, suppress for 10s (browser takes over for command)
+        if now - self.last_detection < 10.0: return
         self.last_detection = now
         self.detection_count += 1
         with self._lock:
@@ -293,6 +293,15 @@ class MicCapture:
 
     def _whisper_check(self, frames):
         """Send speech segment to Whisper, check for wake word."""
+        # Rate limit: max 1 Whisper call per 3s (OpenAI 503s on rapid calls)
+        now = time.time()
+        if now - getattr(self, '_last_whisper_call', 0) < 3.0:
+            return
+        # Don't call Whisper if we recently detected (browser is handling command)
+        if now - self.det.last_detection < 12.0:
+            return
+        self._last_whisper_call = now
+        
         try:
             raw = b''.join(frames)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
