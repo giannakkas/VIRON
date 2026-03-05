@@ -42,12 +42,7 @@ from flask import Flask, jsonify, request
 ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
 MIC_CHANNEL = int(os.environ.get("VIRON_MIC_CHANNEL", "1"))
 SAMPLE_RATE = 16000
-FRAME_LENGTH = 512  # Porcupine requires 512 samples at 16kHz (32ms)
-
-PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
-PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")  # built-in keyword
-PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")  # .ppn file for "Hey VIRON"
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.6"))
+FRAME_LENGTH = 1280  # 80ms at 16kHz — matches openWakeWord expectations
 
 WHISPER_MODEL = os.environ.get("VIRON_WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.environ.get("VIRON_WHISPER_DEVICE", "auto")  # auto, cuda, cpu
@@ -119,44 +114,45 @@ class PipelineState:
 state = PipelineState()
 
 # ═══════════════════════════════════════════════════════════
-# 1. PORCUPINE WAKE WORD
+# 1. WAKE WORD (openWakeWord — works on ARM64/Jetson)
 # ═══════════════════════════════════════════════════════════
 
-porcupine = None
+oww_model = None
+oww_names = []
+OWW_THRESHOLD = float(os.environ.get("VIRON_WAKEWORD_THRESHOLD", "0.3"))
 
-def init_porcupine():
-    global porcupine
-    if not PICOVOICE_KEY:
-        log.warning("⚠ PICOVOICE_ACCESS_KEY not set — Porcupine disabled")
-        log.warning("  Get a free key at https://console.picovoice.ai/")
-        log.warning("  Then: export PICOVOICE_ACCESS_KEY=your_key")
-        return False
-    
+def init_wake():
+    global oww_model, oww_names
     try:
-        import pvporcupine
+        import openwakeword
+        from openwakeword.model import Model
+        openwakeword.utils.download_models()
         
-        if PORCUPINE_CUSTOM_PATH and os.path.exists(PORCUPINE_CUSTOM_PATH):
-            log.info(f"Loading custom wake word: {PORCUPINE_CUSTOM_PATH}")
-            porcupine = pvporcupine.create(
-                access_key=PICOVOICE_KEY,
-                keyword_paths=[PORCUPINE_CUSTOM_PATH],
-                sensitivities=[PORCUPINE_SENSITIVITY],
-            )
-        else:
-            log.info(f"Using built-in keyword: '{PORCUPINE_KEYWORD}'")
-            porcupine = pvporcupine.create(
-                access_key=PICOVOICE_KEY,
-                keywords=[PORCUPINE_KEYWORD],
-                sensitivities=[PORCUPINE_SENSITIVITY],
-            )
-        
-        log.info(f"✅ Porcupine ready (frame_length={porcupine.frame_length}, rate={porcupine.sample_rate})")
+        # Use hey_jarvis built-in (closest to "Hey VIRON")
+        oww_model = Model(wakeword_models=["hey_jarvis_v0.1"], vad_threshold=0.5)
+        oww_names = list(oww_model.models.keys())
+        log.info(f"✅ openWakeWord ready: {oww_names}, threshold={OWW_THRESHOLD}")
         return True
-    except ImportError:
-        log.warning("⚠ pvporcupine not installed: pip install pvporcupine")
-        return False
     except Exception as e:
-        log.error(f"❌ Porcupine init failed: {e}")
+        log.error(f"❌ openWakeWord failed: {e}")
+        return False
+
+
+def check_wake(audio_int16):
+    """Check audio frame for wake word. Returns True if detected."""
+    if oww_model is None:
+        return False
+    try:
+        preds = oww_model.predict(audio_int16)
+        for name in oww_names:
+            score = preds[name]
+            if score > 0.08:
+                log.debug(f"OWW: {name}={score:.3f}")
+            if score >= OWW_THRESHOLD:
+                log.info(f"🔔 OWW: {name}={score:.3f} (threshold={OWW_THRESHOLD})")
+                return True
+        return False
+    except Exception:
         return False
 
 # ═══════════════════════════════════════════════════════════
@@ -519,16 +515,14 @@ def conversation_turn(mic, text, lang):
 
 
 def main_loop(mic):
-    """Main voice assistant loop — Porcupine only."""
-    if porcupine is None:
-        log.error("❌ Porcupine not available! Cannot start pipeline.")
-        log.error("   Set PICOVOICE_ACCESS_KEY in ~/VIRON/.env")
-        log.error("   Get free key: https://console.picovoice.ai/")
+    """Main voice assistant loop — openWakeWord + Silero VAD + Whisper."""
+    if oww_model is None:
+        log.error("❌ Wake word engine not available!")
         sys.exit(1)
     
     log.info("=" * 50)
     log.info("🤖 VIRON Voice Pipeline Active")
-    log.info(f"   Wake: Porcupine (sensitivity={PORCUPINE_SENSITIVITY})")
+    log.info(f"   Wake: openWakeWord (threshold={OWW_THRESHOLD})")
     log.info(f"   VAD: {'Silero' if silero_vad else 'RMS'}")
     log.info(f"   STT: {'Local Whisper ('+WHISPER_DEVICE+')' if whisper_model else 'Cloud'}")
     log.info(f"   Mic: {ALSA_DEVICE} ch{MIC_CHANNEL}")
@@ -554,29 +548,36 @@ def main_loop(mic):
                 mic.start()
                 continue
             
-            # === PORCUPINE WAKE DETECTION (only method) ===
-            try:
-                result = porcupine.process(frame)
-                if result >= 0:
-                    if state.set_wake("porcupine", 1.0):
-                        log.info("🎯 Wake word detected!")
-                        
-                        # Record command with Silero VAD
-                        audio = record_command(mic)
-                        if len(audio) > SAMPLE_RATE * 0.3:
-                            text, lang = transcribe(audio)
-                            if text and len(text) > 1:
-                                lang = detect_language(text)
-                                log.info(f"📝 Command: \"{text}\" (lang={lang})")
-                                conversation_turn(mic, text, lang)
-                            else:
-                                log.info("  (empty transcription)")
+            # === openWakeWord detection ===
+            if check_wake(frame):
+                if state.set_wake("openwakeword", 1.0):
+                    log.info("🎯 Wake word detected!")
+                    
+                    # Reset OWW model state
+                    try:
+                        oww_model.reset()
+                    except:
+                        pass
+                    
+                    # Record command with Silero VAD
+                    audio = record_command(mic)
+                    if len(audio) > SAMPLE_RATE * 0.3:
+                        text, lang = transcribe(audio)
+                        if text and len(text) > 1:
+                            lang = detect_language(text)
+                            log.info(f"📝 Command: \"{text}\" (lang={lang})")
+                            conversation_turn(mic, text, lang)
                         else:
-                            log.info("  (no speech in command)")
-                        
-                        log.info("🎤 Listening for wake word...")
-            except Exception as e:
-                log.warning(f"Porcupine error: {e}")
+                            log.info("  (empty transcription)")
+                    else:
+                        log.info("  (no speech in command)")
+                    
+                    # Reset OWW after conversation
+                    try:
+                        oww_model.reset()
+                    except:
+                        pass
+                    log.info("🎤 Listening for wake word...")
         
         except KeyboardInterrupt:
             log.info("Shutting down...")
@@ -611,12 +612,12 @@ app = Flask(__name__)
 @app.route("/wakeword/status", methods=["GET"])
 def ww_status():
     return jsonify({
-        "ready": porcupine is not None,
+        "ready": oww_model is not None,
         "listening": not state.is_speaking and not state.is_paused,
         "paused": state.is_paused or state.is_speaking,
-        "models": ["porcupine"],
+        "models": oww_names or ["none"],
         "detections": state.detection_count,
-        "mode": "porcupine",
+        "mode": "openwakeword",
         "mic_device": ALSA_DEVICE,
         "mic_channel": MIC_CHANNEL,
         "server_side_mic": True,
@@ -651,7 +652,7 @@ def health():
     return jsonify({
         "status": "ok",
         "pipeline_version": 2,
-        "wake_engine": "porcupine" if porcupine else "whisper",
+        "wake_engine": "openwakeword" if oww_model else "none",
         "vad_engine": "silero" if silero_vad else "rms",
         "stt_engine": f"faster-whisper-{WHISPER_DEVICE}" if whisper_model else "cloud",
         "speaking": state.is_speaking,
@@ -676,12 +677,12 @@ def main():
     
     # Init components
     print("\n📦 Initializing components...")
-    has_porcupine = init_porcupine()
+    has_wake = init_wake()
     has_vad = init_silero_vad()
     has_whisper = init_whisper()
     
     print()
-    print(f"  Wake:    {'✅ Porcupine' if has_porcupine else '⚠ Whisper fallback (get Picovoice key!)'}")
+    print(f"  Wake:    {'✅ openWakeWord' if has_wake else '❌ NOT AVAILABLE'}")
     print(f"  VAD:     {'✅ Silero' if has_vad else '⚠ RMS fallback'}")
     print(f"  STT:     {'✅ Local Whisper (' + WHISPER_DEVICE + ')' if has_whisper else '⚠ Cloud only'}")
     print(f"  Gateway: {GATEWAY_URL}")
@@ -710,8 +711,6 @@ def main():
         main_loop(mic)
     finally:
         mic.stop()
-        if porcupine:
-            porcupine.delete()
         log.info("Pipeline stopped.")
 
 
