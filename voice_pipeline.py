@@ -47,11 +47,13 @@ def _load_env():
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
                         key, _, val = line.partition("=")
+                        key = key.strip()
                         val = val.strip().strip("'\"")
-                        if key.strip() not in os.environ:
-                            os.environ[key.strip()] = val
-            print(f"  Loaded {p}")
+                        # Always override - env may have stale/empty values
+                        os.environ[key] = val
+            print(f"  ✅ Loaded env from {p}")
             return
+    print("  ⚠ No .env file found!")
 _load_env()
 
 # ═══════════════════════════════════════════════════════════
