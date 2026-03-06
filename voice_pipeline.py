@@ -87,10 +87,11 @@ log = logging.getLogger("viron-pipeline")
 
 class PipelineState:
     def __init__(self):
-        self.is_speaking = False        # TTS playing
-        self.is_listening = False       # recording user command
-        self.is_processing = False      # LLM thinking
-        self.is_paused = False          # externally paused
+        self.is_speaking = False
+        self.is_listening = False
+        self.is_processing = False
+        self.is_paused = False
+        self.in_conversation = False
         self.wake_detected = False
         self.last_tts_end = 0           # time TTS finished (for echo cooldown)
         self.last_wake = 0
@@ -649,8 +650,11 @@ class MicStream:
             self.proc = None
 
 
-def record_command(mic, timeout=MAX_SPEECH_SEC):
+def record_command(mic, timeout=MAX_SPEECH_SEC, no_speech_timeout=None):
     """Record user's command using Silero VAD for endpoint detection."""
+    if no_speech_timeout is None:
+        no_speech_timeout = NO_SPEECH_TIMEOUT
+    
     log.info("👂 Listening for command...")
     state.is_listening = True
     
@@ -660,7 +664,7 @@ def record_command(mic, timeout=MAX_SPEECH_SEC):
     no_speech_frames = 0
     
     silence_needed = int(SILENCE_TIMEOUT * SAMPLE_RATE / FRAME_LENGTH)
-    no_speech_needed = int(NO_SPEECH_TIMEOUT * SAMPLE_RATE / FRAME_LENGTH)
+    no_speech_needed = int(no_speech_timeout * SAMPLE_RATE / FRAME_LENGTH)
     max_frames = int(timeout * SAMPLE_RATE / FRAME_LENGTH)
     
     preroll = deque(maxlen=6)
@@ -692,7 +696,7 @@ def record_command(mic, timeout=MAX_SPEECH_SEC):
                 else:
                     no_speech_frames += 1
                     if no_speech_frames >= no_speech_needed:
-                        log.info(f"  🔇 No speech detected after {no_speech_frames} frames ({NO_SPEECH_TIMEOUT}s)")
+                        log.info(f"  🔇 No speech detected after {no_speech_timeout}s")
                         return np.array([], dtype=np.int16)
             else:
                 speech_frames.append(frame)
@@ -845,8 +849,10 @@ def _groq_streaming_chat(user_message, lang):
         return None
 
 
+CONVERSATION_TIMEOUT = float(os.environ.get("VIRON_CONVERSATION_TIMEOUT", "7.0"))
+
 def main_loop(mic):
-    """Main voice assistant loop — Porcupine + Silero VAD + Whisper."""
+    """Main voice assistant loop — Porcupine + conversation mode."""
     if porcupine is None:
         log.error("❌ Porcupine not available! Cannot start.")
         sys.exit(1)
@@ -859,6 +865,7 @@ def main_loop(mic):
     log.info(f"   VAD: {'Silero' if silero_vad else 'RMS'}")
     log.info(f"   STT: {'Deepgram streaming' if DEEPGRAM_API_KEY else ('whisper.cpp GPU' if WHISPER_CPP_AVAILABLE else ('faster-whisper CPU' if whisper_model else 'Cloud'))}")
     log.info(f"   Mic: {ALSA_DEVICE} ch{MIC_CHANNEL}")
+    log.info(f"   Conversation timeout: {CONVERSATION_TIMEOUT}s")
     log.info("=" * 50)
     log.info(f"🎤 Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
     
@@ -884,24 +891,14 @@ def main_loop(mic):
                 if state.set_wake("porcupine", 1.0):
                     log.info("🎯 Wake word detected!")
                     
-                    # Say "Ορίστε" through browser speakers
+                    # Say "Ορίστε" through browser
                     with _response_lock:
                         _response_queue.append({"text": "Ορίστε;", "lang": "el", "time": time.time()})
-                    log.info("📤 Sent 'Ορίστε' to browser")
                     
-                    audio = record_command(mic)
-                    if len(audio) > SAMPLE_RATE * 0.3:
-                        text, lang = transcribe(audio, lang="el")  # Default Greek
-                        if text and len(text) > 1:
-                            lang = detect_language(text)
-                            log.info(f"📝 Command: \"{text}\" (lang={lang})")
-                            conversation_turn(mic, text, lang)
-                        else:
-                            log.info("  (empty transcription)")
-                    else:
-                        log.info("  (no speech in command)")
+                    # Enter conversation mode
+                    _conversation_loop(mic)
                     
-                    log.info(f"🎤 Listening for wake word...")
+                    log.info(f"🎤 Back to standby. Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
         
         except KeyboardInterrupt:
             log.info("Shutting down...")
@@ -909,13 +906,64 @@ def main_loop(mic):
         except Exception as e:
             log.error(f"Pipeline error: {e}")
             time.sleep(1)
-        
-        except KeyboardInterrupt:
-            log.info("Shutting down...")
-            break
-        except Exception as e:
-            log.error(f"Pipeline error: {e}")
-            time.sleep(1)
+
+
+def _conversation_loop(mic):
+    """Continuous conversation — keep listening until 7s silence."""
+    state.in_conversation = True
+    turn = 0
+    
+    try:
+        while True:
+            turn += 1
+            log.info(f"💬 Conversation turn {turn} — listening...")
+            
+            # Record with conversation timeout for no-speech
+            audio = record_command(mic, timeout=MAX_SPEECH_SEC, no_speech_timeout=CONVERSATION_TIMEOUT)
+            
+            if len(audio) < SAMPLE_RATE * 0.3:
+                # No speech detected within timeout → end conversation
+                log.info(f"🔇 No speech for {CONVERSATION_TIMEOUT}s — ending conversation")
+                with _response_lock:
+                    _response_queue.append({
+                        "text": "Εδώ είμαι αν με χρειαστείς.", "lang": "el", "time": time.time()
+                    })
+                return
+            
+            # Transcribe
+            text, lang = transcribe(audio, lang="el")
+            if not text or len(text) < 2:
+                log.info("  (empty transcription, continuing...)")
+                continue
+            
+            lang = detect_language(text)
+            log.info(f"📝 Turn {turn}: \"{text}\" (lang={lang})")
+            
+            # Check for goodbye/exit phrases
+            goodbye_phrases = ["αντίο", "γεια σου", "ευχαριστώ", "bye", "goodbye", "τέλος", "σταμάτα"]
+            if any(g in text.lower() for g in goodbye_phrases):
+                log.info("👋 Goodbye detected — ending conversation")
+                with _response_lock:
+                    _response_queue.append({
+                        "text": "Στην διάθεσή σου! Τα λέμε!", "lang": "el", "time": time.time()
+                    })
+                time.sleep(3)
+                return
+            
+            # Process and respond
+            conversation_turn(mic, text, lang)
+            
+            # Wait for TTS to finish before listening again
+            while state.is_speaking:
+                time.sleep(0.2)
+            
+            # Brief pause after TTS for echo to fade
+            time.sleep(ECHO_COOLDOWN)
+            
+            log.info(f"💬 Ready for next question (silence for {CONVERSATION_TIMEOUT}s to exit)...")
+    finally:
+        state.in_conversation = False
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -961,6 +1009,7 @@ def pipeline_state():
         "listening": state.is_listening,
         "processing": state.is_processing,
         "speaking": state.is_speaking,
+        "in_conversation": state.in_conversation,
     })
 
 @app.route("/wakeword/pause", methods=["POST"])

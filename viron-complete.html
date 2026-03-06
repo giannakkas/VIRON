@@ -853,7 +853,7 @@ setInterval(()=>{
     const txt=document.getElementById("listenText");
     if(s.listening){
       ind.className="listen-indicator active";
-      txt.textContent="🎤 Listening (ReSpeaker)...";
+      txt.textContent="🎤 Listening...";
       txt.style.color="rgba(255,80,80,0.9)";
     }else if(s.processing){
       ind.className="listen-indicator active";
@@ -863,6 +863,10 @@ setInterval(()=>{
       ind.className="listen-indicator speaking";
       txt.textContent="🔊 Speaking...";
       txt.style.color="rgba(100,200,255,0.9)";
+    }else if(s.in_conversation){
+      ind.className="listen-indicator active";
+      txt.textContent="💬 In conversation — just speak...";
+      txt.style.color="rgba(100,255,100,0.9)";
     }else{
       ind.className="listen-indicator wake";
       txt.textContent='Say "Hey VIRON" or press Space';
