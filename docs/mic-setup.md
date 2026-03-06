@@ -3,26 +3,29 @@
 ## Quick Start
 
 ```bash
-# 1. Find your device and best channel
-python3 scripts/audio_probe.py
+# 1. Find your device
+arecord -l
 
-# 2. Set the recommended values in .env
-VIRON_MIC_DEVICE="plughw:2,0"
-VIRON_MIC_CHANNEL=1
+# 2. Set values in .env
+VIRON_MIC_DEVICE="plughw:0,0"
+VIRON_MIC_CHANNEL=0
 
-# 3. Verify services
+# 3. Kill PulseAudio (steals ALSA device)
+pulseaudio --kill; pkill -f arecord; sleep 2
+
+# 4. Verify services
 curl http://127.0.0.1:8085/wakeword/status
 curl -s -X POST http://127.0.0.1:5000/api/listen \
   -H 'Content-Type: application/json' \
-  -d '{"max_duration":6,"silence_duration":0.25,"lang":"en"}'
+  -d '{"max_duration":6,"silence_duration":0.25,"lang":"el"}'
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `VIRON_MIC_DEVICE` | `plughw:2,0` | ALSA capture device. Run `arecord -l` to find card:device. |
-| `VIRON_MIC_CHANNEL` | `1` | Stereo channel: `0`=left (beamformed+AEC), `1`=right (ASR beam). |
+| `VIRON_MIC_DEVICE` | `plughw:0,0` | ALSA capture device. Run `arecord -l` to find card:device. |
+| `VIRON_MIC_CHANNEL` | `0` | Mono channel: `0`=beamformed (XVF3800 outputs mono on ch0). |
 | `VIRON_WAKEWORD_THRESHOLD` | `0.28` | OWW detection sensitivity (0-1). See tuning guide below. |
 | `VIRON_WAKEWORD_ADAPTIVE` | `1` | Enable adaptive threshold (auto-adjusts based on noise level). |
 | `VIRON_LISTEN_CHUNK_MS` | `40` | Audio chunk size for VAD. Lower = faster detection, higher CPU. |
@@ -45,21 +48,42 @@ VIRON_MIC_DEVICE="plughw:2,0"
 # SUBSYSTEM=="sound", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0018", SYMLINK+="respeaker"
 ```
 
-## Choosing Channel 0 vs 1
+## XVF3800 Audio Output
 
-The XVF3800 outputs stereo where:
-- **Channel 0 (left)**: Beamformed + Acoustic Echo Cancellation (AEC). Best if VIRON's speaker is near the mic and you need echo rejection.
-- **Channel 1 (right)**: ASR-optimized beam. Best overall for speech recognition — this is the default and recommended choice.
+**IMPORTANT:** The XVF3800 outputs **mono** beamformed audio on channel 0 (not stereo as some docs suggest). The voice pipeline uses `arecord -c 1` to capture this directly.
 
-Use the audio probe to compare:
+- **Channel 0**: Beamformed + Acoustic Echo Cancellation (AEC) mono output
+- The pipeline reads mono int16 directly: `bytes_needed = frame_length * 2`
+
+### PulseAudio Conflict
+
+PulseAudio grabs the ALSA device exclusively. **Must kill PulseAudio before starting the pipeline:**
 
 ```bash
-# Speak "Hey VIRON" during the recording
+pulseaudio --kill; pkill -f arecord; sleep 2
+```
+
+To permanently disable PulseAudio on Jetson:
+```bash
+# Mask systemd user services
+systemctl --user mask pulseaudio.service pulseaudio.socket
+# Disable autospawn
+mkdir -p ~/.config/pulse
+echo "autospawn = no" > ~/.config/pulse/client.conf
+# Reboot and verify
+reboot
+# After reboot:
+pgrep pulseaudio  # should return nothing
+```
+
+Use the audio probe to verify capture:
+
+```bash
+# Speak "Hey Jarvis" during the recording
 python3 scripts/audio_probe.py --speak --save
 
-# Listen to the saved files:
-# /tmp/viron_probe_ch0_left.wav  (AEC beam)
-# /tmp/viron_probe_ch1_right.wav (ASR beam)
+# Listen to the saved file:
+# /tmp/viron_probe_ch0.wav
 ```
 
 ## Wake Word Threshold Tuning

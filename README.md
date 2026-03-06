@@ -22,25 +22,33 @@ VIRON is an interactive AI-powered robot companion with an animated face, real-t
 
 ```
 VIRON/
-├── viron-complete.html        # Main face UI (wake word, emotions, voice, YouTube)
-├── setup-local.sh             # Ubuntu desktop setup script
-├── run.sh                     # Start everything (Ollama + AI Router + Face Server)
-├── ai-router/                 # Smart AI routing system
-│   ├── main.py                # FastAPI server (port 8000)
-│   ├── ai_router.py           # Complexity analyzer + multi-provider routing
-│   ├── emotion_detector.py    # Text → face emotion mapping
-│   ├── safety_filter.py       # Age-based content filtering
-│   ├── config.py              # Settings from .env
-│   ├── .env.example           # Config template
-│   ├── requirements.txt       # Python dependencies
-│   └── setup.sh               # AI router setup
+├── voice_pipeline.py             # Standalone voice pipeline (Porcupine + Deepgram + Groq)
+├── viron-complete.html           # Main face UI (wake word, emotions, voice, YouTube)
+├── gateway/                      # FastAPI hybrid gateway (port 8080)
+│   ├── main.py                   # Intent routing: Gemma 2B local ↔ cloud (ChatGPT/Claude/Gemini)
+│   ├── config.py                 # System prompt, model config, routing rules
+│   ├── db.py                     # SQLite persistence (profiles, history)
+│   └── safety.py                 # Content safety filter
 ├── backend/
-│   ├── server.py              # Flask backend (proxies to AI router, emotion detection)
-│   ├── config.example.json    # Config template (copy to config.json)
-│   ├── boot.html              # Animated boot splash screen
-│   ├── setup.sh               # Jetson Orin Nano setup script
-│   ├── setup-bootsplash.sh    # Plymouth boot theme installer
-│   └── viron-logo.png         # VIRON logo
+│   ├── server.py                 # Flask backend (port 5000): STT, TTS, face UI serving
+│   ├── viron_ai_router.py        # AI routing logic
+│   ├── viron_faces.py            # Face animation controller
+│   ├── student_profiles.py       # Student profile management
+│   └── voice_verify.py           # Voice verification
+├── wakeword/                     # Custom wake word training (OpenWakeWord)
+│   ├── service.py                # Wake word detection service
+│   └── train_hey_viron.py        # Train custom "Hey VIRON" model
+├── scripts/
+│   ├── setup_autostart.sh        # systemd service setup (backend, gateway, pipeline)
+│   ├── health_check.py           # System health diagnostics
+│   ├── audio_probe.py            # Mic/audio device testing
+│   ├── build_llamacpp.sh         # Build llama.cpp with CUDA for Jetson
+│   └── start_all.sh              # Manual start script
+├── docs/
+│   ├── viron-context-prompt.md   # Full project context for Claude chats
+│   ├── buddy-tutor-spec.md       # Buddy Tutor feature specification
+│   ├── jetson-setup-guide.md     # Jetson Orin Nano setup guide
+│   └── mic-setup.md              # XVF3800 mic configuration
 └── README.md
 ```
 
@@ -48,48 +56,47 @@ VIRON/
 
 | Component | Model |
 |---|---|
-| Compute | NVIDIA Jetson Orin Nano |
-| Display | 10.1" QLED (HDMI) |
-| Camera | Logitech Brio (USB) |
-| Microphone | ReSpeaker Mic Array (USB) |
-| Speakers | Visaton PL 5 RV × 2 |
-| Amplifier | TPA3116 |
-| Power | 21700 batteries + UPS module |
+| Compute | NVIDIA Jetson Orin Nano 8GB (JetPack 6.2.2, CUDA 12.6) |
+| Display | Waveshare 10.1" QLED (1280×720, HDMI) |
+| Microphone | ReSpeaker XVF3800 4-mic USB array (mono beamformed) |
+| Speaker | Connected to XVF3800 headphone jack |
 
 ## 🚀 Quick Setup
 
-### Local Development (Ubuntu Desktop)
+### Jetson Orin Nano (Production)
 
 ```bash
 # 1. Clone the repo
 git clone https://github.com/giannakkas/VIRON.git
 cd VIRON
 
-# 2. Run local setup (installs Flask, OpenCV)
-sudo bash setup-local.sh
+# 2. Create .env with API keys
+cp backend/config.example.json .env
+# Edit .env with: OPENAI_API_KEY, PICOVOICE_ACCESS_KEY, GROQ_API_KEY, DEEPGRAM_API_KEY
 
-# 3. Setup AI Router (installs FastAPI, configures API keys)
-bash ai-router/setup.sh
+# 3. Build llama.cpp with CUDA
+bash scripts/build_llamacpp.sh
 
-# 4. Start everything
-./run.sh
+# 4. Setup systemd services
+sudo bash scripts/setup_autostart.sh
 
-# 5. Open in browser
-# http://localhost:5000
+# 5. Kill PulseAudio and start
+pulseaudio --kill; pkill -f arecord; sleep 2
+sudo systemctl start viron-backend viron-gateway
+sleep 3
+sudo systemctl start viron-pipeline
+
+# 6. Check logs
+sudo journalctl -u viron-pipeline -f
 ```
 
-### Production (Jetson Orin Nano)
+### Test Wake Word
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/giannakkas/VIRON.git
-cd VIRON
-
-# 2. Run Jetson setup (installs everything + kiosk autostart)
-sudo bash backend/setup.sh
-
-# 3. Reboot — VIRON starts automatically
-sudo reboot
+sudo systemctl stop viron-pipeline
+pulseaudio --kill; pkill -f arecord; sleep 2
+cd ~/VIRON && python3 voice_pipeline.py 2>&1 | grep -v "GET /\|werkzeug\|snap\|SELinux"
+# Say "Hey Jarvis" → should see: WAKE WORD detected (porcupine, score=1.00)
 ```
 
 ## 🎤 How It Works
@@ -103,29 +110,36 @@ sudo reboot
 
 ## 🧠 AI Architecture
 
+### Voice Pipeline (primary — `voice_pipeline.py`)
 ```
-Student speaks → Face UI (port 5000) → Flask Backend → AI Router (port 8000)
-                                                              │
-                                                    ┌────────┴────────┐
-                                                    ▼                 ▼
-                                              [Simple Q]        [Complex Q]
-                                                    │                 │
-                                              Ollama Local      Cloud AI
-                                              (phi3 3.8B)   ┌────┼────┐
-                                                    │        ▼    ▼    ▼
-                                                    │     Claude Gemini ChatGPT
-                                                    └────────┬────────┘
-                                                             ▼
-                                                    Safety Filter + Emotion
-                                                             ▼
-                                                    Voice Response + Face Animation
+"Hey Jarvis" → Porcupine Wake Word → Silero VAD → Deepgram STT
+                                                        ↓
+                                              Route: simple → Groq (llama-3.3-70b)
+                                                     complex → Claude / ChatGPT
+                                                        ↓
+                                              OpenAI TTS → Speaker
 ```
 
-- **Smart Routing**: Simple questions → local Ollama (fast, offline). Complex → cloud (Claude/Gemini/ChatGPT)
-- **Confidence Gating**: If local LLM seems uncertain, auto-escalates to cloud
-- **Safety Filter**: Age-based content filtering (kids 5-10, teens 11-15, young adults 16-18, adults 18+)
-- **Response Cache**: SQLite caching to avoid repeated API calls
-- **Emotion Detection**: Real-time student facial analysis via OpenCV
+### Gateway (browser-based — `gateway/main.py`)
+```
+Browser mic → Silero VAD → Flask STT → Gateway (port 8080)
+                                              ↓
+                                    Gemma 2B Router (GPU, port 8081)
+                                     ┌────────┴────────┐
+                                     ▼                  ▼
+                               LOCAL (Gemma 2B)    CLOUD (ChatGPT/Claude/Gemini)
+                                     └────────┬────────┘
+                                              ▼
+                                    edge-tts → Browser audio + face animation
+```
+
+- **Wake Word**: Porcupine via Picovoice ("jarvis"), sensitivity 0.99
+- **STT**: Deepgram streaming (~300ms) with whisper.cpp GPU fallback
+- **LLM**: Groq (fast cloud) for simple, Claude/ChatGPT for complex queries
+- **TTS**: OpenAI TTS (voice pipeline) or edge-tts (browser path)
+- **On-device**: Gemma 2B on GPU (only model that fits 8GB shared RAM)
+- **Safety Filter**: Age-based content filtering
+- **Language**: Greek primary, English supported
 
 ## 🎭 Emotion List
 

@@ -35,6 +35,9 @@ svg{width:min(95vw,800px);height:auto;min-height:40vh;-webkit-tap-highlight-colo
 /* Subtitle */
 .subtitle{position:fixed;bottom:35px;left:50%;transform:translateX(-50%);max-width:85vw;text-align:center;font-size:16px;color:rgba(255,255,255,0.85);background:rgba(0,0,0,0.6);padding:10px 24px;border-radius:20px;backdrop-filter:blur(10px);opacity:0;transition:opacity 0.4s;pointer-events:none;line-height:1.5}
 .subtitle.visible{opacity:1}
+/* Audio waveform canvas */
+#audioWaveform{position:fixed;bottom:55px;left:50%;transform:translateX(-50%);width:min(70vw,500px);height:40px;pointer-events:none;z-index:10;opacity:0;transition:opacity 0.4s}
+#audioWaveform.active{opacity:1}
 /* Engagement */
 .engagement-bar{position:fixed;top:12px;left:12px;display:none;align-items:center;gap:8px;z-index:50;background:rgba(0,0,0,0.5);padding:4px 10px;border-radius:20px;font-size:11px}
 .eng-dot{width:8px;height:8px;border-radius:50%;transition:background 0.5s}
@@ -303,6 +306,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 </div>
 <div class="wb-overlay" id="wb" onclick="if(wbO&&!wbPresenting)closeWB()"><div class="wb-bg"></div><div class="wb-hdr"><div class="wb-title">📝 <span id="wbt"></span></div><button class="wb-close" id="wbCloseBtn" onclick="closeWB()">✕ Back</button></div><div class="wb-content" id="wbc"></div><div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:13px;color:#999;font-style:italic" id="wbCloseHint">Say "OK" or tap anywhere to close</div></div>
 <div class="yt-container" id="ytC"><div class="yt-header"><span class="yt-title" id="ytT">♪</span><button class="yt-close" onclick="document.getElementById('ytP').src='';document.getElementById('ytC').classList.remove('visible')">✕</button></div><iframe id="ytP" width="280" height="158" src="" allow="autoplay;encrypted-media" allowfullscreen style="border:none;border-radius:10px"></iframe></div>
+<canvas id="audioWaveform" width="500" height="40"></canvas>
 <div class="listen-indicator wake" id="listenInd">
   <div class="listen-bars"><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div></div>
   <span class="listen-text" id="listenText">Say "Hey VIRON" or press Space</span>
@@ -379,14 +383,14 @@ setInterval(()=>{blink=true;setTimeout(()=>blink=false,emo==="sleepy"?400:150)},
 document.addEventListener("mousemove",e=>{lx=((e.clientX-innerWidth/2)/(innerWidth/2))*8;ly=((e.clientY-innerHeight/2)/(innerHeight/2))*6});
 
 let tAn=null;
-function startT(){talking=true;if(tAn)return;(function a(){tTime+=.12;tO=Math.min(1,Math.max(0,Math.sin(tTime*2.8)*.4+Math.sin(tTime*4.5)*.2+Math.sin(tTime*1.2)*.15)*1.4);tAn=requestAnimationFrame(a)})()}
-function stopT(){talking=false;cancelAnimationFrame(tAn);tAn=null;(function c(){tO*=.85;if(tO>.02)requestAnimationFrame(c);else tO=0})()}
+function startT(){talking=true;if(typeof wfMode!=='undefined')wfMode='speaking';if(tAn)return;(function a(){tTime+=.12;tO=Math.min(1,Math.max(0,Math.sin(tTime*2.8)*.4+Math.sin(tTime*4.5)*.2+Math.sin(tTime*1.2)*.15)*1.4);tAn=requestAnimationFrame(a)})()}
+function stopT(){talking=false;if(typeof wfMode!=='undefined')wfMode='idle';cancelAnimationFrame(tAn);tAn=null;(function c(){tO*=.85;if(tO>.02)requestAnimationFrame(c);else tO=0})()}
 
 function showSub(text){const el=document.getElementById("subtitle");el.textContent=text;el.classList.add("visible");clearTimeout(subTimer);subTimer=setTimeout(()=>el.classList.remove("visible"),Math.max(3000,text.length*60))}
 function updateListenUI(){
   const ind=document.getElementById("listenInd");
   const txt=document.getElementById("listenText");
-  if(voiceState===VOICE_HEARING){ind.className="listen-indicator speaking";txt.textContent="Listening..."}
+  if(voiceState===VOICE_HEARING){ind.className="listen-indicator speaking";txt.textContent="Listening...";if(typeof wfMode!=='undefined')wfMode='listening'}
   else if(inConversation&&(voiceState===VOICE_IDLE||voiceState===VOICE_ACTIVATED)){
     // Always show red bars during conversation
     ind.className="listen-indicator active";txt.textContent="Listening...";
@@ -395,8 +399,8 @@ function updateListenUI(){
     ind.className="listen-indicator wake";
     txt.textContent='Say "Hey VIRON" or press Space';
   }
-  else if(voiceState===VOICE_ACTIVATED){ind.className="listen-indicator active";txt.textContent="Listening..."}
-  else if(voiceState===VOICE_PROCESSING){ind.className="listen-indicator active";txt.textContent="Thinking..."}
+  else if(voiceState===VOICE_ACTIVATED){ind.className="listen-indicator active";txt.textContent="Listening...";if(typeof wfMode!=='undefined')wfMode='listening'}
+  else if(voiceState===VOICE_PROCESSING){ind.className="listen-indicator active";txt.textContent="Thinking...";if(typeof wfMode!=='undefined')wfMode='thinking'}
   else{ind.className="listen-indicator";ind.style.opacity="0";txt.textContent=""}
 }
 
@@ -841,26 +845,104 @@ setInterval(()=>{
       ind.className="listen-indicator active";
       txt.textContent="🎤 Listening...";
       txt.style.color="rgba(255,80,80,0.9)";
+      wfMode='listening';
     }else if(s.processing){
       ind.className="listen-indicator active";
       txt.textContent="🧠 Thinking...";
       txt.style.color="rgba(255,200,50,0.9)";
+      wfMode='thinking';
     }else if(pipelineSpeaking||isSpeaking){
       ind.className="listen-indicator speaking";
       txt.textContent="🔊 Speaking...";
       txt.style.color="rgba(100,200,255,0.9)";
+      wfMode='speaking';
     }else if(s.in_conversation){
       ind.className="listen-indicator active";
       txt.textContent="💬 In conversation — just speak...";
       txt.style.color="rgba(100,255,100,0.9)";
+      wfMode='idle';
     }else{
       ind.className="listen-indicator wake";
       txt.textContent='Say "Hey VIRON" or press Space';
       txt.style.color="";
+      wfMode='idle';
     }
   })
   .catch(()=>{});
 },300);
+
+// ===== AUDIO WAVEFORM ANIMATION =====
+let wfMode='idle'; // idle, listening, speaking, thinking
+const wfCanvas=document.getElementById('audioWaveform');
+const wfCtx=wfCanvas.getContext('2d');
+let wfTime=0;
+const WF_COLORS={listening:'rgba(255,60,60,',speaking:'rgba(255,40,40,',thinking:'rgba(255,180,40,'};
+
+function drawWaveform(){
+  wfTime+=0.04;
+  const w=wfCanvas.width, h=wfCanvas.height, cy=h/2;
+  wfCtx.clearRect(0,0,w,h);
+  
+  if(wfMode==='idle'){
+    wfCanvas.classList.remove('active');
+    requestAnimationFrame(drawWaveform);
+    return;
+  }
+  wfCanvas.classList.add('active');
+  
+  const color=WF_COLORS[wfMode]||WF_COLORS.listening;
+  let amp,speed,lines;
+  
+  if(wfMode==='speaking'){
+    amp=14; speed=3.5; lines=3;
+  }else if(wfMode==='listening'){
+    amp=8; speed=2.0; lines=2;
+  }else{ // thinking
+    amp=5; speed=1.2; lines=2;
+  }
+
+  for(let l=0;l<lines;l++){
+    const phase=l*1.2;
+    const opacity=1-l*0.25;
+    const lineW=3-l*0.5;
+    wfCtx.beginPath();
+    wfCtx.strokeStyle=color+opacity+')';
+    wfCtx.lineWidth=lineW;
+    wfCtx.lineCap='round';
+    
+    for(let x=0;x<w;x++){
+      const nx=x/w;
+      // Taper at edges
+      const edge=Math.sin(nx*Math.PI);
+      const y=cy + edge*(
+        Math.sin(nx*8+wfTime*speed+phase)*amp*0.6 +
+        Math.sin(nx*12+wfTime*speed*1.7+phase)*amp*0.3 +
+        Math.sin(nx*20+wfTime*speed*2.5+phase)*amp*0.1
+      );
+      if(x===0)wfCtx.moveTo(x,y);
+      else wfCtx.lineTo(x,y);
+    }
+    wfCtx.stroke();
+  }
+  
+  // Glow effect for speaking
+  if(wfMode==='speaking'){
+    wfCtx.beginPath();
+    wfCtx.strokeStyle=color+'0.15)';
+    wfCtx.lineWidth=12;
+    wfCtx.lineCap='round';
+    for(let x=0;x<w;x++){
+      const nx=x/w;
+      const edge=Math.sin(nx*Math.PI);
+      const y=cy+edge*(Math.sin(nx*8+wfTime*speed)*amp*0.6+Math.sin(nx*12+wfTime*speed*1.7)*amp*0.3);
+      if(x===0)wfCtx.moveTo(x,y);else wfCtx.lineTo(x,y);
+    }
+    wfCtx.stroke();
+  }
+  
+  requestAnimationFrame(drawWaveform);
+}
+requestAnimationFrame(drawWaveform);
 
 function startOWWPolling(){
   if(owwPolling)return;

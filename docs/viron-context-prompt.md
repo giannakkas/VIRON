@@ -14,27 +14,42 @@ VIRON is an AI companion robot / study buddy for kids and teens. It runs on a **
 
 ## ARCHITECTURE
 
+### Path A: Voice Pipeline (voice_pipeline.py, port 8085)
+Primary path — standalone voice loop on Jetson:
+```
+Student speaks → arecord (mono, ch0) → Porcupine Wake Word ("jarvis")
+                                              ↓
+                                     Silero VAD (speech detection)
+                                              ↓
+                                     WAV recording (auto-stop on silence)
+                                              ↓
+                                     Deepgram STT (~300ms, Greek/English)
+                                     or whisper.cpp GPU (fallback)
+                                              ↓
+                                     Route: simple → Groq (llama-3.3-70b)
+                                            complex → Claude / ChatGPT
+                                              ↓
+                                     OpenAI TTS → speaker playback
+                                     + face animation via /api/tts
+```
+
+### Path B: Browser-based (viron-complete.html → gateway)
+Secondary path — via web browser on display:
 ```
 Student speaks → Browser (Silero VAD) → WAV → Flask STT (/api/stt)
                                                     ↓
-                                         OpenAI Whisper API (primary, accurate Greek)
+                                         OpenAI Whisper API (primary)
                                          or local faster-whisper (fallback)
-                                                    ↓
-                                         Transcribed text
                                                     ↓
                                     Gateway (/v1/chat, port 8080)
                                          ┌──────┴──────┐
-                                    Gemma 2B Router    (intent classification, GPU, <1s)
+                                    Gemma 2B Router    (intent classification, GPU)
                                          ┌──────┴──────┐
                                     LOCAL              CLOUD
                                   (Gemma 2B)    ┌──────┼──────┐
                                                ChatGPT  Claude  Gemini
                                                     ↓
-                                         Response with [emotion] tag
-                                                    ↓
-                                    Flask TTS (edge-tts, Greek/English)
-                                                    ↓
-                                    Browser plays audio + animates face
+                                    Flask TTS (edge-tts) → Browser plays audio
 ```
 
 ### Routing Logic
@@ -52,6 +67,17 @@ Jetson Orin Nano has 8GB shared RAM. **Only Gemma 2B fits on GPU** (Mistral 7B c
 ---
 
 ## KEY FILES
+
+### `voice_pipeline.py` (~1100 lines) — Standalone Voice Pipeline
+- Port 8085
+- Porcupine wake word detection ("jarvis", via Picovoice)
+- Silero VAD for speech/silence detection
+- STT cascade: Deepgram API (~300ms) > whisper.cpp GPU > local CPU
+- LLM routing: simple queries → Groq (llama-3.3-70b), complex → Claude/ChatGPT
+- TTS: OpenAI TTS via backend `/api/tts`
+- `MicStream` class: reads **mono** audio via `arecord -c 1` from XVF3800
+- `FORCE_CLOUD=0` — Gemma 2B local, `FORCE_CLOUD=1` — all cloud
+- Flask status endpoints: `/wakeword/status`, `/pipeline/status`
 
 ### `gateway/main.py` (668 lines) — FastAPI Hybrid Gateway
 - Port 8080
@@ -110,9 +136,20 @@ Jetson Orin Nano has 8GB shared RAM. **Only Gemma 2B fits on GPU** (Mistral 7B c
 | Mistral 7B | 8082 | ❌ OOM | Doesn't fit in 8GB with router |
 | Gateway (FastAPI) | 8080 | ✅ Running | Hybrid routing |
 | Flask (backend) | 5000 | ✅ Running | STT/TTS/Face UI |
+| Voice Pipeline | 8085 | ✅ Running | Porcupine + Deepgram + Groq |
 
-### Start Commands
+### systemd Services
+```
+viron-backend   — Flask backend (port 5000)
+viron-gateway   — FastAPI gateway (port 8080)
+viron-pipeline  — Voice pipeline (port 8085), kills PulseAudio before start
+```
+
+### Start Commands (manual)
 ```bash
+# Kill PulseAudio first (steals ALSA mic device)
+pulseaudio --kill; pkill -f arecord; sleep 2
+
 cd ~/VIRON
 source .env
 export OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DB_PATH ROUTER_URL TUTOR_URL GATEWAY_PORT FORCE_CLOUD
@@ -125,6 +162,19 @@ cd ~/VIRON/gateway && python3 main.py > /tmp/viron_gateway.log 2>&1 &
 
 # Flask
 cd ~/VIRON && python3 backend/server.py > /tmp/viron_flask.log 2>&1 &
+
+# Voice Pipeline
+cd ~/VIRON && python3 voice_pipeline.py > /tmp/viron_pipeline.log 2>&1 &
+```
+
+### Start via systemd
+```bash
+pulseaudio --kill; pkill -f arecord; sleep 2
+sudo systemctl start viron-backend viron-gateway
+sleep 3
+sudo systemctl start viron-pipeline
+# Check logs:
+sudo journalctl -u viron-pipeline -f --no-pager | grep -v "GET /wakeword\|GET /pipeline\|snap\|SELinux"
 ```
 
 ### .env File
@@ -132,11 +182,18 @@ cd ~/VIRON && python3 backend/server.py > /tmp/viron_flask.log 2>&1 &
 OPENAI_API_KEY=sk-proj-...
 ANTHROPIC_API_KEY=sk-ant-...
 GEMINI_API_KEY=...
+PICOVOICE_ACCESS_KEY=L4tobyF21I+e+rpBfmtA7SmUpfWbKk5EPqwnLYNXKFD6yr5hxnr3Zg==
+GROQ_API_KEY=gsk_...
+DEEPGRAM_API_KEY=...
 ROUTER_URL=http://localhost:8081
 TUTOR_URL=http://localhost:8082
 DB_PATH=/home/test/VIRON/data/viron.db
 GATEWAY_PORT=8080
 FORCE_CLOUD=0
+VIRON_WAKE_KEYWORD=jarvis
+VIRON_WAKE_SENSITIVITY=0.99
+VIRON_MIC_DEVICE=plughw:0,0
+VIRON_MIC_CHANNEL=0
 ```
 
 ---
@@ -156,17 +213,44 @@ The client-side `EMOTION_MAP` maps Greek→English:
 
 ---
 
+## CRITICAL FIXES APPLIED (2026-03-06)
+
+1. **MicStream mono fix** — XVF3800 outputs mono beamformed on ch0:
+   - `arecord -c 1` (was `-c 2`)
+   - `bytes_needed = frame_length * 2` (was `* 4`)
+   - `mono = np.frombuffer(raw, dtype=np.int16)` — direct, no stereo extraction
+   - Default: `VIRON_MIC_DEVICE=plughw:0,0`, `VIRON_MIC_CHANNEL=0`
+
+2. **PulseAudio conflict** — PulseAudio user service steals ALSA mic device:
+   - Pipeline systemd service `ExecStartPre` kills PulseAudio + arecord, waits 4s
+   - Permanent fix: `systemctl --user mask pulseaudio.service pulseaudio.socket` + `autospawn = no` in `~/.config/pulse/client.conf`
+   - Status: needs verification after reboot
+
+3. **Porcupine CPU patch** — Jetson Cortex-A78AE (CPU ID 0xd42) not in pvporcupine's CPU list:
+   - Patched `_util.py` in pvporcupine package to add 0xd42 → cortex-a78 mapping
+   - Path: `/usr/local/lib/python3.10/dist-packages/pvporcupine/_util.py`
+
+4. **~/.asoundrc** — set to `type plug, slave hw:0,0` for speaker output through XVF3800 headphone jack
+
+---
+
 ## KNOWN ISSUES / CURRENT STATUS
 
-1. **Greek STT accuracy** — Local Whisper (small model) is terrible for Greek. OpenAI Whisper API (large-v3) is much better. The server tries OpenAI first, falls back to local. Check OPENAI_API_KEY is exported.
+1. **PulseAudio respawn** — PulseAudio user service respawns after reboot and steals mic. Masked services + disabled autospawn, but needs reboot verification.
 
-2. **8GB RAM limit** — Only one LLM fits on GPU. Gemma 2B handles both routing and simple chat. Complex stuff goes to cloud.
+2. **False wake words** — VIRON sometimes activates without trigger. Porcupine sensitivity set to 0.99 to reduce this.
 
-3. **Language detection** — If Whisper hears English instead of Greek, the whole pipeline responds in English. The client should send `lang=el` hint. The system prompt tells cloud to match the student's language.
+3. **Greek language detection** — Whisper/Deepgram sometimes transcribes Greek as English, causing English response chain.
 
-4. **TTS voices** — Greek: el-GR-AthinaNeural, English: en-US-GuyNeural. Edge-tts is free and good quality.
+4. **English with Greek accent** — When STT misdetects language, VIRON responds in English with Greek intonation.
 
-5. **Chrome mic access** — Remote browsers need `chrome://flags/#unsafely-treat-insecure-origin-as-secure` set to `http://JETSON-IP:5000` because it's not HTTPS.
+5. **ANTHROPIC_API_KEY** — Not yet set in `.env` (needed for Claude tutoring mode in gateway).
+
+6. **8GB RAM limit** — Only one LLM fits on GPU. Gemma 2B handles routing + simple chat. Complex queries go to cloud (Groq/Claude/ChatGPT).
+
+7. **TTS voices** — Greek: el-GR-AthinaNeural, English: en-US-GuyNeural via edge-tts (free).
+
+8. **Chrome mic access** — Remote browsers need `chrome://flags/#unsafely-treat-insecure-origin-as-secure` set to `http://JETSON-IP:5000` (no HTTPS).
 
 ---
 
@@ -175,11 +259,16 @@ The client-side `EMOTION_MAP` maps Greek→English:
 - **Jetson Orin Nano 8GB Developer Kit** (aarch64)
 - JetPack 6.2.2 (Ubuntu 22.04, CUDA 12.6, Linux 5.15)
 - NVMe SSD
-- CUDA arch: SM 8.7 (Ampere)
+- CUDA arch: SM 8.7 (Ampere), CPU: Cortex-A78AE (ID 0xd42)
 - llama.cpp built with: `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=87`
 - Super Mode enabled: `sudo nvpmodel -m 0 && sudo jetson_clocks`
 - Tailscale IP: 100.66.223.46
-- SSH: `ssh test@100.66.223.46`
+- SSH: `ssh test@100.66.223.46` (password: 1234)
+- Local SSH: `ssh test@192.168.100.205` (password: 1234)
+- **Display**: Waveshare 10.1" QLED (1280×720) — animated face UI
+- **Mic**: ReSpeaker XVF3800 4-mic USB array (card 0, `plughw:0,0`, mono beamformed)
+- **Speaker**: Connected to XVF3800 headphone jack
+- **~/.asoundrc**: `type plug, slave hw:0,0` for speaker output
 
 ---
 
@@ -193,12 +282,17 @@ The client-side `EMOTION_MAP` maps Greek→English:
 
 ## PENDING WORK
 
-- Fix Greek language detection (STT should default to Greek, response should be Greek)
+- ✅ ~~Mono mic fix (XVF3800 beamformed output)~~ — Done 2026-03-06
+- ✅ ~~Porcupine CPU patch for Jetson Cortex-A78AE~~ — Done 2026-03-06
+- ✅ ~~PulseAudio kill in systemd service~~ — Done 2026-03-06
+- 🔄 Verify PulseAudio stays dead after reboot (mask + autospawn=no)
+- 🔄 Reduce false wake word triggers (sensitivity at 0.99)
+- Fix Greek language detection (STT should default to Greek)
+- Set ANTHROPIC_API_KEY for Claude tutoring mode
 - Age-mode personality switching (from Buddy Tutor spec)
 - Memory injection from student profile
 - Session summary generation
 - Points/achievements system
-- systemd auto-start service on Jetson boot
 - Production: HTTPS with self-signed cert for mic access
 - Physical robot housing design
 

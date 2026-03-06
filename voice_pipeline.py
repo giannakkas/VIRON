@@ -13,7 +13,7 @@ Environment:
   PICOVOICE_ACCESS_KEY  — required for Porcupine (get free at picovoice.ai)
   OPENAI_API_KEY        — for cloud STT fallback and LLM
   VIRON_MIC_DEVICE      — ALSA device (default: plughw:0,0)
-  VIRON_MIC_CHANNEL     — 0=beamformed, 1=ASR beam (default: 1)
+  VIRON_MIC_CHANNEL     — 0=beamformed mono (default: 0, XVF3800 outputs mono on ch0)
 
 Usage:
   source ~/VIRON/.env
@@ -623,7 +623,7 @@ def speak(text, lang="el"):
 # ═══════════════════════════════════════════════════════════
 
 class MicStream:
-    """Streams audio from ALSA device, extracts single channel."""
+    """Streams mono audio from ALSA device (XVF3800 beamformed output)."""
     
     def __init__(self):
         self.proc = None
@@ -634,7 +634,7 @@ class MicStream:
                "-r", str(SAMPLE_RATE), "-c", "1", "-t", "raw"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.running = True
-        log.info(f"🎤 Mic started: {ALSA_DEVICE} ch{MIC_CHANNEL}")
+        log.info(f"🎤 Mic started: {ALSA_DEVICE} (mono)")
     
     def read_frame(self, frame_length=FRAME_LENGTH):
         """Read one frame of mono audio. Returns int16 numpy array."""
