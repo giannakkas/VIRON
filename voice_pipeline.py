@@ -242,10 +242,11 @@ def vad_is_speech(audio_int16, threshold=0.5):
         return rms > 150
 
 # ═══════════════════════════════════════════════════════════
-# 3. WHISPER STT (whisper.cpp GPU > cloud > faster-whisper CPU)
+# 3. STT: Deepgram streaming (~300ms) > whisper.cpp GPU > local CPU
 # ═══════════════════════════════════════════════════════════
 
 whisper_model = None
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 WHISPER_CPP_BIN = os.environ.get("VIRON_WHISPER_CPP", os.path.expanduser("~/whisper.cpp/build/bin/whisper-cli"))
 WHISPER_CPP_MODEL = os.environ.get("VIRON_WHISPER_MODEL_PATH", os.path.expanduser("~/whisper.cpp/models/ggml-small.bin"))
 WHISPER_CPP_AVAILABLE = os.path.exists(WHISPER_CPP_BIN) and os.path.exists(WHISPER_CPP_MODEL)
@@ -253,45 +254,73 @@ WHISPER_CPP_AVAILABLE = os.path.exists(WHISPER_CPP_BIN) and os.path.exists(WHISP
 def init_whisper():
     global whisper_model, WHISPER_CPP_AVAILABLE
     
-    # Check whisper.cpp GPU first
-    if WHISPER_CPP_AVAILABLE:
-        log.info(f"✅ whisper.cpp GPU ready: {WHISPER_CPP_BIN}")
-        return True
-    else:
-        log.info(f"whisper.cpp not found at {WHISPER_CPP_BIN}, checking faster-whisper...")
+    if DEEPGRAM_API_KEY:
+        log.info(f"✅ Deepgram STT ready (streaming, ~300ms)")
     
-    # Fallback to faster-whisper (CPU)
+    if WHISPER_CPP_AVAILABLE:
+        log.info(f"✅ whisper.cpp GPU ready (offline fallback)")
+    
+    # Also try loading faster-whisper as last resort
     try:
         from faster_whisper import WhisperModel
-        device = "cpu"
-        compute_type = "int8"
-        log.info(f"Loading faster-whisper 'small' on {device} ({compute_type})...")
-        whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
-        log.info(f"✅ faster-whisper ready: small on {device}")
-        return True
+        whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+        log.info(f"✅ faster-whisper CPU ready (offline fallback)")
+    except:
+        pass
+    
+    return bool(DEEPGRAM_API_KEY) or WHISPER_CPP_AVAILABLE or whisper_model is not None
+
+
+def _transcribe_deepgram(wav_path, lang="el"):
+    """Transcribe using Deepgram API. ~300ms, best accuracy for Greek."""
+    try:
+        import requests
+        t0 = time.time()
+        
+        with open(wav_path, 'rb') as f:
+            audio_data = f.read()
+        
+        resp = requests.post(
+            "https://api.deepgram.com/v1/listen",
+            headers={
+                "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                "Content-Type": "audio/wav",
+            },
+            params={
+                "model": "nova-2",
+                "language": lang or "el",
+                "smart_format": "true",
+                "punctuate": "true",
+            },
+            data=audio_data,
+            timeout=10,
+        )
+        
+        ms = int((time.time() - t0) * 1000)
+        
+        if resp.status_code == 200:
+            result = resp.json()
+            text = result.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("transcript", "").strip()
+            confidence = result.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("confidence", 0)
+            log.info(f"⚡ Deepgram ({ms}ms, conf={confidence:.2f}): \"{text[:80]}\"")
+            return text, lang
+        else:
+            log.warning(f"Deepgram error {resp.status_code}: {resp.text[:100]}")
+            return None, None
     except Exception as e:
-        log.warning(f"⚠ Local Whisper not available: {e}")
-        log.warning("  Will use OpenAI cloud STT only")
-        return False
+        log.warning(f"Deepgram failed: {e}")
+        return None, None
 
 
 def _transcribe_whisper_cpp(wav_path, lang=None):
-    """Transcribe using whisper.cpp with GPU acceleration. ~200-500ms."""
+    """Transcribe using whisper.cpp with GPU. ~300-500ms offline."""
     cmd = [
-        WHISPER_CPP_BIN,
-        "-m", WHISPER_CPP_MODEL,
-        "-f", wav_path,
-        "--no-prints",
-        "-t", "4",           # threads
-        "--no-timestamps",
-        "-otxt",             # output text only
+        WHISPER_CPP_BIN, "-m", WHISPER_CPP_MODEL,
+        "-f", wav_path, "--no-prints", "-t", "4", "--no-timestamps", "-otxt",
     ]
-    # Map language codes for whisper.cpp
     if lang:
-        # whisper.cpp uses full names or ISO codes
         lang_map = {"el": "el", "en": "en", "el-GR": "el", "en-US": "en"}
-        wlang = lang_map.get(lang, lang)
-        cmd.extend(["-l", wlang])
+        cmd.extend(["-l", lang_map.get(lang, lang)])
     
     try:
         t0 = time.time()
@@ -299,32 +328,34 @@ def _transcribe_whisper_cpp(wav_path, lang=None):
         ms = int((time.time() - t0) * 1000)
         
         if result.returncode == 0:
-            # whisper.cpp outputs to stdout or .txt file
             text = result.stdout.strip()
             if not text:
-                # Try reading the .txt output file
                 txt_path = wav_path + ".txt"
                 if os.path.exists(txt_path):
                     text = open(txt_path).read().strip()
                     os.unlink(txt_path)
-            
-            log.info(f"⚡ whisper.cpp GPU ({ms}ms): \"{text[:80]}\"")
+            log.info(f"🖥️ whisper.cpp ({ms}ms): \"{text[:80]}\"")
             return text, lang or "auto"
-        else:
-            log.warning(f"whisper.cpp error: {result.stderr[:200]}")
-            return None, None
-    except subprocess.TimeoutExpired:
-        log.warning("whisper.cpp timed out")
         return None, None
     except Exception as e:
         log.warning(f"whisper.cpp failed: {e}")
         return None, None
 
 
-def transcribe(audio_int16, lang=None):
-    """Transcribe audio — whisper.cpp GPU > cloud Whisper > local CPU."""
+def _check_internet():
+    """Quick internet check (~100ms)."""
+    try:
+        import requests
+        requests.head("https://api.deepgram.com", timeout=1)
+        return True
+    except:
+        return False
+
+
+def transcribe(audio_int16, lang="el"):
+    """Transcribe: Deepgram (~300ms) > whisper.cpp GPU (~500ms) > local CPU (~3s)."""
     
-    # Save audio to WAV for all methods
+    # Save audio to WAV
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
         with wave.open(tmp, 'wb') as wf:
@@ -334,14 +365,19 @@ def transcribe(audio_int16, lang=None):
             wf.writeframes(audio_int16.tobytes())
     
     try:
-        # 1. whisper.cpp GPU (~200-500ms) — fastest
-        if WHISPER_CPP_AVAILABLE:
-            text, detected_lang = _transcribe_whisper_cpp(wav_path, lang)
+        # 1. Deepgram (~300ms, best accuracy for Greek)
+        if DEEPGRAM_API_KEY:
+            text, detected = _transcribe_deepgram(wav_path, lang)
             if text:
-                return text, detected_lang
-            log.warning("whisper.cpp failed, trying cloud...")
+                return text, detected
         
-        # 2. Cloud Whisper (~1s) — fast, needs internet
+        # 2. whisper.cpp GPU (~500ms, offline)
+        if WHISPER_CPP_AVAILABLE:
+            text, detected = _transcribe_whisper_cpp(wav_path, lang)
+            if text:
+                return text, detected
+        
+        # 3. Cloud Whisper fallback (~1s)
         openai_key = os.environ.get("OPENAI_API_KEY", "")
         if openai_key:
             try:
@@ -359,14 +395,12 @@ def transcribe(audio_int16, lang=None):
                 ms = int((time.time() - t0) * 1000)
                 if resp.status_code == 200:
                     text = resp.json().get("text", "").strip()
-                    log.info(f"☁️ Cloud Whisper ({ms}ms): \"{text[:80]}\"")
+                    log.info(f"☁️ OpenAI Whisper ({ms}ms): \"{text[:80]}\"")
                     return text, lang or "auto"
-                else:
-                    log.warning(f"Cloud Whisper error {resp.status_code}")
-            except Exception as e:
-                log.warning(f"Cloud STT failed: {e}")
+            except:
+                pass
         
-        # 3. Local faster-whisper CPU (~3s) — slowest, always works
+        # 4. Local faster-whisper CPU (~3s, always works)
         if whisper_model is not None:
             try:
                 audio_float = audio_int16.astype(np.float32) / 32768.0
@@ -377,7 +411,7 @@ def transcribe(audio_int16, lang=None):
                 )
                 text = " ".join(s.text.strip() for s in segments).strip()
                 ms = int((time.time() - t0) * 1000)
-                log.info(f"🏠 Local CPU Whisper ({ms}ms): \"{text[:80]}\"")
+                log.info(f"🐌 Local CPU ({ms}ms): \"{text[:80]}\"")
                 return text, info.language
             except Exception as e:
                 log.error(f"Local Whisper error: {e}")
@@ -385,10 +419,8 @@ def transcribe(audio_int16, lang=None):
         log.error("❌ No STT available")
         return "", ""
     finally:
-        try:
-            os.unlink(wav_path)
-        except:
-            pass
+        try: os.unlink(wav_path)
+        except: pass
 
 # ═══════════════════════════════════════════════════════════
 # 4. LLM (via Gateway)
@@ -714,6 +746,12 @@ def conversation_turn(mic, text, lang):
     """Handle one conversation turn with smart routing + streaming."""
     state.is_processing = True
     try:
+        # Check internet first
+        if not _check_internet():
+            log.warning("⚠ No internet connection!")
+            speak("Σε παρακαλώ σύνδεσέ με με το ίντερνετ για να σε βοηθήσω.", lang="el")
+            return
+        
         use_claude = _needs_claude(text)
         
         # Try streaming for speed
@@ -840,7 +878,7 @@ def main_loop(mic):
     log.info("🤖 VIRON Voice Pipeline Active")
     log.info(f"   Wake: Porcupine ({wake_name})")
     log.info(f"   VAD: {'Silero' if silero_vad else 'RMS'}")
-    log.info(f"   STT: {'whisper.cpp GPU' if WHISPER_CPP_AVAILABLE else ('faster-whisper CPU' if whisper_model else 'Cloud')}")
+    log.info(f"   STT: {'Deepgram streaming' if DEEPGRAM_API_KEY else ('whisper.cpp GPU' if WHISPER_CPP_AVAILABLE else ('faster-whisper CPU' if whisper_model else 'Cloud'))}")
     log.info(f"   Mic: {ALSA_DEVICE} ch{MIC_CHANNEL}")
     log.info("=" * 50)
     log.info(f"🎤 Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
@@ -961,7 +999,7 @@ def health():
         "pipeline_version": 2,
         "wake_engine": "porcupine" if porcupine else "none",
         "vad_engine": "silero" if silero_vad else "rms",
-        "stt_engine": "whisper.cpp-gpu" if WHISPER_CPP_AVAILABLE else ("faster-whisper-cpu" if whisper_model else "cloud"),
+        "stt_engine": "deepgram" if DEEPGRAM_API_KEY else ("whisper.cpp-gpu" if WHISPER_CPP_AVAILABLE else ("faster-whisper-cpu" if whisper_model else "cloud")),
         "speaking": state.is_speaking,
         "listening": state.is_listening,
         "processing": state.is_processing,
@@ -991,7 +1029,7 @@ def main():
     print()
     print(f"  Wake:    {'✅ Porcupine' if has_wake else '❌ PORCUPINE FAILED - check PICOVOICE_ACCESS_KEY'}")
     print(f"  VAD:     {'✅ Silero' if has_vad else '⚠ RMS fallback'}")
-    stt_status = "✅ whisper.cpp GPU" if WHISPER_CPP_AVAILABLE else ("✅ faster-whisper CPU" if whisper_model else "☁️ Cloud only")
+    stt_status = "✅ Deepgram streaming" if DEEPGRAM_API_KEY else ("✅ whisper.cpp GPU" if WHISPER_CPP_AVAILABLE else ("✅ faster-whisper CPU" if whisper_model else "☁️ Cloud only"))
     print(f"  STT:     {stt_status}")
     print(f"  Gateway: {GATEWAY_URL}")
     print(f"  TTS:     {TTS_URL}")
