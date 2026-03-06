@@ -785,28 +785,63 @@ if(OWW_ENABLED)setInterval(()=>{if(!owwReady)checkOWWService()},10000);
 // Voice pipeline handles: wake → record → STT → LLM
 // Browser handles: TTS playback (speakers are on browser's computer)
 let pipelinePolling=true;
+let pipelineSpeaking=false;  // local flag, set immediately
+let pipelineQueue=[];        // local sentence queue
+
+// Poll for responses, add to local queue
 setInterval(()=>{
-  if(!pipelinePolling||isSpeaking)return;
+  if(pipelineSpeaking)return;  // don't poll while speaking
   fetch('/pipeline/response',{signal:AbortSignal.timeout(2000)})
   .then(r=>r.json())
   .then(d=>{
     if(d.has_response&&d.text){
-      D('📢 Pipeline response: "'+d.text.substring(0,60)+'..." lang='+d.lang);
-      pipelinePolling=false; // pause polling while speaking
-      cE("happy");
-      sayServerTTS(d.text, d.lang||'el', 'normal');
-      // Resume polling after TTS finishes
-      const checkDone=setInterval(()=>{
-        if(!isSpeaking&&!(synth&&synth.speaking)){
-          clearInterval(checkDone);
-          pipelinePolling=true;
-          D('📢 Pipeline TTS done, resuming poll');
-        }
-      },500);
+      pipelineQueue.push(d);
+      D('📢 Queued: "'+d.text.substring(0,40)+'..." (queue='+pipelineQueue.length+')');
+      _playNextPipelineSentence();
     }
   })
   .catch(()=>{});
 },500);
+
+function _playNextPipelineSentence(){
+  if(pipelineSpeaking||pipelineQueue.length===0)return;
+  const d=pipelineQueue.shift();
+  pipelineSpeaking=true;
+  cE("happy");
+  D('📢 Playing: "'+d.text.substring(0,50)+'"');
+  
+  // Use server TTS
+  fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:d.text,lang:d.lang||'el',speed:'normal'})})
+  .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
+  .then(blob=>{
+    const url=URL.createObjectURL(blob);
+    const a=new Audio(url);
+    currentAudio=a;isSpeaking=true;
+    a.volume=(document.getElementById("volSlider")?.value||75)/100;
+    a.onended=()=>{
+      isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);
+      pipelineSpeaking=false;
+      D('📢 Sentence done, queue='+pipelineQueue.length);
+      // Play next sentence after short pause
+      setTimeout(_playNextPipelineSentence,100);
+    };
+    a.onerror=()=>{
+      isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);
+      pipelineSpeaking=false;
+      setTimeout(_playNextPipelineSentence,100);
+    };
+    a.play().catch(()=>{pipelineSpeaking=false;isSpeaking=false;setTimeout(_playNextPipelineSentence,100)});
+  })
+  .catch(e=>{
+    D('📢 TTS fetch failed: '+e+', trying browser voice');
+    // Fallback to browser SpeechSynthesis
+    const u=new SpeechSynthesisUtterance(d.text);
+    u.lang=d.lang==='el'?'el-GR':'en-US';u.rate=1.0;u.volume=0.8;
+    u.onend=()=>{pipelineSpeaking=false;isSpeaking=false;setTimeout(_playNextPipelineSentence,100)};
+    u.onerror=()=>{pipelineSpeaking=false;isSpeaking=false;setTimeout(_playNextPipelineSentence,100)};
+    synth.speak(u);isSpeaking=true;
+  });
+}
 
 function startOWWPolling(){
   if(owwPolling)return;
