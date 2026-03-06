@@ -583,41 +583,19 @@ _response_queue = []
 _response_lock = threading.Lock()
 
 def speak(text, lang="el"):
-    """Queue response for browser — stream sentence by sentence for faster perceived response."""
+    """Queue response for browser TTS playback."""
     if not text:
         return
     state.tts_start()
     
-    # Split into sentences for streaming
-    import re
-    sentences = re.split(r'(?<=[.!;?·])\s+', text)
-    sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 1]
-    if not sentences:
-        sentences = [text]
-    
-    # Send first sentence IMMEDIATELY for fastest perceived response
     with _response_lock:
-        _response_queue.append({
-            "text": sentences[0], "lang": lang,
-            "time": time.time(), "part": 1, "total": len(sentences)
-        })
-    log.info(f"📤 Sent sentence 1/{len(sentences)}: \"{sentences[0][:50]}\"")
+        _response_queue.append({"text": text, "lang": lang, "time": time.time()})
+    log.info(f"📤 Response: \"{text[:60]}\"")
     
-    # Queue remaining sentences with slight delay
-    for i, sentence in enumerate(sentences[1:], 2):
-        time.sleep(0.3)  # Small delay between sentences
-        with _response_lock:
-            _response_queue.append({
-                "text": sentence, "lang": lang,
-                "time": time.time(), "part": i, "total": len(sentences)
-            })
-        log.info(f"📤 Sent sentence {i}/{len(sentences)}: \"{sentence[:50]}\"")
-    
-    # Wait for browser to finish playing
+    # Wait for browser to play
     wait_time = min(len(text) * 0.06, 25)
     time.sleep(wait_time)
     state.tts_end()
-    log.info("🔇 TTS complete")
 
 # ═══════════════════════════════════════════════════════════
 # MIC CAPTURE + MAIN LOOP
@@ -743,7 +721,7 @@ def detect_language(text):
 
 
 def conversation_turn(mic, text, lang):
-    """Handle one conversation turn with smart routing + streaming."""
+    """Handle one conversation turn with smart routing."""
     state.is_processing = True
     try:
         # Check internet first
@@ -752,16 +730,7 @@ def conversation_turn(mic, text, lang):
             speak("Σε παρακαλώ σύνδεσέ με με το ίντερνετ για να σε βοηθήσω.", lang="el")
             return
         
-        use_claude = _needs_claude(text)
-        
-        # Try streaming for speed
-        if not use_claude and GROQ_API_KEY:
-            result = _groq_streaming_chat(text, lang)
-            if result:
-                state.is_processing = False
-                return
-        
-        # Non-streaming fallback (Claude or Groq non-stream)
+        # Non-streaming chat (Groq is already ~200ms, no need for streaming complexity)
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
