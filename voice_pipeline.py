@@ -721,7 +721,7 @@ def detect_language(text):
 
 
 def conversation_turn(mic, text, lang):
-    """Handle one conversation turn with smart routing."""
+    """Handle one conversation turn with streaming for speed."""
     state.is_processing = True
     try:
         # Check internet first
@@ -730,7 +730,16 @@ def conversation_turn(mic, text, lang):
             speak("Σε παρακαλώ σύνδεσέ με με το ίντερνετ για να σε βοηθήσω.", lang="el")
             return
         
-        # Non-streaming chat (Groq is already ~200ms, no need for streaming complexity)
+        use_claude = _needs_claude(text)
+        
+        # Groq streaming: first sentence arrives in ~200ms
+        if not use_claude and GROQ_API_KEY:
+            result = _groq_streaming_chat(text, lang)
+            if result:
+                state.is_processing = False
+                return  # streaming already queued everything
+        
+        # Non-streaming fallback (Claude or gateway)
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
@@ -740,10 +749,11 @@ def conversation_turn(mic, text, lang):
 
 
 def _groq_streaming_chat(user_message, lang):
-    """Groq streaming: start TTS as soon as first sentence arrives."""
+    """Groq streaming: send each complete sentence to browser immediately."""
     import requests
+    import re
     
-    system = "You are VIRON, a helpful AI companion. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα."
+    system = "You are VIRON, a helpful AI companion. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα σε 1-2 προτάσεις."
     
     try:
         t0 = time.time()
@@ -759,7 +769,7 @@ def _groq_streaming_chat(user_message, lang):
                     {"role": "system", "content": system},
                     {"role": "user", "content": user_message},
                 ],
-                "max_tokens": 300,
+                "max_tokens": 200,
                 "temperature": 0.7,
                 "stream": True,
             },
@@ -773,10 +783,8 @@ def _groq_streaming_chat(user_message, lang):
         
         state.tts_start()
         
-        # Accumulate tokens, send to browser as soon as a sentence is complete
-        buffer = ""
-        sentence_count = 0
-        import re
+        full_response = ""
+        sent_sentences = []
         
         for line in resp.iter_lines():
             if not line:
@@ -793,38 +801,40 @@ def _groq_streaming_chat(user_message, lang):
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                 token = delta.get("content", "")
                 if token:
-                    buffer += token
+                    full_response += token
                     
-                    # Check if we have a complete sentence
-                    if re.search(r'[.!;?·]\s*$', buffer) or len(buffer) > 150:
-                        sentence = buffer.strip()
-                        if sentence:
-                            sentence_count += 1
+                    # Split accumulated text into sentences
+                    sentences = re.split(r'(?<=[.!;?·])\s+', full_response)
+                    
+                    # Send complete sentences (all except last which may be incomplete)
+                    for s in sentences[:-1]:
+                        s = s.strip()
+                        if s and s not in sent_sentences:
+                            sent_sentences.append(s)
                             ms = int((time.time() - t0) * 1000)
-                            log.info(f"⚡ Groq stream sentence {sentence_count} ({ms}ms): \"{sentence[:60]}\"")
+                            log.info(f"⚡ Groq [{ms}ms] sentence {len(sent_sentences)}: \"{s[:60]}\"")
                             with _response_lock:
-                                _response_queue.append({
-                                    "text": sentence, "lang": "el",
-                                    "time": time.time(), "part": sentence_count
-                                })
-                        buffer = ""
+                                _response_queue.append({"text": s, "lang": "el", "time": time.time()})
+                    
+                    # Keep only the last (potentially incomplete) sentence in buffer
+                    full_response = sentences[-1] if sentences else ""
+                    
             except json.JSONDecodeError:
                 continue
         
-        # Flush remaining buffer
-        if buffer.strip():
-            sentence_count += 1
+        # Flush remaining text
+        remaining = full_response.strip()
+        if remaining and remaining not in sent_sentences:
+            sent_sentences.append(remaining)
             with _response_lock:
-                _response_queue.append({
-                    "text": buffer.strip(), "lang": "el",
-                    "time": time.time(), "part": sentence_count
-                })
+                _response_queue.append({"text": remaining, "lang": "el", "time": time.time()})
         
         ms = int((time.time() - t0) * 1000)
-        log.info(f"⚡ Groq streaming complete: {sentence_count} sentences in {ms}ms")
+        log.info(f"⚡ Groq complete: {len(sent_sentences)} sentences in {ms}ms")
         
         # Wait for browser TTS playback
-        wait_time = min(sentence_count * 3, 20)
+        total_chars = sum(len(s) for s in sent_sentences)
+        wait_time = min(total_chars * 0.06, 20)
         time.sleep(wait_time)
         state.tts_end()
         return True
