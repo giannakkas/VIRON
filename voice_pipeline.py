@@ -394,18 +394,56 @@ def transcribe(audio_int16, lang=None):
 # 4. LLM (via Gateway)
 # ═══════════════════════════════════════════════════════════
 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 def chat(user_message, system="You are VIRON, a helpful AI companion. Reply concisely.", lang="en"):
-    """Send message to LLM. Tries cloud first, falls back to local Gemma 2B."""
+    """Send message to LLM. Priority: Groq (~200ms) > Gateway cloud > Local Gemma 2B."""
     try:
         import requests
         
-        # Default to Greek
+        # Always Greek
         if lang in ("el", "el-GR") or not lang or lang == "en":
-            system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός."
+            system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα."
             lang = "el"
         
-        # Try gateway (cloud providers first, local fallback built-in)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_message},
+        ]
+        
+        # 1. Groq (~200-500ms) — fastest cloud LLM
+        if GROQ_API_KEY:
+            try:
+                t0 = time.time()
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": messages,
+                        "max_tokens": 200,
+                        "temperature": 0.7,
+                        "stream": False,
+                    },
+                    timeout=10,
+                )
+                ms = int((time.time() - t0) * 1000)
+                if resp.status_code == 200:
+                    reply = resp.json()["choices"][0]["message"]["content"].strip()
+                    log.info(f"⚡ Groq ({ms}ms): \"{reply[:80]}\"")
+                    return reply
+                else:
+                    log.warning(f"Groq error {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                log.warning(f"Groq failed: {e}")
+        
+        # 2. Gateway (OpenAI/Claude, ~2-3s)
         try:
+            t0 = time.time()
             resp = requests.post(
                 f"{GATEWAY_URL}/v1/chat",
                 json={
@@ -415,39 +453,42 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
                 },
                 timeout=30,
             )
+            ms = int((time.time() - t0) * 1000)
             if resp.status_code == 200:
                 data = resp.json()
                 reply = data.get("reply", data.get("text", ""))
                 provider = data.get("provider", "?")
-                log.info(f"💬 LLM ({provider}): \"{reply[:80]}\"")
+                log.info(f"💬 Gateway/{provider} ({ms}ms): \"{reply[:80]}\"")
                 return reply
             else:
-                log.warning(f"Gateway error {resp.status_code}, trying local...")
+                log.warning(f"Gateway error {resp.status_code}")
         except requests.exceptions.ConnectionError:
-            log.warning("Gateway not reachable, trying local router...")
+            log.warning("Gateway not reachable")
         except Exception as e:
-            log.warning(f"Gateway failed: {e}, trying local...")
+            log.warning(f"Gateway failed: {e}")
         
-        # Fallback: direct to local router (Gemma 2B)
+        # 3. Local Gemma 2B (offline fallback, ~1-3s)
         ROUTER_URL = os.environ.get("ROUTER_URL", "http://127.0.0.1:8081")
         try:
+            t0 = time.time()
             resp = requests.post(
                 f"{ROUTER_URL}/v1/completions",
-                json={"prompt": f"System: {system}\nUser: {user_message}\nAssistant:", 
+                json={"prompt": f"System: {system}\nUser: {user_message}\nAssistant:",
                       "max_tokens": 200, "temperature": 0.7},
                 timeout=30,
             )
+            ms = int((time.time() - t0) * 1000)
             if resp.status_code == 200:
                 reply = resp.json().get("choices", [{}])[0].get("text", "").strip()
-                log.info(f"💬 Local LLM: \"{reply[:80]}\"")
+                log.info(f"🏠 Local LLM ({ms}ms): \"{reply[:80]}\"")
                 return reply
         except Exception as e:
-            log.warning(f"Local LLM also failed: {e}")
+            log.warning(f"Local LLM failed: {e}")
         
-        return "Συγγνώμη, δεν μπορώ να απαντήσω τώρα." if lang == "el" else "Sorry, I can't respond right now."
+        return "Συγγνώμη, δεν μπορώ να απαντήσω." if lang == "el" else "Sorry, I can't respond."
     except Exception as e:
         log.error(f"LLM failed: {e}")
-        return "Sorry, I can't respond right now."
+        return "Sorry."
 
 # ═══════════════════════════════════════════════════════════
 # 5. TTS — Queue response for browser playback
@@ -458,30 +499,41 @@ _response_queue = []
 _response_lock = threading.Lock()
 
 def speak(text, lang="el"):
-    """Queue response for browser to play via TTS."""
+    """Queue response for browser — stream sentence by sentence for faster perceived response."""
     if not text:
         return
     state.tts_start()
     
-    # Check if internet is available (for cloud TTS)
-    offline = False
-    try:
-        import requests
-        requests.head("https://api.openai.com", timeout=2)
-    except:
-        offline = True
+    # Split into sentences for streaming
+    import re
+    sentences = re.split(r'(?<=[.!;?·])\s+', text)
+    sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 1]
+    if not sentences:
+        sentences = [text]
     
+    # Send first sentence IMMEDIATELY for fastest perceived response
     with _response_lock:
         _response_queue.append({
-            "text": text, "lang": lang, 
-            "time": time.time(), "offline": offline
+            "text": sentences[0], "lang": lang,
+            "time": time.time(), "part": 1, "total": len(sentences)
         })
-    log.info(f"📤 Response queued (offline={offline}): \"{text[:60]}...\"")
+    log.info(f"📤 Sent sentence 1/{len(sentences)}: \"{sentences[0][:50]}\"")
     
-    wait_time = min(len(text) * 0.08, 30)
+    # Queue remaining sentences with slight delay
+    for i, sentence in enumerate(sentences[1:], 2):
+        time.sleep(0.3)  # Small delay between sentences
+        with _response_lock:
+            _response_queue.append({
+                "text": sentence, "lang": lang,
+                "time": time.time(), "part": i, "total": len(sentences)
+            })
+        log.info(f"📤 Sent sentence {i}/{len(sentences)}: \"{sentence[:50]}\"")
+    
+    # Wait for browser to finish playing
+    wait_time = min(len(text) * 0.06, 25)
     time.sleep(wait_time)
     state.tts_end()
-    log.info("🔇 TTS wait complete")
+    log.info("🔇 TTS complete")
 
 # ═══════════════════════════════════════════════════════════
 # MIC CAPTURE + MAIN LOOP
@@ -607,15 +659,119 @@ def detect_language(text):
 
 
 def conversation_turn(mic, text, lang):
-    """Handle one conversation turn: user text → LLM → TTS."""
+    """Handle one conversation turn with streaming for speed."""
     state.is_processing = True
     try:
+        # Try Groq streaming first (fastest path)
+        if GROQ_API_KEY:
+            reply = _groq_streaming_chat(text, lang)
+            if reply:
+                state.is_processing = False
+                return
+        
+        # Fallback: non-streaming chat + speak
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
-            speak(reply, lang="el")  # Always speak Greek
+            speak(reply, lang="el")
     finally:
         state.is_processing = False
+
+
+def _groq_streaming_chat(user_message, lang):
+    """Groq streaming: start TTS as soon as first sentence arrives."""
+    import requests
+    
+    system = "You are VIRON, a helpful AI companion. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα."
+    
+    try:
+        t0 = time.time()
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
+                ],
+                "max_tokens": 300,
+                "temperature": 0.7,
+                "stream": True,
+            },
+            timeout=15,
+            stream=True,
+        )
+        
+        if resp.status_code != 200:
+            log.warning(f"Groq stream error {resp.status_code}")
+            return None
+        
+        state.tts_start()
+        
+        # Accumulate tokens, send to browser as soon as a sentence is complete
+        buffer = ""
+        sentence_count = 0
+        import re
+        
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            line = line.decode('utf-8', errors='replace')
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            
+            try:
+                chunk = json.loads(data_str)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                token = delta.get("content", "")
+                if token:
+                    buffer += token
+                    
+                    # Check if we have a complete sentence
+                    if re.search(r'[.!;?·]\s*$', buffer) or len(buffer) > 150:
+                        sentence = buffer.strip()
+                        if sentence:
+                            sentence_count += 1
+                            ms = int((time.time() - t0) * 1000)
+                            log.info(f"⚡ Groq stream sentence {sentence_count} ({ms}ms): \"{sentence[:60]}\"")
+                            with _response_lock:
+                                _response_queue.append({
+                                    "text": sentence, "lang": "el",
+                                    "time": time.time(), "part": sentence_count
+                                })
+                        buffer = ""
+            except json.JSONDecodeError:
+                continue
+        
+        # Flush remaining buffer
+        if buffer.strip():
+            sentence_count += 1
+            with _response_lock:
+                _response_queue.append({
+                    "text": buffer.strip(), "lang": "el",
+                    "time": time.time(), "part": sentence_count
+                })
+        
+        ms = int((time.time() - t0) * 1000)
+        log.info(f"⚡ Groq streaming complete: {sentence_count} sentences in {ms}ms")
+        
+        # Wait for browser TTS playback
+        wait_time = min(sentence_count * 3, 20)
+        time.sleep(wait_time)
+        state.tts_end()
+        return True
+        
+    except Exception as e:
+        log.warning(f"Groq streaming failed: {e}")
+        state.tts_end()
+        return None
 
 
 def main_loop(mic):
