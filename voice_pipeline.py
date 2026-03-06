@@ -344,34 +344,56 @@ def transcribe(audio_int16, lang=None):
 # ═══════════════════════════════════════════════════════════
 
 def chat(user_message, system="You are VIRON, a helpful AI companion. Reply concisely.", lang="en"):
-    """Send message to LLM via gateway. Returns reply text."""
+    """Send message to LLM. Tries cloud first, falls back to local Gemma 2B."""
     try:
         import requests
         
-        # Default to Greek since VIRON's user speaks Greek
+        # Default to Greek
         if lang in ("el", "el-GR") or not lang or lang == "en":
             system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός."
             lang = "el"
         
-        resp = requests.post(
-            f"{GATEWAY_URL}/v1/chat",
-            json={
-                "message": user_message,
-                "messages": [{"role": "user", "content": user_message}],
-                "system": system,
-            },
-            timeout=30,
-        )
+        # Try gateway (cloud providers first, local fallback built-in)
+        try:
+            resp = requests.post(
+                f"{GATEWAY_URL}/v1/chat",
+                json={
+                    "message": user_message,
+                    "messages": [{"role": "user", "content": user_message}],
+                    "system": system,
+                },
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = data.get("reply", data.get("text", ""))
+                provider = data.get("provider", "?")
+                log.info(f"💬 LLM ({provider}): \"{reply[:80]}\"")
+                return reply
+            else:
+                log.warning(f"Gateway error {resp.status_code}, trying local...")
+        except requests.exceptions.ConnectionError:
+            log.warning("Gateway not reachable, trying local router...")
+        except Exception as e:
+            log.warning(f"Gateway failed: {e}, trying local...")
         
-        if resp.status_code == 200:
-            data = resp.json()
-            reply = data.get("reply", data.get("text", ""))
-            provider = data.get("provider", "?")
-            log.info(f"💬 LLM ({provider}): \"{reply[:80]}\"")
-            return reply
-        else:
-            log.error(f"LLM error {resp.status_code}: {resp.text[:200]}")
-            return "Συγγνώμη, δεν μπορώ να απαντήσω τώρα." if lang == "el" else "Sorry, I can't respond right now."
+        # Fallback: direct to local router (Gemma 2B)
+        ROUTER_URL = os.environ.get("ROUTER_URL", "http://127.0.0.1:8081")
+        try:
+            resp = requests.post(
+                f"{ROUTER_URL}/v1/completions",
+                json={"prompt": f"System: {system}\nUser: {user_message}\nAssistant:", 
+                      "max_tokens": 200, "temperature": 0.7},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                reply = resp.json().get("choices", [{}])[0].get("text", "").strip()
+                log.info(f"💬 Local LLM: \"{reply[:80]}\"")
+                return reply
+        except Exception as e:
+            log.warning(f"Local LLM also failed: {e}")
+        
+        return "Συγγνώμη, δεν μπορώ να απαντήσω τώρα." if lang == "el" else "Sorry, I can't respond right now."
     except Exception as e:
         log.error(f"LLM failed: {e}")
         return "Sorry, I can't respond right now."
@@ -385,15 +407,26 @@ _response_queue = []
 _response_lock = threading.Lock()
 
 def speak(text, lang="el"):
-    """Queue response for browser to play via TTS. Don't play locally."""
+    """Queue response for browser to play via TTS."""
     if not text:
         return
     state.tts_start()
+    
+    # Check if internet is available (for cloud TTS)
+    offline = False
+    try:
+        import requests
+        requests.head("https://api.openai.com", timeout=2)
+    except:
+        offline = True
+    
     with _response_lock:
-        _response_queue.append({"text": text, "lang": lang, "time": time.time()})
-    log.info(f"📤 Response queued for browser: \"{text[:60]}...\"")
-    # Wait for browser to finish playing (estimate based on text length)
-    # ~100ms per character for TTS playback
+        _response_queue.append({
+            "text": text, "lang": lang, 
+            "time": time.time(), "offline": offline
+        })
+    log.info(f"📤 Response queued (offline={offline}): \"{text[:60]}...\"")
+    
     wait_time = min(len(text) * 0.08, 30)
     time.sleep(wait_time)
     state.tts_end()
