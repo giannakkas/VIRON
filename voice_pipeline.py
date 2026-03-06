@@ -580,6 +580,11 @@ def main_loop(mic):
                 if state.set_wake("porcupine", 1.0):
                     log.info("🎯 Wake word detected!")
                     
+                    # Say "Ορίστε" through browser speakers
+                    with _response_lock:
+                        _response_queue.append({"text": "Ορίστε;", "lang": "el", "time": time.time()})
+                    log.info("📤 Sent 'Ορίστε' to browser")
+                    
                     audio = record_command(mic)
                     if len(audio) > SAMPLE_RATE * 0.3:
                         text, lang = transcribe(audio)
