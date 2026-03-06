@@ -481,6 +481,18 @@ def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a helpful AI companio
         
         # 1. Claude for complex/tutoring
         if use_claude and ANTHROPIC_API_KEY:
+            wb_system = system + """
+
+WHITEBOARD — Use the whiteboard when explaining concepts, math, science, history, or any educational topic.
+Format:
+[WHITEBOARD:Title]
+TEXT: explanation
+STEP: label
+MATH: equation
+RESULT: answer
+[/WHITEBOARD]
+
+Keep spoken text SHORT (1 sentence intro). The whiteboard does the heavy lifting. 5-8 steps minimum."""
             try:
                 t0 = time.time()
                 resp = requests.post(
@@ -492,8 +504,8 @@ def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a helpful AI companio
                     },
                     json={
                         "model": ANTHROPIC_MODEL,
-                        "max_tokens": 500,
-                        "system": system,
+                        "max_tokens": 1000,
+                        "system": wb_system,
                         "messages": [{"role": "user", "content": user_message}],
                     },
                     timeout=30,
@@ -766,7 +778,46 @@ def conversation_turn(mic, text, lang):
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
-            speak(reply, lang="el")
+            # Check for whiteboard content
+            import re as _re
+            wb_match = _re.search(r'\[WHITEBOARD:(.*?)\]([\s\S]*?)\[/WHITEBOARD\]', reply)
+            if wb_match:
+                # Extract spoken text (everything outside WHITEBOARD tags)
+                spoken = _re.sub(r'\[WHITEBOARD:.*?\][\s\S]*?\[/WHITEBOARD\]\s*', '', reply).strip()
+                # Parse whiteboard steps
+                wb_title = wb_match.group(1).strip()
+                wb_steps = []
+                for line in wb_match.group(2).strip().split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith('STEP:'):
+                        wb_steps.append({"label": line[5:].strip()})
+                    elif line.startswith('MATH:'):
+                        wb_steps.append({"math": line[5:].strip()})
+                    elif line.startswith('RESULT:'):
+                        wb_steps.append({"result": line[7:].strip()})
+                    elif line.startswith('TEXT:'):
+                        wb_steps.append({"text": line[5:].strip()})
+                # Send whiteboard to browser
+                with _response_lock:
+                    _response_queue.append({
+                        "text": spoken or "Κοίτα στον πίνακα!",
+                        "whiteboard": {"title": wb_title, "steps": wb_steps},
+                        "lang": "el",
+                        "time": time.time()
+                    })
+                log.info(f"📋 Whiteboard: \"{wb_title}\" ({len(wb_steps)} steps)")
+                # Speak the intro + step narration
+                narration_parts = [spoken] if spoken else []
+                for s in wb_steps:
+                    if s.get("text"):
+                        narration_parts.append(s["text"])
+                    elif s.get("result"):
+                        narration_parts.append(s["result"])
+                speak(". ".join(narration_parts) or "Κοίτα στον πίνακα!", lang="el")
+            else:
+                speak(reply, lang="el")
     finally:
         state.is_processing = False
 
@@ -1013,7 +1064,10 @@ def pipeline_response():
     with _response_lock:
         if _response_queue:
             resp = _response_queue.pop(0)
-            return jsonify({"has_response": True, "text": resp["text"], "lang": resp["lang"]})
+            result = {"has_response": True, "text": resp["text"], "lang": resp["lang"]}
+            if "whiteboard" in resp:
+                result["whiteboard"] = resp["whiteboard"]
+            return jsonify(result)
     return jsonify({"has_response": False})
 
 @app.route("/pipeline/state", methods=["GET"])
