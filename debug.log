@@ -1,0 +1,490 @@
+=== VIRON Browser Debug Log ===
+[19:49:12.696] === VIRON Debug Session Started ===
+[19:49:12.699] URL: http://localhost:5000/viron-complete.html
+[19:49:12.701] UserAgent: Mozilla/5.0 (X11; Ubuntu; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15
+[19:49:12.702] mediaDevices: YES
+[19:49:12.702] getUserMedia: YES
+[19:49:12.703] SpeechRecognition: NO
+[19:49:12.703] SpeechSynthesis: NO
+[19:49:12.708] === INIT ===
+[19:49:13.005] 🎙️ Whisper STT: READY
+[19:49:13.006] 🎯 openWakeWord service READY: models=["porcupine"] threshold=undefined
+[19:49:13.007]   🎤 Server mic: AVAILABLE (plughw:0,0)
+[19:49:14.709] 🔊 Initializing Silero VAD...
+[19:49:16.695] ✅ Silero VAD ready (neural voice activity detection)
+[19:49:16.747] 🎙️ Voice verify: OFF
+[19:49:17.725]   Keepalive: restarting listener
+[19:49:17.727] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:17.727]   🎯 Using openWakeWord service for wake word detection
+[19:49:17.728]   🎯 Starting openWakeWord polling (server-side mic)
+[19:49:17.729]   🎤 Polling /wakeword/poll every 200ms
+[19:49:18.415] 🔓 Audio unlocked
+[19:49:18.455] 🔓 Audio unlocked
+[19:49:22.730]   Keepalive: restarting listener
+[19:49:22.730] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:22.731]   already listening
+[19:49:27.742]   Keepalive: restarting listener
+[19:49:27.743] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:27.743]   already listening
+[19:49:32.757]   Keepalive: restarting listener
+[19:49:32.758] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:32.758]   already listening
+[19:49:37.762]   Keepalive: restarting listener
+[19:49:37.763] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:37.763]   already listening
+[19:49:42.782]   Keepalive: restarting listener
+[19:49:42.782] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:42.783]   already listening
+[19:49:47.800]   Keepalive: restarting listener
+[19:49:47.801] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:47.801]   already listening
+[19:49:52.810]   Keepalive: restarting listener
+[19:49:52.810] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:52.811]   already listening
+[19:49:57.812]   Keepalive: restarting listener
+[19:49:57.812] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:49:57.813]   already listening
+[19:50:02.819]   Keepalive: restarting listener
+[19:50:02.819] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:02.819]   already listening
+[19:50:07.840]   Keepalive: restarting listener
+[19:50:07.841] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:07.841]   already listening
+[19:50:12.852]   Keepalive: restarting listener
+[19:50:12.852] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:12.852]   already listening
+[19:50:17.871]   Keepalive: restarting listener
+[19:50:17.872] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:17.872]   already listening
+[19:50:22.879]   Keepalive: restarting listener
+[19:50:22.879] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:22.880]   already listening
+[19:50:27.895]   Keepalive: restarting listener
+[19:50:27.896] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:27.896]   already listening
+[19:50:32.920]   Keepalive: restarting listener
+[19:50:32.920] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:32.921]   already listening
+[19:50:37.937]   Keepalive: restarting listener
+[19:50:37.938] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:37.938]   already listening
+[19:50:42.938]   Keepalive: restarting listener
+[19:50:42.938] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:42.939]   already listening
+[19:50:47.959]   Keepalive: restarting listener
+[19:50:47.960] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:47.960]   already listening
+[19:50:52.961]   Keepalive: restarting listener
+[19:50:52.962] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:52.962]   already listening
+[19:50:57.984]   Keepalive: restarting listener
+[19:50:57.984] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:50:57.985]   already listening
+[19:51:02.995]   Keepalive: restarting listener
+[19:51:02.996] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:02.996]   already listening
+[19:51:08.006]   Keepalive: restarting listener
+[19:51:08.007] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:08.007]   already listening
+[19:51:13.026]   Keepalive: restarting listener
+[19:51:13.026] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:13.027]   already listening
+[19:51:18.026]   Keepalive: restarting listener
+[19:51:18.027] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:18.027]   already listening
+[19:51:23.045]   Keepalive: restarting listener
+[19:51:23.046] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:23.046]   already listening
+[19:51:28.066]   Keepalive: restarting listener
+[19:51:28.067] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:28.067]   already listening
+[19:51:33.079]   Keepalive: restarting listener
+[19:51:33.080] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:33.080]   already listening
+[19:51:38.090]   Keepalive: restarting listener
+[19:51:38.091] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:38.091]   already listening
+[19:51:43.101]   Keepalive: restarting listener
+[19:51:43.101] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:43.102]   already listening
+[19:51:48.106]   Keepalive: restarting listener
+[19:51:48.107] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:48.107]   already listening
+[19:51:53.113]   Keepalive: restarting listener
+[19:51:53.113] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:53.114]   already listening
+[19:51:58.125]   Keepalive: restarting listener
+[19:51:58.126] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:51:58.126]   already listening
+[19:52:03.141]   Keepalive: restarting listener
+[19:52:03.141] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:03.142]   already listening
+[19:52:08.146]   Keepalive: restarting listener
+[19:52:08.147] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:08.147]   already listening
+[19:52:13.146]   Keepalive: restarting listener
+[19:52:13.147] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:13.147]   already listening
+[19:52:18.163]   Keepalive: restarting listener
+[19:52:18.164] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:18.164]   already listening
+[19:52:23.166]   Keepalive: restarting listener
+[19:52:23.167] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:23.167]   already listening
+[19:52:28.186]   Keepalive: restarting listener
+[19:52:28.186] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:28.187]   already listening
+[19:52:33.204]   Keepalive: restarting listener
+[19:52:33.204] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:33.205]   already listening
+[19:52:38.207]   Keepalive: restarting listener
+[19:52:38.207] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:38.208]   already listening
+[19:52:43.213]   Keepalive: restarting listener
+[19:52:43.213] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:43.213]   already listening
+[19:52:48.217]   Keepalive: restarting listener
+[19:52:48.218] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:48.218]   already listening
+[19:52:53.218]   Keepalive: restarting listener
+[19:52:53.218] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:53.219]   already listening
+[19:52:58.238]   Keepalive: restarting listener
+[19:52:58.238] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:52:58.239]   already listening
+[19:53:03.249]   Keepalive: restarting listener
+[19:53:03.250] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:03.250]   already listening
+[19:53:08.251]   Keepalive: restarting listener
+[19:53:08.252] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:08.252]   already listening
+[19:53:13.260]   Keepalive: restarting listener
+[19:53:13.261] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:13.261]   already listening
+[19:53:18.275]   Keepalive: restarting listener
+[19:53:18.276] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:18.276]   already listening
+[19:53:23.280]   Keepalive: restarting listener
+[19:53:23.280] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:23.281]   already listening
+[19:53:28.294]   Keepalive: restarting listener
+[19:53:28.295] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:28.295]   already listening
+[19:53:33.301]   Keepalive: restarting listener
+[19:53:33.301] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:33.301]   already listening
+[19:53:38.309]   Keepalive: restarting listener
+[19:53:38.310] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:38.310]   already listening
+[19:53:43.319]   Keepalive: restarting listener
+[19:53:43.320] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:43.320]   already listening
+[19:53:48.339]   Keepalive: restarting listener
+[19:53:48.340] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:48.340]   already listening
+[19:53:53.341]   Keepalive: restarting listener
+[19:53:53.342] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:53.342]   already listening
+[19:53:58.357]   Keepalive: restarting listener
+[19:53:58.358] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:53:58.358]   already listening
+[19:54:03.369]   Keepalive: restarting listener
+[19:54:03.370] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:03.370]   already listening
+[19:54:08.384]   Keepalive: restarting listener
+[19:54:08.385] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:08.385]   already listening
+[19:54:13.390]   Keepalive: restarting listener
+[19:54:13.391] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:13.391]   already listening
+[19:54:18.402]   Keepalive: restarting listener
+[19:54:18.403] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:18.403]   already listening
+[19:54:23.424]   Keepalive: restarting listener
+[19:54:23.424] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:23.425]   already listening
+[19:54:28.442]   Keepalive: restarting listener
+[19:54:28.443] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:28.444]   already listening
+[19:54:33.448]   Keepalive: restarting listener
+[19:54:33.449] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:33.449]   already listening
+[19:54:38.458]   Keepalive: restarting listener
+[19:54:38.459] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:38.459]   already listening
+[19:54:43.463]   Keepalive: restarting listener
+[19:54:43.464] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:43.464]   already listening
+[19:54:48.476]   Keepalive: restarting listener
+[19:54:48.477] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:48.477]   already listening
+[19:54:53.479]   Keepalive: restarting listener
+[19:54:53.479] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:53.480]   already listening
+[19:54:58.502]   Keepalive: restarting listener
+[19:54:58.502] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:54:58.503]   already listening
+[19:55:03.514]   Keepalive: restarting listener
+[19:55:03.514] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:03.515]   already listening
+[19:55:08.517]   Keepalive: restarting listener
+[19:55:08.517] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:08.518]   already listening
+[19:55:13.520]   Keepalive: restarting listener
+[19:55:13.521] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:13.521]   already listening
+[19:55:18.529]   Keepalive: restarting listener
+[19:55:18.530] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:18.530]   already listening
+[19:55:23.546]   Keepalive: restarting listener
+[19:55:23.546] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:23.547]   already listening
+[19:55:28.560]   Keepalive: restarting listener
+[19:55:28.560] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:28.561]   already listening
+[19:55:33.567]   Keepalive: restarting listener
+[19:55:33.567] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:33.568]   already listening
+[19:55:38.581]   Keepalive: restarting listener
+[19:55:38.582] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:38.582]   already listening
+[19:55:43.581]   Keepalive: restarting listener
+[19:55:43.582] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:43.582]   already listening
+[19:55:48.587]   Keepalive: restarting listener
+[19:55:48.588] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:48.588]   already listening
+[19:55:53.598]   Keepalive: restarting listener
+[19:55:53.599] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:53.599]   already listening
+[19:55:58.620]   Keepalive: restarting listener
+[19:55:58.620] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:55:58.620]   already listening
+[19:56:03.624]   Keepalive: restarting listener
+[19:56:03.625] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:03.625]   already listening
+[19:56:08.637]   Keepalive: restarting listener
+[19:56:08.637] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:08.638]   already listening
+[19:56:13.658]   Keepalive: restarting listener
+[19:56:13.659] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:13.659]   already listening
+[19:56:18.671]   Keepalive: restarting listener
+[19:56:18.671] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:18.672]   already listening
+[19:56:23.681]   Keepalive: restarting listener
+[19:56:23.682] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:23.682]   already listening
+[19:56:28.698]   Keepalive: restarting listener
+[19:56:28.699] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:28.699]   already listening
+[19:56:33.715]   Keepalive: restarting listener
+[19:56:33.716] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:33.716]   already listening
+[19:56:38.723]   Keepalive: restarting listener
+[19:56:38.724] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:38.724]   already listening
+[19:56:43.734]   Keepalive: restarting listener
+[19:56:43.735] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:43.735]   already listening
+[19:56:48.745]   Keepalive: restarting listener
+[19:56:48.746] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:48.746]   already listening
+[19:56:53.756]   Keepalive: restarting listener
+[19:56:53.757] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:53.757]   already listening
+[19:56:58.766]   Keepalive: restarting listener
+[19:56:58.766] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:56:58.767]   already listening
+[19:57:03.780]   Keepalive: restarting listener
+[19:57:03.780] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:03.781]   already listening
+[19:57:08.789]   Keepalive: restarting listener
+[19:57:08.790] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:08.790]   already listening
+[19:57:13.791]   Keepalive: restarting listener
+[19:57:13.792] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:13.792]   already listening
+[19:57:18.796]   Keepalive: restarting listener
+[19:57:18.797] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:18.797]   already listening
+[19:57:23.817]   Keepalive: restarting listener
+[19:57:23.817] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:23.818]   already listening
+[19:57:28.836]   Keepalive: restarting listener
+[19:57:28.837] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:28.837]   already listening
+[19:57:33.852]   Keepalive: restarting listener
+[19:57:33.853] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:33.853]   already listening
+[19:57:38.867]   Keepalive: restarting listener
+[19:57:38.868] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:38.868]   already listening
+[19:57:43.881]   Keepalive: restarting listener
+[19:57:43.881] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:43.882]   already listening
+[19:57:48.900]   Keepalive: restarting listener
+[19:57:48.900] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:48.901]   already listening
+[19:57:53.921]   Keepalive: restarting listener
+[19:57:53.921] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:53.922]   already listening
+[19:57:58.934]   Keepalive: restarting listener
+[19:57:58.935] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:57:58.935]   already listening
+[19:58:03.956]   Keepalive: restarting listener
+[19:58:03.956] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:03.957]   already listening
+[19:58:08.968]   Keepalive: restarting listener
+[19:58:08.969] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:08.969]   already listening
+[19:58:13.978]   Keepalive: restarting listener
+[19:58:13.979] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:13.979]   already listening
+[19:58:18.983]   Keepalive: restarting listener
+[19:58:18.983] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:18.983]   already listening
+[19:58:23.998]   Keepalive: restarting listener
+[19:58:23.998] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:23.999]   already listening
+[19:58:29.009]   Keepalive: restarting listener
+[19:58:29.010] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:29.010]   already listening
+[19:58:34.020]   Keepalive: restarting listener
+[19:58:34.021] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:34.021]   already listening
+[19:58:39.039]   Keepalive: restarting listener
+[19:58:39.039] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:39.040]   already listening
+[19:58:44.056]   Keepalive: restarting listener
+[19:58:44.057] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:44.057]   already listening
+[19:58:49.064]   Keepalive: restarting listener
+[19:58:49.065] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:49.065]   already listening
+[19:58:54.080]   Keepalive: restarting listener
+[19:58:54.080] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:54.081]   already listening
+[19:58:59.085]   Keepalive: restarting listener
+[19:58:59.085] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:58:59.086]   already listening
+[19:59:04.091]   Keepalive: restarting listener
+[19:59:04.091] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:04.092]   already listening
+[19:59:09.093]   Keepalive: restarting listener
+[19:59:09.094] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:09.094]   already listening
+[19:59:11.156] 📢 Queued: "Ορίστε;..." (queue=1)
+[19:59:11.157] 📢 Face animation: "Ορίστε;"
+[19:59:11.592] 📢 Face animation done, queue=0
+[19:59:14.108]   Keepalive: restarting listener
+[19:59:14.109] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:14.109]   already listening
+[19:59:19.126]   Keepalive: restarting listener
+[19:59:19.127] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:19.127]   already listening
+[19:59:24.143]   Keepalive: restarting listener
+[19:59:24.144] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:24.144]   already listening
+[19:59:29.151]   Keepalive: restarting listener
+[19:59:29.152] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:29.152]   already listening
+[19:59:34.175]   Keepalive: restarting listener
+[19:59:34.176] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:34.176]   already listening
+[19:59:35.782] 📢 Queued: "Φαίνεται ότι μιλάς για μια ομάδα φανταστ..." (queue=1)
+[19:59:35.782] 📢 Face animation: "Φαίνεται ότι μιλάς για μια ομάδα φανταστικών χαρακ"
+[19:59:39.198]   Keepalive: restarting listener
+[19:59:39.198] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:39.199]   already listening
+[19:59:44.221]   Keepalive: restarting listener
+[19:59:44.222] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:44.222]   already listening
+[19:59:49.223]   Keepalive: restarting listener
+[19:59:49.224] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:49.224]   already listening
+[19:59:50.795] 📢 Face animation done, queue=0
+[19:59:51.274] 📢 Queued: "Να φτιάξεις κάτι νέο;..." (queue=1)
+[19:59:51.274] 📢 Face animation: "Να φτιάξεις κάτι νέο;"
+[19:59:52.552] 📢 Face animation done, queue=0
+[19:59:52.803] 📢 Queued: "Πες μου, τι έχεις στο μυαλό σου και θα π..." (queue=1)
+[19:59:52.803] 📢 Face animation: "Πες μου, τι έχεις στο μυαλό σου και θα προσπαθήσω "
+[19:59:54.224]   Keepalive: restarting listener
+[19:59:54.224] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:54.224]   already listening
+[19:59:56.658] 📢 Face animation done, queue=0
+[19:59:59.232]   Keepalive: restarting listener
+[19:59:59.233] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[19:59:59.233]   already listening
+[20:00:04.245]   Keepalive: restarting listener
+[20:00:04.246] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:04.247]   already listening
+[20:00:09.248]   Keepalive: restarting listener
+[20:00:09.249] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:09.249]   already listening
+[20:00:10.281] 📢 Queued: "Η μουσική είναι ένας εξαιρετικός τρόπος ..." (queue=1)
+[20:00:10.282] 📢 Face animation: "Η μουσική είναι ένας εξαιρετικός τρόπος για να εκφ"
+[20:00:14.253]   Keepalive: restarting listener
+[20:00:14.254] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:14.254]   already listening
+[20:00:14.963] 📢 Face animation done, queue=0
+[20:00:15.427] 📢 Queued: "Ποιο είδος μουσικής σου αρέσει;..." (queue=1)
+[20:00:15.427] 📢 Face animation: "Ποιο είδος μουσικής σου αρέσει;"
+[20:00:17.288] 📢 Face animation done, queue=0
+[20:00:19.274]   Keepalive: restarting listener
+[20:00:19.274] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:19.275]   already listening
+[20:00:24.282]   Keepalive: restarting listener
+[20:00:24.282] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:24.283]   already listening
+[20:00:25.705] 📢 Queued: "Τί είναι τότε;..." (queue=1)
+[20:00:25.705] 📢 Face animation: "Τί είναι τότε;"
+[20:00:26.562] 📢 Face animation done, queue=0
+[20:00:27.249] 📢 Queued: "Μπορώ να σας βοηθήσω να καταλάβετε τι ψά..." (queue=1)
+[20:00:27.250] 📢 Face animation: "Μπορώ να σας βοηθήσω να καταλάβετε τι ψάχνετε;"
+[20:00:29.301]   Keepalive: restarting listener
+[20:00:29.301] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:29.302]   already listening
+[20:00:30.017] 📢 Face animation done, queue=0
+[20:00:34.321]   Keepalive: restarting listener
+[20:00:34.322] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:34.322]   already listening
+[20:00:39.321]   Keepalive: restarting listener
+[20:00:39.321] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:39.322]   already listening
+[20:00:44.339]   Keepalive: restarting listener
+[20:00:44.339] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:44.340]   already listening
+[20:00:46.219] 📢 Queued: "Η μουσική είναι ένα πανέμορφο Kunst που ..." (queue=1)
+[20:00:46.220] 📢 Face animation: "Η μουσική είναι ένα πανέμορφο Kunst που può να μας"
+[20:00:49.356]   Keepalive: restarting listener
+[20:00:49.356] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:49.357]   already listening
+[20:00:53.546] 📢 Face animation done, queue=0
+[20:00:53.907] 📢 Queued: "Ποιό είδος μουσικής σας αρέσει;..." (queue=1)
+[20:00:53.908] 📢 Face animation: "Ποιό είδος μουσικής σας αρέσει;"
+[20:00:54.370]   Keepalive: restarting listener
+[20:00:54.370] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:54.371]   already listening
+[20:00:55.786] 📢 Face animation done, queue=0
+[20:00:56.982] 📢 Queued: "Γεια σου!..." (queue=1)
+[20:00:56.983] 📢 Face animation: "Γεια σου!"
+[20:00:57.526] 📢 Face animation done, queue=0
+[20:00:58.015] 📢 Queued: "Τι μπορεί να κάνω για σένα σήμερα;..." (queue=1)
+[20:00:58.016] 📢 Face animation: "Τι μπορεί να κάνω για σένα σήμερα;"
+[20:00:59.380]   Keepalive: restarting listener
+[20:00:59.380] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:00:59.381]   already listening
+[20:01:00.083] 📢 Face animation done, queue=0
+[20:01:04.384]   Keepalive: restarting listener
+[20:01:04.385] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:01:04.385]   already listening
+[20:01:06.775] 📢 Queued: "Εδώ είμαι αν με χρειαστείς...." (queue=1)
+[20:01:06.775] 📢 Face animation: "Εδώ είμαι αν με χρειαστείς."
+[20:01:08.419] 📢 Face animation done, queue=0
+[20:01:09.405]   Keepalive: restarting listener
+[20:01:09.405] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:01:09.406]   already listening
+[20:01:14] [INFO] [browser]   Keepalive: restarting listener
+[20:01:14] [INFO] [browser] >>> startAlwaysListening, voiceState=idle, loading=false, wakeLang=en-US, cmdLang=el-GR
+[20:01:14] [INFO] [browser]   already listening

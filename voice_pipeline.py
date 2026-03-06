@@ -12,7 +12,7 @@ Requirements:
 Environment:
   PICOVOICE_ACCESS_KEY  — required for Porcupine (get free at picovoice.ai)
   OPENAI_API_KEY        — for cloud STT fallback and LLM
-  VIRON_MIC_DEVICE      — ALSA device (default: plughw:2,0)
+  VIRON_MIC_DEVICE      — ALSA device (default: plughw:0,0)
   VIRON_MIC_CHANNEL     — 0=beamformed, 1=ASR beam (default: 1)
 
 Usage:
@@ -60,8 +60,8 @@ _load_env()
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 
-ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:2,0")
-MIC_CHANNEL = int(os.environ.get("VIRON_MIC_CHANNEL", "1"))
+ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:0,0")
+MIC_CHANNEL = int(os.environ.get("VIRON_MIC_CHANNEL", "0"))
 SAMPLE_RATE = 16000
 FRAME_LENGTH = 512  # Porcupine requires 512 samples at 16kHz (32ms)
 
@@ -631,7 +631,7 @@ class MicStream:
     
     def start(self):
         cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE",
-               "-r", str(SAMPLE_RATE), "-c", "2", "-t", "raw"]
+               "-r", str(SAMPLE_RATE), "-c", "1", "-t", "raw"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.running = True
         log.info(f"🎤 Mic started: {ALSA_DEVICE} ch{MIC_CHANNEL}")
@@ -640,12 +640,11 @@ class MicStream:
         """Read one frame of mono audio. Returns int16 numpy array."""
         if not self.proc:
             return None
-        bytes_needed = frame_length * 4  # stereo int16 = 4 bytes per sample
+        bytes_needed = frame_length * 2  # mono int16 = 2 bytes per sample
         raw = self.proc.stdout.read(bytes_needed)
         if len(raw) < bytes_needed:
             return None
-        stereo = np.frombuffer(raw, dtype=np.int16)
-        mono = stereo[MIC_CHANNEL::2]
+        mono = np.frombuffer(raw, dtype=np.int16)
         return mono
     
     def read_seconds(self, seconds):
