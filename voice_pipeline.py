@@ -396,23 +396,86 @@ def transcribe(audio_int16, lang=None):
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
-def chat(user_message, system="You are VIRON, a helpful AI companion. Reply concisely.", lang="en"):
-    """Send message to LLM. Priority: Groq (~200ms) > Gateway cloud > Local Gemma 2B."""
+# Keywords that trigger Claude (tutoring, complex reasoning)
+CLAUDE_TRIGGERS = [
+    # Greek tutoring keywords
+    "εξήγησέ", "εξήγησε", "μάθε", "δίδαξε", "πώς", "γιατί", "τι είναι",
+    "βοήθησε με", "homework", "μάθημα", "σχολείο", "άσκηση", "εργασία",
+    "υπολόγισε", "λύσε", "ανάλυσε", "σύγκρινε", "περίγραψε",
+    # English tutoring keywords  
+    "explain", "teach", "help me understand", "how does", "why does",
+    "what is", "homework", "lesson", "exercise", "calculate", "solve",
+    "analyze", "compare", "describe", "write an essay", "summarize",
+    # Complex tasks
+    "code", "program", "κώδικα", "πρόγραμμα", "debug",
+    "story", "ιστορία", "poem", "ποίημα",
+]
+
+
+def _needs_claude(text):
+    """Determine if the query needs Claude (complex) or Groq (quick)."""
+    t = text.lower()
+    # Short greetings/simple questions → Groq
+    if len(t) < 20:
+        return False
+    # Check for tutoring/complex keywords
+    for trigger in CLAUDE_TRIGGERS:
+        if trigger in t:
+            return True
+    # Long questions are more likely complex
+    if len(t) > 100:
+        return True
+    return False
+
+
+def chat(user_message, system="You are VIRON, a helpful AI companion.", lang="en"):
+    """Smart routing: Groq for quick answers, Claude for tutoring/complex."""
     try:
         import requests
         
-        # Always Greek
-        if lang in ("el", "el-GR") or not lang or lang == "en":
-            system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα."
-            lang = "el"
+        system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα."
+        lang = "el"
         
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_message},
-        ]
+        use_claude = _needs_claude(user_message)
         
-        # 1. Groq (~200-500ms) — fastest cloud LLM
+        if use_claude:
+            log.info(f"🧠 Routing to Claude (complex/tutoring)")
+        else:
+            log.info(f"⚡ Routing to Groq (quick answer)")
+        
+        # 1. Claude for complex/tutoring
+        if use_claude and ANTHROPIC_API_KEY:
+            try:
+                t0 = time.time()
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": ANTHROPIC_MODEL,
+                        "max_tokens": 500,
+                        "system": system,
+                        "messages": [{"role": "user", "content": user_message}],
+                    },
+                    timeout=30,
+                )
+                ms = int((time.time() - t0) * 1000)
+                if resp.status_code == 200:
+                    reply = resp.json()["content"][0]["text"].strip()
+                    log.info(f"🧠 Claude ({ms}ms): \"{reply[:80]}\"")
+                    return reply
+                else:
+                    log.warning(f"Claude error {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                log.warning(f"Claude failed: {e}")
+        
+        # 2. Groq for quick answers (~200ms)
         if GROQ_API_KEY:
             try:
                 t0 = time.time()
@@ -424,10 +487,12 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
                     },
                     json={
                         "model": GROQ_MODEL,
-                        "messages": messages,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user_message},
+                        ],
                         "max_tokens": 200,
                         "temperature": 0.7,
-                        "stream": False,
                     },
                     timeout=10,
                 )
@@ -437,13 +502,12 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
                     log.info(f"⚡ Groq ({ms}ms): \"{reply[:80]}\"")
                     return reply
                 else:
-                    log.warning(f"Groq error {resp.status_code}: {resp.text[:100]}")
+                    log.warning(f"Groq error {resp.status_code}")
             except Exception as e:
                 log.warning(f"Groq failed: {e}")
         
-        # 2. Gateway (OpenAI/Claude, ~2-3s)
+        # 3. Gateway fallback
         try:
-            t0 = time.time()
             resp = requests.post(
                 f"{GATEWAY_URL}/v1/chat",
                 json={
@@ -453,42 +517,30 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
                 },
                 timeout=30,
             )
-            ms = int((time.time() - t0) * 1000)
             if resp.status_code == 200:
                 data = resp.json()
-                reply = data.get("reply", data.get("text", ""))
-                provider = data.get("provider", "?")
-                log.info(f"💬 Gateway/{provider} ({ms}ms): \"{reply[:80]}\"")
-                return reply
-            else:
-                log.warning(f"Gateway error {resp.status_code}")
-        except requests.exceptions.ConnectionError:
-            log.warning("Gateway not reachable")
-        except Exception as e:
-            log.warning(f"Gateway failed: {e}")
+                return data.get("reply", data.get("text", ""))
+        except:
+            pass
         
-        # 3. Local Gemma 2B (offline fallback, ~1-3s)
+        # 4. Local Gemma 2B (offline)
         ROUTER_URL = os.environ.get("ROUTER_URL", "http://127.0.0.1:8081")
         try:
-            t0 = time.time()
             resp = requests.post(
                 f"{ROUTER_URL}/v1/completions",
                 json={"prompt": f"System: {system}\nUser: {user_message}\nAssistant:",
                       "max_tokens": 200, "temperature": 0.7},
                 timeout=30,
             )
-            ms = int((time.time() - t0) * 1000)
             if resp.status_code == 200:
-                reply = resp.json().get("choices", [{}])[0].get("text", "").strip()
-                log.info(f"🏠 Local LLM ({ms}ms): \"{reply[:80]}\"")
-                return reply
-        except Exception as e:
-            log.warning(f"Local LLM failed: {e}")
+                return resp.json().get("choices", [{}])[0].get("text", "").strip()
+        except:
+            pass
         
-        return "Συγγνώμη, δεν μπορώ να απαντήσω." if lang == "el" else "Sorry, I can't respond."
+        return "Συγγνώμη, δεν μπορώ να απαντήσω."
     except Exception as e:
         log.error(f"LLM failed: {e}")
-        return "Sorry."
+        return "Συγγνώμη."
 
 # ═══════════════════════════════════════════════════════════
 # 5. TTS — Queue response for browser playback
@@ -659,17 +711,19 @@ def detect_language(text):
 
 
 def conversation_turn(mic, text, lang):
-    """Handle one conversation turn with streaming for speed."""
+    """Handle one conversation turn with smart routing + streaming."""
     state.is_processing = True
     try:
-        # Try Groq streaming first (fastest path)
-        if GROQ_API_KEY:
-            reply = _groq_streaming_chat(text, lang)
-            if reply:
+        use_claude = _needs_claude(text)
+        
+        # Try streaming for speed
+        if not use_claude and GROQ_API_KEY:
+            result = _groq_streaming_chat(text, lang)
+            if result:
                 state.is_processing = False
                 return
         
-        # Fallback: non-streaming chat + speak
+        # Non-streaming fallback (Claude or Groq non-stream)
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
