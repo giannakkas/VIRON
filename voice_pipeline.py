@@ -355,8 +355,10 @@ def chat(user_message, system="You are VIRON, a helpful AI companion. Reply conc
     try:
         import requests
         
-        if lang in ("el", "el-GR"):
-            system += " Απάντα στα Ελληνικά."
+        # Default to Greek since VIRON's user speaks Greek
+        if lang in ("el", "el-GR") or not lang or lang == "en":
+            system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός."
+            lang = "el"
         
         resp = requests.post(
             f"{GATEWAY_URL}/v1/chat",
@@ -526,7 +528,7 @@ def conversation_turn(mic, text, lang):
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
-            speak(reply, lang=lang)
+            speak(reply, lang="el")  # Always speak Greek
     finally:
         state.is_processing = False
 
