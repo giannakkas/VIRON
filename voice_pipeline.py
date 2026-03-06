@@ -71,9 +71,9 @@ GATEWAY_URL = os.environ.get("VIRON_GATEWAY_URL", "http://127.0.0.1:8080")
 BACKEND_URL = os.environ.get("VIRON_BACKEND_URL", "http://127.0.0.1:5000")
 TTS_URL = os.environ.get("VIRON_TTS_URL", "http://127.0.0.1:5000/api/tts")
 
-ECHO_COOLDOWN = float(os.environ.get("VIRON_ECHO_COOLDOWN", "2.0"))
+ECHO_COOLDOWN = float(os.environ.get("VIRON_ECHO_COOLDOWN", "1.0"))
 MAX_SPEECH_SEC = float(os.environ.get("VIRON_MAX_SPEECH", "15.0"))
-SILENCE_TIMEOUT = float(os.environ.get("VIRON_SILENCE_TIMEOUT", "1.0"))
+SILENCE_TIMEOUT = float(os.environ.get("VIRON_SILENCE_TIMEOUT", "0.7"))
 NO_SPEECH_TIMEOUT = float(os.environ.get("VIRON_NO_SPEECH_TIMEOUT", "6.0"))
 
 PORT = int(os.environ.get("VIRON_PIPELINE_PORT", "8085"))
@@ -289,9 +289,11 @@ def _transcribe_deepgram(wav_path, lang="el"):
             },
             params={
                 "model": "nova-2",
-                "language": lang or "el",
+                "detect_language": "true",
                 "smart_format": "true",
                 "punctuate": "true",
+                "channels": "1",
+                "sample_rate": "16000",
             },
             data=audio_data,
             timeout=10,
@@ -303,8 +305,11 @@ def _transcribe_deepgram(wav_path, lang="el"):
             result = resp.json()
             text = result.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("transcript", "").strip()
             confidence = result.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("confidence", 0)
-            log.info(f"⚡ Deepgram ({ms}ms, conf={confidence:.2f}): \"{text[:80]}\"")
-            return text, lang
+            detected_lang = result.get("results", {}).get("channels", [{}])[0].get("detected_language", lang)
+            log.info(f"⚡ Deepgram ({ms}ms, conf={confidence:.2f}, lang={detected_lang}): \"{text[:80]}\"")
+            if not text or confidence < 0.1:
+                log.warning(f"Deepgram low confidence/empty — raw: {json.dumps(result.get('results',{}))[:200]}")
+            return text, detected_lang or lang
         else:
             log.warning(f"Deepgram error {resp.status_code}: {resp.text[:100]}")
             return None, None
@@ -604,9 +609,22 @@ Write in Greek. 5-8 steps minimum."""
 # Response queue: pipeline stores LLM replies here, browser picks them up
 _response_queue = []
 _response_lock = threading.Lock()
+_current_ffplay = None  # Track ffplay process for interrupt
+
+def interrupt_speech():
+    """Kill current TTS playback (called when wake word detected during speech)."""
+    global _current_ffplay
+    if _current_ffplay and _current_ffplay.poll() is None:
+        _current_ffplay.kill()
+        _current_ffplay = None
+        log.info("🛑 Speech interrupted by wake word!")
+        state.tts_end()
+        return True
+    return False
 
 def speak(text, lang="el"):
     """Play TTS through Jetson speaker AND send to browser for face animation."""
+    global _current_ffplay
     if not text:
         return
     state.tts_start()
@@ -627,11 +645,15 @@ def speak(text, lang="el"):
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 tmp.write(resp.content)
                 tmp_path = tmp.name
-            subprocess.run(
+            _current_ffplay = subprocess.Popen(
                 ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
-                timeout=30,
             )
-            os.unlink(tmp_path)
+            _current_ffplay.wait()  # Block until done or killed
+            _current_ffplay = None
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
             log.info(f"🔊 Played: \"{text[:50]}\"")
         else:
             log.warning(f"TTS error: status={resp.status_code}")
@@ -1022,8 +1044,24 @@ def main_loop(mic):
     
     while True:
         try:
-            if state.is_speaking or state.is_processing or state.is_paused:
+            if state.is_processing or state.is_paused:
                 time.sleep(0.1)
+                continue
+            
+            # During speech: still check for wake word to allow interrupt
+            if state.is_speaking:
+                frame = mic.read_frame()
+                if frame is not None and len(frame) == porcupine.frame_length:
+                    try:
+                        result = porcupine.process(frame)
+                        if result >= 0:
+                            log.info("🛑 Wake word during speech — interrupting!")
+                            interrupt_speech()
+                            state.in_conversation = True
+                            time.sleep(0.5)  # Brief pause for echo
+                    except:
+                        pass
+                time.sleep(0.02)
                 continue
             
             if time.time() - state.last_tts_end < ECHO_COOLDOWN:
