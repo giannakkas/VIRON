@@ -289,14 +289,12 @@ def _transcribe_deepgram(wav_path, lang="el"):
             },
             params={
                 "model": "nova-2",
-                "detect_language": "true",
+                "language": "el",
                 "smart_format": "true",
                 "punctuate": "true",
-                "channels": "1",
-                "sample_rate": "16000",
             },
             data=audio_data,
-            timeout=10,
+            timeout=5,
         )
         
         ms = int((time.time() - t0) * 1000)
