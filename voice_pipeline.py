@@ -75,7 +75,7 @@ TTS_URL = os.environ.get("VIRON_TTS_URL", "http://127.0.0.1:5000/api/tts")
 ECHO_COOLDOWN = float(os.environ.get("VIRON_ECHO_COOLDOWN", "2.0"))
 MAX_SPEECH_SEC = float(os.environ.get("VIRON_MAX_SPEECH", "15.0"))
 SILENCE_TIMEOUT = float(os.environ.get("VIRON_SILENCE_TIMEOUT", "1.0"))
-NO_SPEECH_TIMEOUT = float(os.environ.get("VIRON_NO_SPEECH_TIMEOUT", "4.0"))
+NO_SPEECH_TIMEOUT = float(os.environ.get("VIRON_NO_SPEECH_TIMEOUT", "6.0"))
 
 PORT = int(os.environ.get("VIRON_PIPELINE_PORT", "8085"))
 
@@ -459,10 +459,7 @@ class MicStream:
 
 
 def record_command(mic, timeout=MAX_SPEECH_SEC):
-    """Record user's command using Silero VAD for endpoint detection.
-    
-    Returns: numpy int16 array of speech audio
-    """
+    """Record user's command using Silero VAD for endpoint detection."""
     log.info("👂 Listening for command...")
     state.is_listening = True
     
@@ -475,14 +472,22 @@ def record_command(mic, timeout=MAX_SPEECH_SEC):
     no_speech_needed = int(NO_SPEECH_TIMEOUT * SAMPLE_RATE / FRAME_LENGTH)
     max_frames = int(timeout * SAMPLE_RATE / FRAME_LENGTH)
     
-    # Pre-roll buffer (capture audio before speech starts)
-    preroll = deque(maxlen=6)  # ~192ms
+    preroll = deque(maxlen=6)
+    frame_count = 0
     
     try:
         for _ in range(max_frames):
             frame = mic.read_frame()
             if frame is None:
+                log.error("  Mic read returned None!")
                 break
+            
+            frame_count += 1
+            rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
+            
+            # Log every 30 frames (~1s) to show mic is alive
+            if frame_count % 30 == 0:
+                log.info(f"  ... listening (frame {frame_count}, RMS={rms:.0f}, speech_started={speech_started})")
             
             is_speech = vad_is_speech(frame)
             
@@ -490,13 +495,13 @@ def record_command(mic, timeout=MAX_SPEECH_SEC):
                 preroll.append(frame)
                 if is_speech:
                     speech_started = True
-                    speech_frames = list(preroll)  # include pre-roll
+                    speech_frames = list(preroll)
                     silence_frames = 0
-                    log.info("  🗣️ Speech started")
+                    log.info(f"  🗣️ Speech started (RMS={rms:.0f})")
                 else:
                     no_speech_frames += 1
                     if no_speech_frames >= no_speech_needed:
-                        log.info("  🔇 No speech detected")
+                        log.info(f"  🔇 No speech detected after {no_speech_frames} frames ({NO_SPEECH_TIMEOUT}s)")
                         return np.array([], dtype=np.int16)
             else:
                 speech_frames.append(frame)
@@ -505,11 +510,14 @@ def record_command(mic, timeout=MAX_SPEECH_SEC):
                 else:
                     silence_frames += 1
                     if silence_frames >= silence_needed:
-                        log.info(f"  ✅ Speech ended ({len(speech_frames) * FRAME_LENGTH / SAMPLE_RATE:.1f}s)")
+                        dur = len(speech_frames) * FRAME_LENGTH / SAMPLE_RATE
+                        log.info(f"  ✅ Speech ended ({dur:.1f}s)")
                         break
         
         if speech_frames:
-            return np.concatenate(speech_frames)
+            audio = np.concatenate(speech_frames)
+            log.info(f"  Captured {len(audio)/SAMPLE_RATE:.1f}s of audio")
+            return audio
         return np.array([], dtype=np.int16)
     finally:
         state.is_listening = False
