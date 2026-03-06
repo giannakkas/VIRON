@@ -66,7 +66,6 @@ SAMPLE_RATE = 16000
 FRAME_LENGTH = 512  # Porcupine requires 512 samples at 16kHz (32ms)
 
 WHISPER_MODEL = os.environ.get("VIRON_WHISPER_MODEL", "small")
-WHISPER_DEVICE = os.environ.get("VIRON_WHISPER_DEVICE", "auto")  # auto, cuda, cpu
 
 GATEWAY_URL = os.environ.get("VIRON_GATEWAY_URL", "http://127.0.0.1:8080")
 BACKEND_URL = os.environ.get("VIRON_BACKEND_URL", "http://127.0.0.1:5000")
@@ -243,101 +242,149 @@ def vad_is_speech(audio_int16, threshold=0.5):
         return rms > 150
 
 # ═══════════════════════════════════════════════════════════
-# 3. FASTER-WHISPER (GPU/CPU)
+# 3. WHISPER STT (whisper.cpp GPU > cloud > faster-whisper CPU)
 # ═══════════════════════════════════════════════════════════
 
 whisper_model = None
+WHISPER_CPP_BIN = os.environ.get("VIRON_WHISPER_CPP", os.path.expanduser("~/whisper.cpp/build/bin/whisper-cli"))
+WHISPER_CPP_MODEL = os.environ.get("VIRON_WHISPER_MODEL_PATH", os.path.expanduser("~/whisper.cpp/models/ggml-small.bin"))
+WHISPER_CPP_AVAILABLE = os.path.exists(WHISPER_CPP_BIN) and os.path.exists(WHISPER_CPP_MODEL)
 
 def init_whisper():
-    global whisper_model
+    global whisper_model, WHISPER_CPP_AVAILABLE
+    
+    # Check whisper.cpp GPU first
+    if WHISPER_CPP_AVAILABLE:
+        log.info(f"✅ whisper.cpp GPU ready: {WHISPER_CPP_BIN}")
+        return True
+    else:
+        log.info(f"whisper.cpp not found at {WHISPER_CPP_BIN}, checking faster-whisper...")
+    
+    # Fallback to faster-whisper (CPU)
     try:
         from faster_whisper import WhisperModel
-        
-        # Auto-detect CUDA
-        device = WHISPER_DEVICE
-        compute_type = "float16"
-        
-        if device == "auto":
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    device = "cuda"
-                    log.info(f"  CUDA available: {torch.cuda.get_device_name(0)}")
-                else:
-                    device = "cpu"
-                    compute_type = "int8"
-            except ImportError:
-                device = "cpu"
-                compute_type = "int8"
-        
-        if device == "cpu":
-            compute_type = "int8"
-        
-        log.info(f"Loading Whisper '{WHISPER_MODEL}' on {device} ({compute_type})...")
-        whisper_model = WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type)
-        log.info(f"✅ Whisper ready: {WHISPER_MODEL} on {device}")
+        device = "cpu"
+        compute_type = "int8"
+        log.info(f"Loading faster-whisper 'small' on {device} ({compute_type})...")
+        whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+        log.info(f"✅ faster-whisper ready: small on {device}")
         return True
     except Exception as e:
         log.warning(f"⚠ Local Whisper not available: {e}")
-        log.warning("  Will use OpenAI cloud STT")
+        log.warning("  Will use OpenAI cloud STT only")
         return False
 
 
+def _transcribe_whisper_cpp(wav_path, lang=None):
+    """Transcribe using whisper.cpp with GPU acceleration. ~200-500ms."""
+    cmd = [
+        WHISPER_CPP_BIN,
+        "-m", WHISPER_CPP_MODEL,
+        "-f", wav_path,
+        "--no-prints",
+        "-t", "4",           # threads
+        "--no-timestamps",
+        "-otxt",             # output text only
+    ]
+    if lang:
+        cmd.extend(["-l", lang])
+    
+    try:
+        t0 = time.time()
+        result = subprocess.run(cmd, capture_output=True, timeout=15, text=True)
+        ms = int((time.time() - t0) * 1000)
+        
+        if result.returncode == 0:
+            # whisper.cpp outputs to stdout or .txt file
+            text = result.stdout.strip()
+            if not text:
+                # Try reading the .txt output file
+                txt_path = wav_path + ".txt"
+                if os.path.exists(txt_path):
+                    text = open(txt_path).read().strip()
+                    os.unlink(txt_path)
+            
+            log.info(f"⚡ whisper.cpp GPU ({ms}ms): \"{text[:80]}\"")
+            return text, lang or "auto"
+        else:
+            log.warning(f"whisper.cpp error: {result.stderr[:200]}")
+            return None, None
+    except subprocess.TimeoutExpired:
+        log.warning("whisper.cpp timed out")
+        return None, None
+    except Exception as e:
+        log.warning(f"whisper.cpp failed: {e}")
+        return None, None
+
+
 def transcribe(audio_int16, lang=None):
-    """Transcribe audio — cloud Whisper first (faster), local fallback."""
-    # Cloud first (faster: ~1s vs ~3s local CPU)
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if openai_key:
-        try:
-            import requests
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                wav_path = tmp.name
-                with wave.open(tmp, 'wb') as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(SAMPLE_RATE)
-                    wf.writeframes(audio_int16.tobytes())
-            
-            t0 = time.time()
-            with open(wav_path, 'rb') as f:
-                resp = requests.post(
-                    "https://api.openai.com/v1/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {openai_key}"},
-                    files={"file": ("speech.wav", f, "audio/wav")},
-                    data={"model": "whisper-1", "temperature": 0.0,
-                          **({"language": lang} if lang else {})},
-                    timeout=15,
-                )
-            os.unlink(wav_path)
-            
-            if resp.status_code == 200:
-                text = resp.json().get("text", "").strip()
+    """Transcribe audio — whisper.cpp GPU > cloud Whisper > local CPU."""
+    
+    # Save audio to WAV for all methods
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wav_path = tmp.name
+        with wave.open(tmp, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(audio_int16.tobytes())
+    
+    try:
+        # 1. whisper.cpp GPU (~200-500ms) — fastest
+        if WHISPER_CPP_AVAILABLE:
+            text, detected_lang = _transcribe_whisper_cpp(wav_path, lang)
+            if text:
+                return text, detected_lang
+            log.warning("whisper.cpp failed, trying cloud...")
+        
+        # 2. Cloud Whisper (~1s) — fast, needs internet
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if openai_key:
+            try:
+                import requests
+                t0 = time.time()
+                with open(wav_path, 'rb') as f:
+                    resp = requests.post(
+                        "https://api.openai.com/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {openai_key}"},
+                        files={"file": ("speech.wav", f, "audio/wav")},
+                        data={"model": "whisper-1", "temperature": 0.0,
+                              **({"language": lang} if lang else {})},
+                        timeout=15,
+                    )
                 ms = int((time.time() - t0) * 1000)
-                log.info(f"☁️ Cloud Whisper ({ms}ms): \"{text[:80]}\"")
-                return text, lang or "auto"
-            else:
-                log.warning(f"Cloud Whisper error {resp.status_code}, trying local...")
-        except Exception as e:
-            log.warning(f"Cloud STT failed: {e}, trying local...")
-    
-    # Local fallback
-    if whisper_model is not None:
+                if resp.status_code == 200:
+                    text = resp.json().get("text", "").strip()
+                    log.info(f"☁️ Cloud Whisper ({ms}ms): \"{text[:80]}\"")
+                    return text, lang or "auto"
+                else:
+                    log.warning(f"Cloud Whisper error {resp.status_code}")
+            except Exception as e:
+                log.warning(f"Cloud STT failed: {e}")
+        
+        # 3. Local faster-whisper CPU (~3s) — slowest, always works
+        if whisper_model is not None:
+            try:
+                audio_float = audio_int16.astype(np.float32) / 32768.0
+                t0 = time.time()
+                segments, info = whisper_model.transcribe(
+                    audio_float, language=lang, beam_size=3, best_of=3,
+                    vad_filter=True, vad_parameters=dict(min_silence_duration_ms=300),
+                )
+                text = " ".join(s.text.strip() for s in segments).strip()
+                ms = int((time.time() - t0) * 1000)
+                log.info(f"🏠 Local CPU Whisper ({ms}ms): \"{text[:80]}\"")
+                return text, info.language
+            except Exception as e:
+                log.error(f"Local Whisper error: {e}")
+        
+        log.error("❌ No STT available")
+        return "", ""
+    finally:
         try:
-            audio_float = audio_int16.astype(np.float32) / 32768.0
-            t0 = time.time()
-            segments, info = whisper_model.transcribe(
-                audio_float, language=lang, beam_size=3, best_of=3,
-                vad_filter=True, vad_parameters=dict(min_silence_duration_ms=300),
-            )
-            text = " ".join(s.text.strip() for s in segments).strip()
-            ms = int((time.time() - t0) * 1000)
-            log.info(f"🏠 Local Whisper ({ms}ms): \"{text[:80]}\"")
-            return text, info.language
-        except Exception as e:
-            log.error(f"Local Whisper error: {e}")
-    
-    log.error("❌ No STT available")
-    return "", ""
+            os.unlink(wav_path)
+        except:
+            pass
 
 # ═══════════════════════════════════════════════════════════
 # 4. LLM (via Gateway)
@@ -579,7 +626,7 @@ def main_loop(mic):
     log.info("🤖 VIRON Voice Pipeline Active")
     log.info(f"   Wake: Porcupine ({wake_name})")
     log.info(f"   VAD: {'Silero' if silero_vad else 'RMS'}")
-    log.info(f"   STT: {'Local Whisper ('+WHISPER_DEVICE+')' if whisper_model else 'Cloud'}")
+    log.info(f"   STT: {'whisper.cpp GPU' if WHISPER_CPP_AVAILABLE else ('faster-whisper CPU' if whisper_model else 'Cloud')}")
     log.info(f"   Mic: {ALSA_DEVICE} ch{MIC_CHANNEL}")
     log.info("=" * 50)
     log.info(f"🎤 Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
@@ -691,7 +738,7 @@ def health():
         "pipeline_version": 2,
         "wake_engine": "porcupine" if porcupine else "none",
         "vad_engine": "silero" if silero_vad else "rms",
-        "stt_engine": f"faster-whisper-{WHISPER_DEVICE}" if whisper_model else "cloud",
+        "stt_engine": "whisper.cpp-gpu" if WHISPER_CPP_AVAILABLE else ("faster-whisper-cpu" if whisper_model else "cloud"),
         "speaking": state.is_speaking,
         "listening": state.is_listening,
         "processing": state.is_processing,
@@ -721,7 +768,8 @@ def main():
     print()
     print(f"  Wake:    {'✅ Porcupine' if has_wake else '❌ PORCUPINE FAILED - check PICOVOICE_ACCESS_KEY'}")
     print(f"  VAD:     {'✅ Silero' if has_vad else '⚠ RMS fallback'}")
-    print(f"  STT:     {'✅ Local Whisper (' + WHISPER_DEVICE + ')' if has_whisper else '⚠ Cloud only'}")
+    stt_status = "✅ whisper.cpp GPU" if WHISPER_CPP_AVAILABLE else ("✅ faster-whisper CPU" if whisper_model else "☁️ Cloud only")
+    print(f"  STT:     {stt_status}")
     print(f"  Gateway: {GATEWAY_URL}")
     print(f"  TTS:     {TTS_URL}")
     print(f"  Mic:     {ALSA_DEVICE} ch{MIC_CHANNEL}")
