@@ -584,18 +584,38 @@ _response_queue = []
 _response_lock = threading.Lock()
 
 def speak(text, lang="el"):
-    """Queue response for browser TTS playback."""
+    """Play TTS through Jetson speaker AND send to browser for face animation."""
     if not text:
         return
     state.tts_start()
     
+    # Send to browser for face animation
     with _response_lock:
         _response_queue.append({"text": text, "lang": lang, "time": time.time()})
-    log.info(f"📤 Response: \"{text[:60]}\"")
     
-    # Wait for browser to play
-    wait_time = min(len(text) * 0.06, 25)
-    time.sleep(wait_time)
+    # Play locally on Jetson speaker
+    try:
+        import requests
+        resp = requests.post(
+            TTS_URL,
+            json={"text": text, "lang": lang, "speed": "normal"},
+            timeout=15,
+        )
+        if resp.status_code == 200 and len(resp.content) > 1000:
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                tmp.write(resp.content)
+                tmp_path = tmp.name
+            subprocess.run(
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
+                timeout=30,
+            )
+            os.unlink(tmp_path)
+            log.info(f"🔊 Played: \"{text[:50]}\"")
+        else:
+            log.warning(f"TTS error: status={resp.status_code}")
+    except Exception as e:
+        log.warning(f"Local TTS failed: {e}")
+    
     state.tts_end()
 
 # ═══════════════════════════════════════════════════════════
@@ -810,15 +830,15 @@ def _groq_streaming_chat(user_message, lang):
                     # Split accumulated text into sentences
                     sentences = re.split(r'(?<=[.!;?·])\s+', full_response)
                     
-                    # Send complete sentences (all except last which may be incomplete)
+                    # Send complete sentences — play locally + send to browser
                     for s in sentences[:-1]:
                         s = s.strip()
                         if s and s not in sent_sentences:
                             sent_sentences.append(s)
                             ms = int((time.time() - t0) * 1000)
                             log.info(f"⚡ Groq [{ms}ms] sentence {len(sent_sentences)}: \"{s[:60]}\"")
-                            with _response_lock:
-                                _response_queue.append({"text": s, "lang": "el", "time": time.time()})
+                            # Play on Jetson speaker + send to browser for face
+                            speak(s, lang="el")
                     
                     # Keep only the last (potentially incomplete) sentence in buffer
                     full_response = sentences[-1] if sentences else ""
@@ -830,16 +850,11 @@ def _groq_streaming_chat(user_message, lang):
         remaining = full_response.strip()
         if remaining and remaining not in sent_sentences:
             sent_sentences.append(remaining)
-            with _response_lock:
-                _response_queue.append({"text": remaining, "lang": "el", "time": time.time()})
+            speak(remaining, lang="el")
         
         ms = int((time.time() - t0) * 1000)
         log.info(f"⚡ Groq complete: {len(sent_sentences)} sentences in {ms}ms")
         
-        # Wait for browser TTS playback
-        total_chars = sum(len(s) for s in sent_sentences)
-        wait_time = min(total_chars * 0.06, 20)
-        time.sleep(wait_time)
         state.tts_end()
         return True
         

@@ -808,39 +808,25 @@ function _playNextPipelineSentence(){
   const d=pipelineQueue.shift();
   pipelineSpeaking=true;
   cE("happy");
-  D('📢 Playing: "'+d.text.substring(0,50)+'"');
+  D('📢 Face animation: "'+d.text.substring(0,50)+'"');
   
-  // Use server TTS
-  fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:d.text,lang:d.lang||'el',speed:'normal'})})
-  .then(r=>r.ok?r.blob():Promise.reject('HTTP '+r.status))
-  .then(blob=>{
-    const url=URL.createObjectURL(blob);
-    const a=new Audio(url);
-    currentAudio=a;isSpeaking=true;
-    a.volume=(document.getElementById("volSlider")?.value||75)/100;
-    a.onended=()=>{
-      isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);
-      pipelineSpeaking=false;
-      D('📢 Sentence done, queue='+pipelineQueue.length);
-      // Play next sentence after short pause
-      setTimeout(_playNextPipelineSentence,100);
-    };
-    a.onerror=()=>{
-      isSpeaking=false;currentAudio=null;URL.revokeObjectURL(url);
-      pipelineSpeaking=false;
-      setTimeout(_playNextPipelineSentence,100);
-    };
-    a.play().catch(()=>{pipelineSpeaking=false;isSpeaking=false;setTimeout(_playNextPipelineSentence,100)});
-  })
-  .catch(e=>{
-    D('📢 TTS fetch failed: '+e+', trying browser voice');
-    // Fallback to browser SpeechSynthesis
-    const u=new SpeechSynthesisUtterance(d.text);
-    u.lang=d.lang==='el'?'el-GR':'en-US';u.rate=1.0;u.volume=0.8;
-    u.onend=()=>{pipelineSpeaking=false;isSpeaking=false;setTimeout(_playNextPipelineSentence,100)};
-    u.onerror=()=>{pipelineSpeaking=false;isSpeaking=false;setTimeout(_playNextPipelineSentence,100)};
-    synth.speak(u);isSpeaking=true;
-  });
+  // Jetson speaker plays audio — browser just animates the face
+  // Show talking animation for estimated duration
+  const duration = Math.min(d.text.length * 60, 15000); // ~60ms per char
+  isSpeaking=true;
+  
+  // Animate talking
+  const talkAnim = setInterval(()=>{
+    // Face expression updates happen via CSS/existing animation
+  }, 100);
+  
+  setTimeout(()=>{
+    clearInterval(talkAnim);
+    isSpeaking=false;
+    pipelineSpeaking=false;
+    D('📢 Face animation done, queue='+pipelineQueue.length);
+    setTimeout(_playNextPipelineSentence, 100);
+  }, duration);
 }
 
 // ===== PIPELINE STATE INDICATOR =====
