@@ -843,6 +843,35 @@ function _playNextPipelineSentence(){
   });
 }
 
+// ===== PIPELINE STATE INDICATOR =====
+// Poll pipeline state to show red bar when listening, spinner when processing
+setInterval(()=>{
+  fetch('/pipeline/state',{signal:AbortSignal.timeout(1000)})
+  .then(r=>r.json())
+  .then(s=>{
+    const ind=document.getElementById("listenInd");
+    const txt=document.getElementById("listenText");
+    if(s.listening){
+      ind.className="listen-indicator active";
+      txt.textContent="🎤 Listening (ReSpeaker)...";
+      txt.style.color="rgba(255,80,80,0.9)";
+    }else if(s.processing){
+      ind.className="listen-indicator active";
+      txt.textContent="🧠 Thinking...";
+      txt.style.color="rgba(255,200,50,0.9)";
+    }else if(pipelineSpeaking||isSpeaking){
+      ind.className="listen-indicator speaking";
+      txt.textContent="🔊 Speaking...";
+      txt.style.color="rgba(100,200,255,0.9)";
+    }else{
+      ind.className="listen-indicator wake";
+      txt.textContent='Say "Hey VIRON" or press Space';
+      txt.style.color="";
+    }
+  })
+  .catch(()=>{});
+},300);
+
 function startOWWPolling(){
   if(owwPolling)return;
   owwPolling=true;

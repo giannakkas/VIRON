@@ -937,6 +937,15 @@ def pipeline_response():
             return jsonify({"has_response": True, "text": resp["text"], "lang": resp["lang"]})
     return jsonify({"has_response": False})
 
+@app.route("/pipeline/state", methods=["GET"])
+def pipeline_state():
+    """Browser polls this for visual indicators (listening, processing, speaking)."""
+    return jsonify({
+        "listening": state.is_listening,
+        "processing": state.is_processing,
+        "speaking": state.is_speaking,
+    })
+
 @app.route("/wakeword/pause", methods=["POST"])
 def ww_pause():
     return jsonify({"status": "paused"})
