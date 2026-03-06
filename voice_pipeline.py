@@ -286,8 +286,12 @@ def _transcribe_whisper_cpp(wav_path, lang=None):
         "--no-timestamps",
         "-otxt",             # output text only
     ]
+    # Map language codes for whisper.cpp
     if lang:
-        cmd.extend(["-l", lang])
+        # whisper.cpp uses full names or ISO codes
+        lang_map = {"el": "el", "en": "en", "el-GR": "el", "en-US": "en"}
+        wlang = lang_map.get(lang, lang)
+        cmd.extend(["-l", wlang])
     
     try:
         t0 = time.time()
@@ -660,7 +664,7 @@ def main_loop(mic):
                     
                     audio = record_command(mic)
                     if len(audio) > SAMPLE_RATE * 0.3:
-                        text, lang = transcribe(audio)
+                        text, lang = transcribe(audio, lang="el")  # Default Greek
                         if text and len(text) > 1:
                             lang = detect_language(text)
                             log.info(f"📝 Command: \"{text}\" (lang={lang})")
