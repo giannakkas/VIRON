@@ -288,7 +288,7 @@ def _transcribe_deepgram(wav_path, lang="el"):
                 "Content-Type": "audio/wav",
             },
             params={
-                "model": "nova-2",
+                "model": "nova-3",
                 "language": "el",
                 "smart_format": "true",
                 "punctuate": "true",
