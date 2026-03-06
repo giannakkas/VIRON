@@ -350,7 +350,7 @@ def _check_internet():
     """Quick internet check (~100ms)."""
     try:
         import requests
-        requests.head("https://api.deepgram.com", timeout=1)
+        requests.head("https://www.google.com", timeout=2)
         return True
     except:
         return False
@@ -437,12 +437,14 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
 # Keywords that trigger Claude (tutoring, complex reasoning)
 CLAUDE_TRIGGERS = [
-    # Greek tutoring keywords
-    "εξήγησέ", "εξήγησε", "μάθε", "δίδαξε", "πώς", "γιατί", "τι είναι",
-    "βοήθησε με", "homework", "μάθημα", "σχολείο", "άσκηση", "εργασία",
-    "υπολόγισε", "λύσε", "ανάλυσε", "σύγκρινε", "περίγραψε",
-    "πες μου για", "μίλησέ μου", "τι σημαίνει", "πώς λειτουργεί",
-    "πώς δουλεύει", "τι ξέρεις", "μπορείς να μου πεις",
+    # Greek tutoring keywords (verb stems to match all forms)
+    "εξήγησ", "εξηγήσ", "εξηγ", "μάθε", "δίδαξ", "πώς", "γιατί", "τι είναι",
+    "βοήθησ", "μάθημα", "σχολείο", "άσκηση", "εργασία",
+    "υπολόγισ", "λύσε", "ανάλυσ", "σύγκρινε", "περίγραψ",
+    "πες μου για", "μίλησέ μου", "τι σημαίνει", "πώς λειτουργ",
+    "πώς δουλεύ", "τι ξέρεις", "μπορείς να μου πεις",
+    "θεώρημα", "πυθαγόρ", "μαθηματικ", "φυσικ", "ιστορί",
+    "βιολογί", "χημεί", "γεωγραφί", "φωτοσύνθεσ", "βαρύτητ",
     # English tutoring keywords  
     "explain", "teach", "help me understand", "how does", "why does",
     "what is", "homework", "lesson", "exercise", "calculate", "solve",
@@ -463,6 +465,7 @@ def _needs_claude(text):
     # Check for tutoring/complex keywords
     for trigger in CLAUDE_TRIGGERS:
         if trigger in t:
+            log.info(f"🎯 Educational trigger matched: '{trigger}' in '{t[:50]}'")
             return True
     # Long questions are more likely complex
     if len(t) > 100:
@@ -1251,6 +1254,7 @@ def main():
     print(f"  STT:     {stt_status}")
     print(f"  Gateway: {GATEWAY_URL}")
     print(f"  TTS:     {TTS_URL}")
+    print(f"  Claude:  {'✅ ' + ANTHROPIC_MODEL if ANTHROPIC_API_KEY else '❌ No ANTHROPIC_API_KEY'}")
     print(f"  Mic:     {ALSA_DEVICE} ch{MIC_CHANNEL}")
     print()
     
