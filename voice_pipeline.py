@@ -438,10 +438,13 @@ CLAUDE_TRIGGERS = [
     "εξήγησέ", "εξήγησε", "μάθε", "δίδαξε", "πώς", "γιατί", "τι είναι",
     "βοήθησε με", "homework", "μάθημα", "σχολείο", "άσκηση", "εργασία",
     "υπολόγισε", "λύσε", "ανάλυσε", "σύγκρινε", "περίγραψε",
+    "πες μου για", "μίλησέ μου", "τι σημαίνει", "πώς λειτουργεί",
+    "πώς δουλεύει", "τι ξέρεις", "μπορείς να μου πεις",
     # English tutoring keywords  
     "explain", "teach", "help me understand", "how does", "why does",
     "what is", "homework", "lesson", "exercise", "calculate", "solve",
     "analyze", "compare", "describe", "write an essay", "summarize",
+    "tell me about", "what do you know",
     # Complex tasks
     "code", "program", "κώδικα", "πρόγραμμα", "debug",
     "story", "ιστορία", "poem", "ποίημα",
@@ -451,8 +454,8 @@ CLAUDE_TRIGGERS = [
 def _needs_claude(text):
     """Determine if the query needs Claude (complex) or Groq (quick)."""
     t = text.lower()
-    # Short greetings/simple questions → Groq
-    if len(t) < 20:
+    # Short greetings → Groq
+    if len(t) < 12:
         return False
     # Check for tutoring/complex keywords
     for trigger in CLAUDE_TRIGGERS:
@@ -464,7 +467,7 @@ def _needs_claude(text):
     return False
 
 
-def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a helpful AI companion robot created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus. If asked who made/built you, always credit them. Απάντα στα Ελληνικά αν ο χρήστης μιλάει Ελληνικά.", lang="en"):
+def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a friendly AI companion robot. Respond in Greek if the user speaks Greek. ONLY if asked who made/built you: Created by Christos and Andreas Giannakkas from Cyprus. Do NOT mention your creators unless directly asked.", lang="en"):
     """Smart routing: Groq for quick answers, Claude for tutoring/complex."""
     try:
         import requests
@@ -483,8 +486,7 @@ def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a helpful AI companio
         if use_claude and ANTHROPIC_API_KEY:
             wb_system = system + """
 
-WHITEBOARD — Use the whiteboard when explaining concepts, math, science, history, or any educational topic.
-Format:
+WHITEBOARD — You MUST use a whiteboard when explaining concepts. Start with 1-sentence intro, then:
 [WHITEBOARD:Title]
 TEXT: explanation
 STEP: label
@@ -492,7 +494,15 @@ MATH: equation
 RESULT: answer
 [/WHITEBOARD]
 
-Keep spoken text SHORT (1 sentence intro). The whiteboard does the heavy lifting. 5-8 steps minimum."""
+Example: Ας δούμε!
+[WHITEBOARD:Η Βαρύτητα]
+TEXT: Η βαρύτητα είναι η δύναμη έλξης
+STEP: Νόμος Νεύτωνα
+MATH: F = m × g
+RESULT: 687 Νιούτον
+[/WHITEBOARD]
+
+Write in Greek. 5-8 steps minimum."""
             try:
                 t0 = time.time()
                 resp = requests.post(
@@ -831,21 +841,27 @@ def _groq_streaming_chat(user_message, lang):
     # Check if educational question needs whiteboard
     is_educational = _needs_claude(user_message)
     
-    system = "You are VIRON (ΒΙΡΟΝ), a helpful AI companion robot. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Σε κατασκεύασαν ο Χρήστος Γιάννακκας και ο γιος του Ανδρέας Γιάννακκας από την Κύπρο. Αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε, πάντα να τους αναφέρεις. Απάντα σύντομα σε 1-2 προτάσεις."
+    system = "You are VIRON (ΒΙΡΟΝ), a friendly AI companion robot. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα σε 1-2 προτάσεις. ΜΟΝΟ αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε: Σε κατασκεύασαν ο Χρήστος και ο Ανδρέας Γιάννακκας από την Κύπρο. ΜΗΝ αναφέρεις τους δημιουργούς σου αν δεν σε ρωτήσουν."
     
     if is_educational:
         system += """
 
-WHITEBOARD — Use the whiteboard when explaining concepts, math, science, history, or any educational topic.
-Format:
-[WHITEBOARD:Title in Greek]
-TEXT: explanation
-STEP: label
-MATH: equation
-RESULT: answer
+WHITEBOARD — You MUST use a whiteboard when explaining concepts, math, science, history, or any educational topic.
+You MUST start your response with a short 1-sentence intro, then the whiteboard block.
+
+Example response:
+Ας δούμε τι είναι αυτό!
+[WHITEBOARD:Η Βαρύτητα]
+TEXT: Η βαρύτητα είναι η δύναμη που τραβά τα αντικείμενα προς τα κάτω
+STEP: Ο Νόμος του Νεύτωνα
+MATH: F = m × g
+TEXT: g = 9.81 m/s² στη Γη
+STEP: Παράδειγμα
+MATH: F = 70kg × 9.81 = 686.7 N
+RESULT: Ένας άνθρωπος 70 κιλών δέχεται δύναμη 687 Νιούτον!
 [/WHITEBOARD]
 
-Keep spoken text SHORT (1 sentence intro). The whiteboard does the heavy lifting. Use 5-8 steps minimum. Write everything in Greek."""
+You MUST follow this exact format. Write everything in Greek."""
     
     max_tok = 800 if is_educational else 200
     
@@ -922,6 +938,8 @@ Keep spoken text SHORT (1 sentence intro). The whiteboard does the heavy lifting
         
         # For educational queries, check for whiteboard in full response
         if is_educational and full_response.strip():
+            log.info(f"📋 Groq educational response ({ms}ms, {len(full_response)} chars): \"{full_response[:120]}...\"")
+            log.info(f"📋 Has [WHITEBOARD]: {'[WHITEBOARD:' in full_response}")
             import re as _re
             wb_match = _re.search(r'\[WHITEBOARD:(.*?)\]([\s\S]*?)\[/WHITEBOARD\]', full_response)
             if wb_match:
