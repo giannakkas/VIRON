@@ -284,67 +284,60 @@ def init_whisper():
 
 
 def transcribe(audio_int16, lang=None):
-    """Transcribe audio using local Whisper or OpenAI cloud fallback."""
-    # Try local Whisper first
+    """Transcribe audio — cloud Whisper first (faster), local fallback."""
+    # Cloud first (faster: ~1s vs ~3s local CPU)
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if openai_key:
+        try:
+            import requests
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                wav_path = tmp.name
+                with wave.open(tmp, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(SAMPLE_RATE)
+                    wf.writeframes(audio_int16.tobytes())
+            
+            t0 = time.time()
+            with open(wav_path, 'rb') as f:
+                resp = requests.post(
+                    "https://api.openai.com/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {openai_key}"},
+                    files={"file": ("speech.wav", f, "audio/wav")},
+                    data={"model": "whisper-1", "temperature": 0.0,
+                          **({"language": lang} if lang else {})},
+                    timeout=15,
+                )
+            os.unlink(wav_path)
+            
+            if resp.status_code == 200:
+                text = resp.json().get("text", "").strip()
+                ms = int((time.time() - t0) * 1000)
+                log.info(f"☁️ Cloud Whisper ({ms}ms): \"{text[:80]}\"")
+                return text, lang or "auto"
+            else:
+                log.warning(f"Cloud Whisper error {resp.status_code}, trying local...")
+        except Exception as e:
+            log.warning(f"Cloud STT failed: {e}, trying local...")
+    
+    # Local fallback
     if whisper_model is not None:
         try:
             audio_float = audio_int16.astype(np.float32) / 32768.0
+            t0 = time.time()
             segments, info = whisper_model.transcribe(
-                audio_float,
-                language=lang,
-                beam_size=3,
-                best_of=3,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=300),
+                audio_float, language=lang, beam_size=3, best_of=3,
+                vad_filter=True, vad_parameters=dict(min_silence_duration_ms=300),
             )
             text = " ".join(s.text.strip() for s in segments).strip()
-            detected_lang = info.language
-            log.info(f"📝 Local Whisper: \"{text[:80]}\" (lang={detected_lang})")
-            return text, detected_lang
+            ms = int((time.time() - t0) * 1000)
+            log.info(f"🏠 Local Whisper ({ms}ms): \"{text[:80]}\"")
+            return text, info.language
         except Exception as e:
-            log.warning(f"Local Whisper error: {e}, trying cloud...")
+            log.error(f"Local Whisper error: {e}")
     
-    # Cloud fallback: OpenAI Whisper API
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if not openai_key:
-        log.error("❌ No STT available (no local Whisper, no OpenAI key)")
-        return "", ""
-    
-    try:
-        import requests
-        # Save as WAV
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            wav_path = tmp.name
-            with wave.open(tmp, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(SAMPLE_RATE)
-                wf.writeframes(audio_int16.tobytes())
-        
-        with open(wav_path, 'rb') as f:
-            resp = requests.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {openai_key}"},
-                files={"file": ("speech.wav", f, "audio/wav")},
-                data={
-                    "model": "whisper-1",
-                    **({"language": lang} if lang else {}),
-                    "temperature": 0.0,
-                },
-                timeout=15,
-            )
-        os.unlink(wav_path)
-        
-        if resp.status_code == 200:
-            text = resp.json().get("text", "").strip()
-            log.info(f"☁️ Cloud Whisper: \"{text[:80]}\"")
-            return text, lang or "auto"
-        else:
-            log.error(f"Cloud Whisper error {resp.status_code}: {resp.text[:100]}")
-            return "", ""
-    except Exception as e:
-        log.error(f"Cloud STT failed: {e}")
-        return "", ""
+    log.error("❌ No STT available")
+    return "", ""
 
 # ═══════════════════════════════════════════════════════════
 # 4. LLM (via Gateway)
