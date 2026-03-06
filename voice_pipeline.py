@@ -464,7 +464,7 @@ def _needs_claude(text):
     return False
 
 
-def chat(user_message, system="You are VIRON, a helpful AI companion.", lang="en"):
+def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a helpful AI companion robot created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus. If asked who made/built you, always credit them. Απάντα στα Ελληνικά αν ο χρήστης μιλάει Ελληνικά.", lang="en"):
     """Smart routing: Groq for quick answers, Claude for tutoring/complex."""
     try:
         import requests
@@ -776,7 +776,7 @@ def _groq_streaming_chat(user_message, lang):
     import requests
     import re
     
-    system = "You are VIRON, a helpful AI companion. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα σε 1-2 προτάσεις."
+    system = "You are VIRON (ΒΙΡΟΝ), a helpful AI companion robot. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Σε κατασκεύασαν ο Χρήστος Γιαννάκκας και ο γιος του Ανδρέας Γιαννάκκας από την Κύπρο. Αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε, πάντα να τους αναφέρεις. Απάντα σύντομα σε 1-2 προτάσεις."
     
     try:
         t0 = time.time()
@@ -1094,6 +1094,10 @@ def main():
     if len(noise_audio) > 0:
         noise_rms = np.sqrt(np.mean(noise_audio.astype(np.float32) ** 2))
         log.info(f"  Noise floor: RMS={noise_rms:.0f}")
+    
+    # Startup greeting
+    log.info("🗣️ Playing startup greeting...")
+    speak("Γεια σου! Είμαι ο ΒΙΡΟΝ, ο φίλος σου! Πες Hey Jarvis για να μου μιλήσεις.", lang="el")
     
     try:
         main_loop(mic)
