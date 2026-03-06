@@ -767,8 +767,9 @@ def conversation_turn(mic, text, lang):
         
         use_claude = _needs_claude(text)
         
-        # Groq streaming: first sentence arrives in ~200ms
-        if not use_claude and GROQ_API_KEY:
+        # Groq streaming for all queries (educational gets whiteboard support)
+        # Only skip to Claude if ANTHROPIC_API_KEY is actually set
+        if GROQ_API_KEY and (not use_claude or not ANTHROPIC_API_KEY):
             result = _groq_streaming_chat(text, lang)
             if result:
                 state.is_processing = False
@@ -827,7 +828,26 @@ def _groq_streaming_chat(user_message, lang):
     import requests
     import re
     
+    # Check if educational question needs whiteboard
+    is_educational = _needs_claude(user_message)
+    
     system = "You are VIRON (ΒΙΡΟΝ), a helpful AI companion robot. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Σε κατασκεύασαν ο Χρήστος Γιάννακκας και ο γιος του Ανδρέας Γιάννακκας από την Κύπρο. Αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε, πάντα να τους αναφέρεις. Απάντα σύντομα σε 1-2 προτάσεις."
+    
+    if is_educational:
+        system += """
+
+WHITEBOARD — Use the whiteboard when explaining concepts, math, science, history, or any educational topic.
+Format:
+[WHITEBOARD:Title in Greek]
+TEXT: explanation
+STEP: label
+MATH: equation
+RESULT: answer
+[/WHITEBOARD]
+
+Keep spoken text SHORT (1 sentence intro). The whiteboard does the heavy lifting. Use 5-8 steps minimum. Write everything in Greek."""
+    
+    max_tok = 800 if is_educational else 200
     
     try:
         t0 = time.time()
@@ -843,7 +863,7 @@ def _groq_streaming_chat(user_message, lang):
                     {"role": "system", "content": system},
                     {"role": "user", "content": user_message},
                 ],
-                "max_tokens": 200,
+                "max_tokens": max_tok,
                 "temperature": 0.7,
                 "stream": True,
             },
@@ -877,6 +897,10 @@ def _groq_streaming_chat(user_message, lang):
                 if token:
                     full_response += token
                     
+                    # For educational queries, collect full response (for whiteboard parsing)
+                    if is_educational:
+                        continue
+                    
                     # Split accumulated text into sentences
                     sentences = re.split(r'(?<=[.!;?·])\s+', full_response)
                     
@@ -887,22 +911,66 @@ def _groq_streaming_chat(user_message, lang):
                             sent_sentences.append(s)
                             ms = int((time.time() - t0) * 1000)
                             log.info(f"⚡ Groq [{ms}ms] sentence {len(sent_sentences)}: \"{s[:60]}\"")
-                            # Play on Jetson speaker + send to browser for face
                             speak(s, lang="el")
                     
-                    # Keep only the last (potentially incomplete) sentence in buffer
                     full_response = sentences[-1] if sentences else ""
                     
             except json.JSONDecodeError:
                 continue
         
-        # Flush remaining text
+        ms = int((time.time() - t0) * 1000)
+        
+        # For educational queries, check for whiteboard in full response
+        if is_educational and full_response.strip():
+            import re as _re
+            wb_match = _re.search(r'\[WHITEBOARD:(.*?)\]([\s\S]*?)\[/WHITEBOARD\]', full_response)
+            if wb_match:
+                spoken = _re.sub(r'\[WHITEBOARD:.*?\][\s\S]*?\[/WHITEBOARD\]\s*', '', full_response).strip()
+                wb_title = wb_match.group(1).strip()
+                wb_steps = []
+                for wline in wb_match.group(2).strip().split('\n'):
+                    wline = wline.strip()
+                    if not wline:
+                        continue
+                    if wline.startswith('STEP:'):
+                        wb_steps.append({"label": wline[5:].strip()})
+                    elif wline.startswith('MATH:'):
+                        wb_steps.append({"math": wline[5:].strip()})
+                    elif wline.startswith('RESULT:'):
+                        wb_steps.append({"result": wline[7:].strip()})
+                    elif wline.startswith('TEXT:'):
+                        wb_steps.append({"text": wline[5:].strip()})
+                
+                with _response_lock:
+                    _response_queue.append({
+                        "text": spoken or "Κοίτα στον πίνακα!",
+                        "whiteboard": {"title": wb_title, "steps": wb_steps},
+                        "lang": "el",
+                        "time": time.time()
+                    })
+                log.info(f"📋 Groq Whiteboard: \"{wb_title}\" ({len(wb_steps)} steps) in {ms}ms")
+                narration_parts = [spoken] if spoken else []
+                for s in wb_steps:
+                    if s.get("text"):
+                        narration_parts.append(s["text"])
+                    elif s.get("result"):
+                        narration_parts.append(s["result"])
+                speak(". ".join(narration_parts) or "Κοίτα στον πίνακα!", lang="el")
+                state.tts_end()
+                return True
+            else:
+                # Educational but no whiteboard format - just speak it
+                log.info(f"⚡ Groq [{ms}ms]: \"{full_response[:80]}\"")
+                speak(full_response.strip(), lang="el")
+                state.tts_end()
+                return True
+        
+        # Flush remaining text (non-educational)
         remaining = full_response.strip()
         if remaining and remaining not in sent_sentences:
             sent_sentences.append(remaining)
             speak(remaining, lang="el")
         
-        ms = int((time.time() - t0) * 1000)
         log.info(f"⚡ Groq complete: {len(sent_sentences)} sentences in {ms}ms")
         
         state.tts_end()

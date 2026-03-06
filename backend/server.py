@@ -111,8 +111,8 @@ def _tts_cache_key(text, lang, speed):
 
 def _generate_tts_audio(text, lang='el', speed='normal'):
     """Generate TTS audio bytes (blocking). Returns (audio_bytes, mimetype) or None."""
-    rate_map = {'slow': '+10%', 'normal': '+15%', 'fast': '+25%'}
-    tts_rate = rate_map.get(speed, '+15%')
+    rate_map = {'slow': '-10%', 'normal': '+0%', 'fast': '+15%'}
+    tts_rate = rate_map.get(speed, '+0%')
     try:
         import edge_tts, asyncio, io
         voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
@@ -1479,8 +1479,8 @@ def text_to_speech():
                        headers={'Content-Disposition': 'inline'})
     
     # Speed presets: normal for chat, slow for whiteboard teaching
-    rate_map = {'slow': '+10%', 'normal': '+15%', 'fast': '+25%'}
-    tts_rate = rate_map.get(speed, '+15%')
+    rate_map = {'slow': '-10%', 'normal': '+0%', 'fast': '+15%'}
+    tts_rate = rate_map.get(speed, '+0%')
     
     # Try edge-tts CLI subprocess (streams audio via pipe — much faster than Python async)
     try:
