@@ -433,7 +433,7 @@ def transcribe(audio_int16, lang="el"):
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20250514")
 
 # Keywords that trigger Claude (tutoring, complex reasoning)
 CLAUDE_TRIGGERS = [
@@ -1129,6 +1129,18 @@ def _conversation_loop(mic):
             lang = detect_language(text)
             log.info(f"📝 Turn {turn}: \"{text}\" (lang={lang})")
             
+            # Check for whiteboard close commands
+            close_phrases = ["ok", "οκ", "οκέι", "εντάξει", "κλείσε", "close", "done", "πίσω", "back"]
+            if any(c in text.lower() for c in close_phrases) and len(text) < 30:
+                log.info("📋 Closing whiteboard via voice command")
+                with _response_lock:
+                    _response_queue.append({
+                        "text": "", "lang": "el", "time": time.time(),
+                        "action": "close_whiteboard"
+                    })
+                speak("Εντάξει!", lang="el")
+                continue
+            
             # Check for goodbye/exit phrases
             goodbye_phrases = ["αντίο", "γεια σου", "ευχαριστώ", "bye", "goodbye", "τέλος", "σταμάτα"]
             if any(g in text.lower() for g in goodbye_phrases):
@@ -1192,6 +1204,8 @@ def pipeline_response():
             result = {"has_response": True, "text": resp["text"], "lang": resp["lang"]}
             if "whiteboard" in resp:
                 result["whiteboard"] = resp["whiteboard"]
+            if "action" in resp:
+                result["action"] = resp["action"]
             return jsonify(result)
     return jsonify({"has_response": False})
 

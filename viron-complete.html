@@ -807,10 +807,17 @@ setInterval(()=>{
   fetch('/pipeline/response',{signal:AbortSignal.timeout(2000)})
   .then(r=>r.json())
   .then(d=>{
-    if(d.has_response&&d.text){
-      pipelineQueue.push(d);
-      D('📢 Queued: "'+d.text.substring(0,40)+'..." (queue='+pipelineQueue.length+')');
-      _playNextPipelineSentence();
+    if(d.has_response){
+      // Handle actions from pipeline (e.g. close whiteboard)
+      if(d.action==='close_whiteboard'&&wbO){
+        D('📋 Pipeline says close whiteboard');
+        closeWB();
+      }
+      if(d.text){
+        pipelineQueue.push(d);
+        D('📢 Queued: "'+d.text.substring(0,40)+'..." (queue='+pipelineQueue.length+')');
+        _playNextPipelineSentence();
+      }
     }
   })
   .catch(()=>{});
