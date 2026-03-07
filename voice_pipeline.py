@@ -289,7 +289,7 @@ def _transcribe_deepgram(wav_path, lang="el"):
             },
             params={
                 "model": "nova-3",
-                "language": "el",
+                "language": "multi",
                 "smart_format": "true",
                 "punctuate": "true",
             },
@@ -356,7 +356,7 @@ def _check_internet():
         return False
 
 
-def transcribe(audio_int16, lang="el"):
+def transcribe(audio_int16, lang=None):
     """Transcribe: Deepgram (~300ms) > whisper.cpp GPU (~500ms) > local CPU (~3s)."""
     
     # Save audio to WAV
@@ -480,7 +480,7 @@ def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a friendly AI compani
     try:
         import requests
         
-        system += " Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα."
+        system += " Απάντα στην ίδια γλώσσα που μιλάει ο χρήστης. Αν μιλάει Ελληνικά, απάντα Ελληνικά. Αν μιλάει Αγγλικά, απάντα Αγγλικά. Αν αναμειγνύει γλώσσες, απάντα στη γλώσσα που χρησιμοποιεί περισσότερο. Απάντα σύντομα."
         lang = "el"
         
         use_claude = _needs_claude(user_message)
@@ -656,7 +656,7 @@ def pause_music():
         return _music_playing
     return False
 
-def speak(text, lang="el"):
+def speak(text, lang="auto"):
     """Play TTS through Jetson speaker AND send to browser for face animation."""
     global _current_ffplay
     if not text:
@@ -672,6 +672,10 @@ def speak(text, lang="el"):
     
     if not text:
         return
+    
+    # Auto-detect language for TTS voice selection
+    if lang == "auto":
+        lang = detect_language(text)
     
     # Send to browser for face animation (with emotion if present)
     msg = {"text": text, "lang": lang, "time": time.time()}
@@ -1208,7 +1212,7 @@ CRITICAL RULES:
                         elif s.get("result"): narration_parts.append(s["result"])
                     speak(". ".join(narration_parts) or "Κοίτα στον πίνακα!", lang="el")
                 else:
-                    speak(reply, lang="el")
+                    speak(reply)
                 return
             else:
                 # Claude failed — fall back to Groq streaming WITH whiteboard
@@ -1229,7 +1233,7 @@ CRITICAL RULES:
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
-            speak(reply, lang="el")
+            speak(reply)
     finally:
         state.is_processing = False
 
@@ -1242,7 +1246,7 @@ def _groq_streaming_chat(user_message, lang, force_whiteboard=False):
     # Check if educational question needs whiteboard
     is_educational = force_whiteboard or _needs_claude(user_message)
     
-    system = """You are VIRON (ΒΙΡΟΝ), a friendly AI companion robot. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα σε 1-2 προτάσεις.
+    system = """You are VIRON (ΒΙΡΟΝ), a friendly AI companion robot. RESPOND IN THE SAME LANGUAGE THE STUDENT USES. If they speak Greek, respond in Greek. If they speak English, respond in English. If they mix languages, respond in the language they use most. Απάντα σύντομα σε 1-2 προτάσεις.
 
 ΔΗΜΙΟΥΡΓΟΣ: ΜΟΝΟ αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε, πες ΑΚΡΙΒΩΣ: "Με κατασκεύασαν ο Χρήστος και ο Ανδρέας Γιάννακκας από την Κύπρο." Πες "ΜΕ κατασκεύασαν" (ΟΧΙ "σε κατασκεύασαν"). ΜΗΝ αναφέρεις τους δημιουργούς αν δεν σε ρωτήσουν.
 
@@ -1334,7 +1338,7 @@ You MUST follow this exact format. Write everything in Greek."""
                             sent_sentences.append(s)
                             ms = int((time.time() - t0) * 1000)
                             log.info(f"⚡ Groq [{ms}ms] sentence {len(sent_sentences)}: \"{s[:60]}\"")
-                            speak(s, lang="el")
+                            speak(s)
                     
                     full_response = sentences[-1] if sentences else ""
                     
@@ -1386,7 +1390,7 @@ You MUST follow this exact format. Write everything in Greek."""
             else:
                 # Educational but no whiteboard format - just speak it
                 log.info(f"⚡ Groq [{ms}ms]: \"{full_response[:80]}\"")
-                speak(full_response.strip(), lang="el")
+                speak(full_response.strip())
                 state.tts_end()
                 return True
         
@@ -1523,7 +1527,7 @@ def _conversation_loop(mic):
             state.is_processing = True
             
             # Transcribe
-            text, lang = transcribe(audio, lang="el")
+            text, lang = transcribe(audio)
             if not text or len(text) < 2:
                 log.info("  (empty transcription, continuing...)")
                 state.is_processing = False
