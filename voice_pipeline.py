@@ -294,7 +294,7 @@ def _transcribe_deepgram(wav_path, lang="el"):
                 "punctuate": "true",
             },
             data=audio_data,
-            timeout=5,
+            timeout=3,
         )
         
         ms = int((time.time() - t0) * 1000)
@@ -818,10 +818,16 @@ def conversation_turn(mic, text, lang):
         t_lower = text.lower()
         
         # ── EASTER EGGS (direct responses, no LLM) ──
-        if "κυπρούλα" in t_lower or "γερασίμου" in t_lower:
+        if "κυπρούλα" in t_lower or ("γερασίμου" in t_lower and "κυπρούλα" not in t_lower and "αγγελικ" not in t_lower):
             log.info("🥚 Easter egg: Kyproula!")
             state.is_processing = False
             speak("[laughing] Χαχαχα! Ναι, ξέρω την Κυπρούλα Γερασίμου! Είναι η γυναίκα του Χρήστου Γιάννακκα! Τον παντρεύτηκε για να τον βασανίζει!", lang="el")
+            return
+        
+        if "αγγελικ" in t_lower:
+            log.info("🥚 Easter egg: Aggelika!")
+            state.is_processing = False
+            speak("[happy] Βεβαίως! Η Αγγελίκα Γιάννακκα! Είναι η πριγκίπισσα κόρη του Χρήστου Γιάννακκα! Πολύ έξυπνη και όμορφη!", lang="el")
             return
         
         # ── WHITEBOARD ON DEMAND ──
@@ -837,6 +843,51 @@ def conversation_turn(mic, text, lang):
             if result:
                 state.is_processing = False
                 return
+        
+        # ── QUIZ MODE ──
+        if any(w in t_lower for w in ["κουίζ", "quiz", "τεστ", "εξέτασ", "διαγώνισμ", "ερωτήσεις"]):
+            log.info("📝 Quiz mode requested")
+            topic = text
+            for remove in ["κουίζ", "quiz", "τεστ", "εξέτασέ", "εξέτασε", "ερωτήσεις", "κάνε", "μου", "φτιάξε", "για", "στο", "στη", "στην", "από", "πάνω"]:
+                topic = topic.replace(remove, "").strip()
+            if len(topic) < 3:
+                topic = "γενικές γνώσεις"
+            
+            try:
+                import requests as _req
+                t0 = time.time()
+                resp = _req.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": [{"role": "system", "content": """Generate a quiz in JSON format. Return ONLY valid JSON, no markdown, no backticks.
+Format: {"title":"Quiz Title in Greek","questions":[{"q":"Question in Greek?","options":["Option A","Option B","Option C","Option D"],"correct":0}]}
+Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index of the correct answer."""},
+                            {"role": "user", "content": f"Φτιάξε κουίζ για: {topic}"}],
+                        "max_tokens": 1000, "temperature": 0.7,
+                    },
+                    timeout=15,
+                )
+                ms = int((time.time() - t0) * 1000)
+                if resp.status_code == 200:
+                    reply = resp.json()["choices"][0]["message"]["content"].strip()
+                    import re as _re
+                    json_match = _re.search(r'\{[\s\S]*\}', reply)
+                    if json_match:
+                        quiz_data = json.loads(json_match.group())
+                        log.info(f"📝 Quiz: \"{quiz_data.get('title','')}\" ({len(quiz_data.get('questions',[]))} Qs) in {ms}ms")
+                        with _response_lock:
+                            _response_queue.append({
+                                "text": f"Ετοίμασα κουίζ για {topic}! Ας αρχίσουμε!",
+                                "lang": "el", "time": time.time(),
+                                "quiz": quiz_data,
+                            })
+                        state.is_processing = False
+                        speak(f"Ετοίμασα κουίζ για {topic}! Ας αρχίσουμε!", lang="el")
+                        return
+            except Exception as e:
+                log.warning(f"Quiz failed: {e}")
         
         # ── WEATHER ──
         if any(w in t_lower for w in ["καιρός", "καιρό", "θερμοκρασία", "βρέχει", "βρέξει", "weather", "κρύο", "ζέστη", "ήλιο", "σύννεφ", "αύριο καιρ", "εβδομάδ"]):
@@ -1408,6 +1459,8 @@ def pipeline_response():
                 result["emotion"] = resp["emotion"]
             if "weather" in resp:
                 result["weather"] = resp["weather"]
+            if "quiz" in resp:
+                result["quiz"] = resp["quiz"]
             return jsonify(result)
     return jsonify({"has_response": False})
 
