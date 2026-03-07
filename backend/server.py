@@ -115,7 +115,7 @@ def _generate_tts_audio(text, lang='el', speed='normal'):
     tts_rate = rate_map.get(speed, '+0%')
     try:
         import edge_tts, asyncio, io
-        voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
+        voice = "el-GR-NestorasNeural" if lang == "el" else "en-US-GuyNeural"
         async def gen():
             communicate = edge_tts.Communicate(text, voice, rate=tts_rate, pitch="-10Hz")
             buf = io.BytesIO()
@@ -1486,7 +1486,7 @@ def text_to_speech():
     try:
         import shutil
         if shutil.which('edge-tts'):
-            voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
+            voice = "el-GR-NestorasNeural" if lang == "el" else "en-US-GuyNeural"
             print(f"🎙️ edge-tts CLI: voice={voice}, rate={tts_rate}, text='{text[:50]}'")
             
             import tempfile
@@ -1525,7 +1525,7 @@ def text_to_speech():
     # Fallback: edge-tts Python API
     try:
         import edge_tts, asyncio, io
-        voice = "el-GR-NestorasNeural" if lang == "el" else "en-GB-RyanNeural"
+        voice = "el-GR-NestorasNeural" if lang == "el" else "en-US-GuyNeural"
         print(f"🎙️ edge-tts Python API fallback: voice={voice}, text='{text[:50]}'")
         
         async def gen():
