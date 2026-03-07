@@ -142,7 +142,7 @@ porcupine = None
 PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
 PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.25"))
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.4"))
 
 def init_wake():
     global porcupine
@@ -1094,7 +1094,11 @@ CRITICAL RULES:
                 log.warning(f"News failed: {e}")
         
         # ── MUSIC ──
-        if any(w in t_lower for w in ["βάλε μουσική", "παίξε", "τραγούδι", "μουσική", "play", "song", "music", "ακούσ"]):
+        music_keywords = ["μουσική", "τραγούδι", "song", "music"]
+        music_commands = ["βάλε μουσική", "παίξε τραγούδι", "παίξε μουσική", "play song", "play music", "βάλε ένα τραγούδι"]
+        is_music = any(w in t_lower for w in music_commands) or \
+                   (any(w in t_lower for w in ["παίξε", "βάλε", "play", "ακούσ"]) and any(w in t_lower for w in music_keywords))
+        if is_music:
             log.info("🎵 Music request detected")
             try:
                 import requests as _req
@@ -1464,7 +1468,7 @@ def main_loop(mic):
                 time_since_tts = time.time() - state.last_tts_end
                 
                 # Reject if: too quiet (background noise), or too soon after VIRON spoke (echo)
-                if rms < 80:
+                if rms < 50:
                     log.info(f"  (wake rejected: RMS={rms:.0f} too low)")
                     continue  # Too quiet to be real speech
                 if time_since_tts < 1.5:
@@ -1665,10 +1669,10 @@ def pipeline_speak():
         log.info(f"🔊 Volume set to {vol}%")
         # Try multiple ALSA methods
         for cmd in [
-            ["amixer", "-D", "default", "sset", "Master", f"{vol}%"],
+            ["amixer", "-c", "0", "sset", "PCM", f"{vol}%"],
+            ["amixer", "-c", "0", "sset", "Headset", f"{vol}%"],
             ["amixer", "-D", "default", "sset", "PCM", f"{vol}%"],
-            ["amixer", "sset", "Master", f"{vol}%"],
-            ["amixer", "-D", "hw:0", "sset", "Playback", f"{vol}%"],
+            ["amixer", "sset", "PCM", f"{vol}%"],
         ]:
             try:
                 r = subprocess.run(cmd, capture_output=True, timeout=3)
