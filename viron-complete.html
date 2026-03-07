@@ -124,7 +124,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   opacity:0;transition:opacity 0.6s ease,transform 0.6s ease;transform:scale(0.95);}
 .weather-overlay.active{display:flex !important;opacity:1;transform:scale(1);flex-direction:column;align-items:center;justify-content:center;}
 .weather-card{background:rgba(255,255,255,0.08);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.15);
-  border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;
+  border-radius:24px;padding:30px;max-width:600px;width:92%;text-align:center;max-height:90vh;overflow-y:auto;
   box-shadow:0 20px 60px rgba(0,0,0,0.4);animation:wSlideIn 0.5s ease 0.2s both;}
 @keyframes wSlideIn{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
 .weather-temp{font-size:80px;font-weight:200;color:#fff;line-height:1;margin:10px 0;}
@@ -136,6 +136,18 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .weather-detail-label{font-size:12px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-top:4px;}
 .weather-tomorrow{margin-top:24px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);font-size:16px;}
 .weather-icon{font-size:64px;margin-bottom:10px;}
+/* Hourly forecast */
+#weatherHourly{display:none;gap:8px;margin-top:18px;overflow-x:auto;padding:8px 0;justify-content:center;flex-wrap:nowrap}
+.wh-item{text-align:center;min-width:48px;padding:6px 4px;background:rgba(255,255,255,0.06);border-radius:10px}
+.wh-time{font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px}
+.wh-icon{font-size:20px;margin-bottom:2px}
+.wh-temp{font-size:16px;color:#fff;font-weight:400}
+/* Daily forecast */
+#weatherDaily{display:none;gap:12px;margin-top:12px;justify-content:center}
+.wd-item{text-align:center;min-width:60px;padding:8px 6px;background:rgba(255,255,255,0.05);border-radius:10px}
+.wd-day{font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px;font-weight:600}
+.wd-icon{font-size:22px;margin-bottom:2px}
+.wd-temp{font-size:14px;color:rgba(255,255,255,0.8)}
 .weather-close{position:absolute;top:20px;right:20px;color:rgba(255,255,255,0.5);font-size:14px;cursor:pointer;
   padding:8px 16px;border:1px solid rgba(255,255,255,0.2);border-radius:20px;transition:all 0.3s;}
 .weather-close:hover{color:#fff;border-color:rgba(255,255,255,0.5);}
@@ -3324,18 +3336,32 @@ function showWeather(data){
   const face=document.getElementById("face");
   if(face){face.style.transition="opacity 0.5s ease,transform 0.5s ease";face.style.opacity="0";face.style.transform="scale(0.9)";}
   document.getElementById("weatherIcon").textContent=getWeatherIcon(data.desc||"");
-  document.getElementById("weatherCity").textContent=data.city||"Λευκωσία";
+  document.getElementById("weatherCity").textContent=data.city||"Ορόκλινη";
   document.getElementById("weatherTemp").textContent=data.temp+"°C";
   document.getElementById("weatherDesc").textContent=data.desc||"--";
   document.getElementById("weatherFeels").textContent=(data.feels||data.temp)+"°C";
   document.getElementById("weatherHumidity").textContent=(data.humidity||"-")+"%";
   document.getElementById("weatherWind").textContent=(data.wind||"--")+" km/h";
+  
+  // Hourly forecast
+  const hourlyEl=document.getElementById("weatherHourly");
+  if(hourlyEl&&data.hourly&&data.hourly.length>0){
+    hourlyEl.innerHTML=data.hourly.map(h=>`<div class="wh-item"><div class="wh-time">${h.time}</div><div class="wh-icon">${getWeatherIcon(h.desc||"")}</div><div class="wh-temp">${h.temp}°</div></div>`).join("");
+    hourlyEl.style.display="flex";
+  }else if(hourlyEl){hourlyEl.style.display="none";}
+  
+  // Daily forecast
+  const dailyEl=document.getElementById("weatherDaily");
+  if(dailyEl&&data.daily&&data.daily.length>1){
+    dailyEl.innerHTML=data.daily.slice(1,5).map(d=>`<div class="wd-item"><div class="wd-day">${d.day}</div><div class="wd-icon">${getWeatherIcon(d.desc||"")}</div><div class="wd-temp">${d.min}°/${d.max}°</div></div>`).join("");
+    dailyEl.style.display="flex";
+  }else if(dailyEl){dailyEl.style.display="none";}
+  
   const tmr=document.getElementById("weatherTomorrow");
-  if(data.tomorrow){tmr.textContent="Αύριο: "+data.tomorrow;tmr.style.display="";}
-  else{tmr.style.display="none";}
+  if(tmr)tmr.style.display="none";
   setTimeout(()=>{document.getElementById("weatherOverlay").classList.add("active");},100);
   clearTimeout(_weatherCloseTimer);
-  _weatherCloseTimer=setTimeout(()=>{if(weatherVisible)closeWeather();},15000);
+  _weatherCloseTimer=setTimeout(()=>{if(weatherVisible)closeWeather();},20000);
 }
 
 function closeWeather(){
@@ -3362,7 +3388,7 @@ function parseWeatherFromGateway(d){
   <div class="weather-close" onclick="closeWeather()">✕</div>
   <div class="weather-card" onclick="event.stopPropagation()">
     <div class="weather-icon" id="weatherIcon">☀️</div>
-    <div class="weather-city" id="weatherCity">Λευκωσία</div>
+    <div class="weather-city" id="weatherCity">Ορόκλινη</div>
     <div class="weather-temp" id="weatherTemp">--°C</div>
     <div class="weather-desc" id="weatherDesc">--</div>
     <div class="weather-details">
@@ -3371,6 +3397,8 @@ function parseWeatherFromGateway(d){
       <div class="weather-detail"><div class="weather-detail-val" id="weatherWind">--</div><div class="weather-detail-label">Άνεμος</div></div>
     </div>
     <div class="weather-tomorrow" id="weatherTomorrow"></div>
+    <div id="weatherHourly" style="display:none"></div>
+    <div id="weatherDaily" style="display:none"></div>
   </div>
 </div>
 </body>

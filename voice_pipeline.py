@@ -832,43 +832,114 @@ def conversation_turn(mic, text, lang):
                 return
         
         # ── WEATHER ──
-        if any(w in t_lower for w in ["καιρός", "καιρό", "θερμοκρασία", "βρέχει", "βρέξει", "weather", "κρύο", "ζέστη", "ήλιο", "σύννεφ"]):
+        if any(w in t_lower for w in ["καιρός", "καιρό", "θερμοκρασία", "βρέχει", "βρέξει", "weather", "κρύο", "ζέστη", "ήλιο", "σύννεφ", "αύριο καιρ", "εβδομάδ"]):
             log.info("🌤️ Weather request detected")
+            
+            # Determine forecast type
+            wants_tomorrow = any(w in t_lower for w in ["αύριο", "tomorrow"])
+            wants_week = any(w in t_lower for w in ["εβδομάδ", "week", "ολόκληρ"])
+            
             try:
                 import requests as _req
-                # Open-Meteo API (free, reliable, no key needed)
+                from datetime import datetime
+                
+                WMO = {0:"Καθαρός ουρανός",1:"Σχεδόν καθαρός",2:"Μερικά σύννεφα",3:"Συννεφιά",
+                       45:"Ομίχλη",48:"Παγωμένη ομίχλη",51:"Ελαφρύ ψιλόβροχο",53:"Ψιλόβροχο",
+                       55:"Δυνατό ψιλόβροχο",61:"Ελαφριά βροχή",63:"Βροχή",65:"Δυνατή βροχή",
+                       71:"Ελαφρό χιόνι",73:"Χιόνι",75:"Δυνατό χιόνι",80:"Μπόρες",
+                       81:"Δυνατές μπόρες",95:"Καταιγίδα",96:"Καταιγίδα με χαλάζι"}
+                DAYS_GR = ["Δευτέρα","Τρίτη","Τετάρτη","Πέμπτη","Παρασκευή","Σάββατο","Κυριακή"]
+                
                 r = _req.get(
                     "https://api.open-meteo.com/v1/forecast",
                     params={
-                        "latitude": 35.17,  # Nicosia
-                        "longitude": 33.36,
+                        "latitude": 34.88,   # Oroklini, Larnaca
+                        "longitude": 33.66,
                         "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+                        "hourly": "temperature_2m,weather_code",
+                        "daily": "temperature_2m_max,temperature_2m_min,weather_code",
                         "timezone": "auto",
+                        "forecast_days": 7,
                     },
                     timeout=5,
                 )
                 if r.status_code == 200:
-                    data = r.json()["current"]
-                    temp = round(data["temperature_2m"])
-                    humidity = data["relative_humidity_2m"]
-                    wind = round(data["wind_speed_10m"])
-                    code = data["weather_code"]
+                    jdata = r.json()
+                    curr = jdata["current"]
+                    temp = round(curr["temperature_2m"])
+                    humidity = curr["relative_humidity_2m"]
+                    wind = round(curr["wind_speed_10m"])
+                    desc = WMO.get(curr["weather_code"], "Μεταβλητός")
                     
-                    # WMO weather codes to Greek descriptions
-                    wmo = {0:"Καθαρός ουρανός",1:"Σχεδόν καθαρός",2:"Μερικά σύννεφα",3:"Συννεφιά",
-                           45:"Ομίχλη",48:"Παγωμένη ομίχλη",51:"Ελαφρύ ψιλόβροχο",53:"Ψιλόβροχο",
-                           55:"Δυνατό ψιλόβροχο",61:"Ελαφριά βροχή",63:"Βροχή",65:"Δυνατή βροχή",
-                           71:"Ελαφρό χιόνι",73:"Χιόνι",75:"Δυνατό χιόνι",80:"Μπόρες",
-                           81:"Δυνατές μπόρες",95:"Καταιγίδα",96:"Καταιγίδα με χαλάζι"}
-                    desc = wmo.get(code, "Μεταβλητός")
+                    # Build hourly forecast (next 12 hours)
+                    hourly = jdata.get("hourly", {})
+                    h_times = hourly.get("time", [])
+                    h_temps = hourly.get("temperature_2m", [])
+                    h_codes = hourly.get("weather_code", [])
+                    now_str = datetime.now().strftime("%Y-%m-%dT%H")
                     
-                    weather_text = f"Ο καιρός στη Λευκωσία: {desc}, {temp} βαθμούς Κελσίου, υγρασία {humidity}%, άνεμος {wind} χιλιόμετρα την ώρα."
+                    # Find current hour index
+                    h_start = 0
+                    for i, t in enumerate(h_times):
+                        if t.startswith(now_str):
+                            h_start = i
+                            break
+                    
+                    hourly_items = []
+                    for i in range(h_start, min(h_start + 12, len(h_times))):
+                        hour = h_times[i].split("T")[1][:5]
+                        hourly_items.append({
+                            "time": hour,
+                            "temp": round(h_temps[i]),
+                            "desc": WMO.get(h_codes[i], "")
+                        })
+                    
+                    # Build daily forecast
+                    daily = jdata.get("daily", {})
+                    d_times = daily.get("time", [])
+                    d_max = daily.get("temperature_2m_max", [])
+                    d_min = daily.get("temperature_2m_min", [])
+                    d_codes = daily.get("weather_code", [])
+                    
+                    daily_items = []
+                    for i in range(len(d_times)):
+                        dt = datetime.strptime(d_times[i], "%Y-%m-%d")
+                        day_name = DAYS_GR[dt.weekday()]
+                        daily_items.append({
+                            "day": day_name,
+                            "date": d_times[i],
+                            "max": round(d_max[i]),
+                            "min": round(d_min[i]),
+                            "desc": WMO.get(d_codes[i], "")
+                        })
+                    
+                    # Build spoken response based on query type
+                    if wants_week:
+                        parts = ["Ο καιρός για την εβδομάδα στην Ορόκλινη:"]
+                        for d in daily_items[:5]:
+                            parts.append(f"{d['day']}, {d['desc']}, {d['min']} με {d['max']} βαθμούς.")
+                        weather_text = " ".join(parts)
+                    elif wants_tomorrow and len(daily_items) > 1:
+                        d = daily_items[1]
+                        weather_text = f"Αύριο {d['day']} στην Ορόκλινη: {d['desc']}, θερμοκρασία από {d['min']} μέχρι {d['max']} βαθμούς Κελσίου."
+                    else:
+                        weather_text = f"Ο καιρός στην Ορόκλινη: {desc}, {temp} βαθμούς Κελσίου, υγρασία {humidity}%, άνεμος {wind} χιλιόμετρα την ώρα."
+                        if hourly_items:
+                            next3 = hourly_items[1:4]
+                            if next3:
+                                parts = [f"στις {h['time']} {h['temp']} βαθμούς" for h in next3]
+                                weather_text += " Επόμενες ώρες: " + ", ".join(parts) + "."
                     
                     # Send weather visual to browser
                     with _response_lock:
                         _response_queue.append({
                             "text": weather_text, "lang": "el", "time": time.time(),
-                            "weather": {"temp": temp, "desc": desc, "humidity": humidity, "wind": wind, "city": "Λευκωσία"}
+                            "weather": {
+                                "temp": temp, "desc": desc, "humidity": humidity,
+                                "wind": wind, "city": "Ορόκλινη",
+                                "hourly": hourly_items,
+                                "daily": daily_items,
+                            }
                         })
                     
                     state.is_processing = False
