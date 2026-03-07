@@ -35,6 +35,17 @@ svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-co
 /* Subtitle */
 .subtitle{position:fixed;bottom:35px;left:50%;transform:translateX(-50%);max-width:85vw;text-align:center;font-size:16px;color:rgba(255,255,255,0.85);background:rgba(0,0,0,0.6);padding:10px 24px;border-radius:20px;backdrop-filter:blur(10px);opacity:0;transition:opacity 0.4s;pointer-events:none;line-height:1.5}
 .subtitle.visible{opacity:1}
+/* Music player bar */
+#musicBar{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:14px;
+  background:rgba(10,15,30,0.9);backdrop-filter:blur(20px);border:1px solid rgba(0,180,255,0.2);
+  padding:12px 24px;border-radius:24px;z-index:50;pointer-events:all;min-width:300px}
+#musicBar.active{display:flex}
+#musicBar .music-title{color:rgba(220,240,255,0.9);font-size:15px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#musicBar .music-icon{font-size:20px;animation:musicPulse 1s ease-in-out infinite}
+#musicBar .music-btn{width:36px;height:36px;border-radius:50%;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);
+  color:rgba(255,255,255,0.8);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s}
+#musicBar .music-btn:hover{background:rgba(255,80,80,0.2);border-color:rgba(255,80,80,0.4)}
+@keyframes musicPulse{0%,100%{opacity:0.7}50%{opacity:1}}
 /* Audio waveform canvas */
 #audioWaveform{position:fixed;bottom:55px;left:50%;transform:translateX(-50%);width:min(70vw,500px);height:40px;pointer-events:none;z-index:10;opacity:0;transition:opacity 0.4s}
 #audioWaveform.active{opacity:1}
@@ -352,6 +363,11 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <span class="listen-text" id="listenText">Say "Hey VIRON" or press Space</span>
 </div>
 <div class="subtitle" id="subtitle"></div>
+<div id="musicBar">
+  <span class="music-icon">🎵</span>
+  <span class="music-title" id="musicTitle">Playing...</span>
+  <button class="music-btn" onclick="stopMusic()" title="Stop">⏹</button>
+</div>
 <svg id="face" viewBox="0 0 800 500"></svg>
 
 <script>
@@ -856,15 +872,16 @@ setInterval(()=>{
         D('📝 Pipeline quiz: '+d.quiz.title+' ('+d.quiz.questions.length+' Qs)');
         setTimeout(()=>openQuiz(d.quiz),500);
       }
-      // Handle YouTube from pipeline (now plays through speaker, show status on face)
+      // Handle music from pipeline — show player bar
       if(d.music){
         D('🎵 Pipeline music: '+d.music.title+' playing='+d.music.playing);
-        const sub=document.getElementById("subtitle");
+        const bar=document.getElementById("musicBar");
+        const mtitle=document.getElementById("musicTitle");
         if(d.music.playing){
-          sub.textContent="🎵 "+d.music.title;
-          sub.classList.add("visible");
+          mtitle.textContent=d.music.title;
+          bar.classList.add("active");
         }else{
-          sub.classList.remove("visible");
+          bar.classList.remove("active");
         }
       }
       if(d.text){
@@ -3414,6 +3431,25 @@ function parseWeatherFromGateway(d){
   if(d&&d.weather_data)return d.weather_data;
   return null;
 }
+// ===== MUSIC CONTROLS =====
+function stopMusic(){
+  D('🎵 Stop music requested');
+  fetch('/pipeline/speak',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'stop_music'})}).catch(()=>{});
+  document.getElementById("musicBar").classList.remove("active");
+}
+
+// ===== VOLUME CONTROL =====
+const volSlider=document.getElementById('volSlider');
+if(volSlider){
+  volSlider.addEventListener('input',function(){
+    const vol=parseInt(this.value);
+    D('🔊 Volume: '+vol+'%');
+    fetch('/pipeline/speak',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'set_volume',volume:vol})}).catch(()=>{});
+  });
+}
+
 // ===== QUIZ =====
 let _quizData=null,_quizIdx=0,_quizCorrect=0,_quizActive=false;
 

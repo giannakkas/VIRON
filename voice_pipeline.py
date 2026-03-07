@@ -1606,8 +1606,33 @@ def ww_pause():
 
 @app.route("/pipeline/speak", methods=["POST"])
 def pipeline_speak():
-    """Browser can trigger VIRON to say something (e.g. quiz results)."""
+    """Browser can trigger speech, stop music, or set volume."""
     data = request.get_json() or {}
+    action = data.get("action", "")
+    
+    if action == "stop_music":
+        log.info("🎵 Stop music requested")
+        interrupt_speech()
+        with _response_lock:
+            _response_queue.append({"text": "", "lang": "el", "time": time.time(),
+                                    "music": {"title": "", "playing": False}})
+        return jsonify({"ok": True})
+    
+    if action == "set_volume":
+        vol = data.get("volume", 75)
+        log.info(f"🔊 Volume set to {vol}%")
+        # Set ALSA master volume
+        try:
+            subprocess.run(["amixer", "-D", "default", "sset", "Master", f"{vol}%"],
+                         capture_output=True, timeout=3)
+        except:
+            try:
+                subprocess.run(["amixer", "sset", "PCM", f"{vol}%"],
+                             capture_output=True, timeout=3)
+            except:
+                pass
+        return jsonify({"ok": True, "volume": vol})
+    
     text = data.get("text", "")
     if text:
         threading.Thread(target=speak, args=(text, "el"), daemon=True).start()
