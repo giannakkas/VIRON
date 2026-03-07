@@ -142,7 +142,7 @@ porcupine = None
 PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
 PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.4"))
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.25"))
 
 def init_wake():
     global porcupine
@@ -1366,8 +1366,19 @@ def main_loop(mic):
                 continue
             
             if check_wake(frame):
+                # Verify it's real speech, not TV/echo
+                rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
+                time_since_tts = time.time() - state.last_tts_end
+                
+                # Reject if: too quiet (background noise), or too soon after VIRON spoke (echo)
+                if rms < 200:
+                    continue  # Too quiet to be real speech
+                if time_since_tts < 2.0:
+                    log.info(f"  (wake rejected: too soon after TTS, {time_since_tts:.1f}s, RMS={rms:.0f})")
+                    continue  # Likely hearing own echo
+                
                 if state.set_wake("porcupine", 1.0):
-                    log.info("🎯 Wake word detected!")
+                    log.info(f"🎯 Wake word detected! (RMS={rms:.0f})")
                     
                     # Quick acknowledgment
                     with _response_lock:
