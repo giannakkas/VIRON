@@ -1122,16 +1122,21 @@ def _conversation_loop(mic):
                     })
                 return
             
+            # Set thinking state immediately (before transcription)
+            state.is_processing = True
+            
             # Transcribe
             text, lang = transcribe(audio, lang="el")
             if not text or len(text) < 2:
                 log.info("  (empty transcription, continuing...)")
+                state.is_processing = False
                 continue
             
             # Filter out Whisper hallucinations (common garbage patterns)
             noise_patterns = ["ευχαριστώ.", "...", "aaaaa", "χειροκρότημα", "υπότιτλοι", "σας ευχαριστώ"]
             if any(text.strip().lower() == n.lower() for n in noise_patterns) or len(set(text.replace(" ",""))) < 3:
                 log.info(f"  (noise filtered: \"{text}\", skipping...)")
+                state.is_processing = False
                 continue
             
             lang = detect_language(text)
@@ -1141,6 +1146,7 @@ def _conversation_loop(mic):
             close_phrases = ["ok", "οκ", "οκέι", "εντάξει", "κλείσε", "close", "done", "πίσω", "back"]
             if any(c in text.lower() for c in close_phrases) and len(text) < 30:
                 log.info("📋 Closing whiteboard via voice command")
+                state.is_processing = False
                 with _response_lock:
                     _response_queue.append({
                         "text": "", "lang": "el", "time": time.time(),
@@ -1153,6 +1159,7 @@ def _conversation_loop(mic):
             goodbye_phrases = ["αντίο", "γεια σου", "ευχαριστώ", "bye", "goodbye", "τέλος", "σταμάτα"]
             if any(g in text.lower() for g in goodbye_phrases):
                 log.info("👋 Goodbye detected — ending conversation")
+                state.is_processing = False
                 with _response_lock:
                     _response_queue.append({
                         "text": "Στην διάθεσή σου! Τα λέμε!", "lang": "el", "time": time.time()

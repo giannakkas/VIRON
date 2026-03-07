@@ -850,15 +850,11 @@ function _playNextPipelineSentence(){
   cE("happy");
   D('📢 Face animation: "'+d.text.substring(0,50)+'"');
   
-  // Jetson speaker plays audio — browser animates the face
-  const duration = Math.min(d.text.length * 60, 15000); // ~60ms per char
+  // Jetson speaker plays audio — mouth is synced via pipeline state polling (s.speaking → startT/stopT)
+  const duration = Math.min(d.text.length * 55, 15000);
   isSpeaking=true;
   
-  // Start mouth talking animation
-  startT();
-  
   setTimeout(()=>{
-    stopT();
     isSpeaking=false;
     pipelineSpeaking=false;
     D('📢 Face animation done, queue='+pipelineQueue.length);
@@ -867,8 +863,9 @@ function _playNextPipelineSentence(){
 }
 
 // ===== PIPELINE STATE INDICATOR =====
-// Poll pipeline state to show face expressions + waveform
+// Poll pipeline state to show face expressions + waveform + mouth sync
 let _lastPipelineState='idle';
+let _pipelineTalking=false;
 setInterval(()=>{
   fetch('/pipeline/state',{signal:AbortSignal.timeout(1000)})
   .then(r=>r.json())
@@ -883,7 +880,8 @@ setInterval(()=>{
       txt.textContent="🔊 Speaking...";
       txt.style.color="rgba(255,80,80,0.9)";
       wfMode='speaking';
-      // Face: mouth should already be animated by startT()
+      // Sync mouth: start talking animation when pipeline is speaking
+      if(!_pipelineTalking){_pipelineTalking=true;startT()}
     }else if(s.processing){
       newState='thinking';
       ind.className="listen-indicator active";
@@ -891,6 +889,8 @@ setInterval(()=>{
       txt.style.color="rgba(255,200,50,0.9)";
       wfMode='thinking';
       if(_lastPipelineState!=='thinking')cE("thinking");
+      // Stop mouth if was talking
+      if(_pipelineTalking){_pipelineTalking=false;stopT()}
     }else if(s.listening){
       newState='listening';
       ind.className="listen-indicator active";
@@ -898,23 +898,26 @@ setInterval(()=>{
       txt.style.color="rgba(255,80,80,0.9)";
       wfMode='listening';
       if(_lastPipelineState!=='listening')cE("focused");
+      if(_pipelineTalking){_pipelineTalking=false;stopT()}
     }else if(s.in_conversation){
       newState='listening';
       ind.className="listen-indicator active";
       txt.textContent="💬 Listening...";
       txt.style.color="rgba(100,255,100,0.9)";
       wfMode='listening';
+      if(_pipelineTalking){_pipelineTalking=false;stopT()}
     }else{
       newState='idle';
       ind.className="listen-indicator wake";
       txt.textContent='Say "Hey Jarvis"';
       txt.style.color="";
       wfMode='idle';
+      if(_pipelineTalking){_pipelineTalking=false;stopT()}
     }
     _lastPipelineState=newState;
   })
   .catch(()=>{});
-},300);
+},200); // Poll faster (200ms) for better mouth sync
 
 // ===== AUDIO WAVEFORM ANIMATION =====
 let wfMode='idle'; // idle, listening, speaking, thinking
