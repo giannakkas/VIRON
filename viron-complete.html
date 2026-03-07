@@ -366,7 +366,8 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <div id="musicBar">
   <span class="music-icon">🎵</span>
   <span class="music-title" id="musicTitle">Playing...</span>
-  <button class="music-btn" onclick="stopMusic()" title="Stop">⏹</button>
+  <button class="music-btn" onclick="pauseMusic()" id="musicPauseBtn" title="Pause">⏸</button>
+  <button class="music-btn" onclick="stopMusic()" title="Stop" style="background:rgba(255,60,60,0.1);border-color:rgba(255,60,60,0.3)">⏹</button>
 </div>
 <svg id="face" viewBox="0 0 800 500"></svg>
 
@@ -3432,11 +3433,24 @@ function parseWeatherFromGateway(d){
   return null;
 }
 // ===== MUSIC CONTROLS =====
+let _musicPaused=false;
+
 function stopMusic(){
   D('🎵 Stop music requested');
   fetch('/pipeline/speak',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'stop_music'})}).catch(()=>{});
-  document.getElementById("musicBar").classList.remove("active");
+    body:JSON.stringify({action:'stop_music'})}).then(()=>{
+      document.getElementById("musicBar").classList.remove("active");
+      _musicPaused=false;
+    }).catch(()=>{});
+}
+
+function pauseMusic(){
+  D('🎵 Pause/resume music');
+  _musicPaused=!_musicPaused;
+  document.getElementById("musicPauseBtn").textContent=_musicPaused?'▶':'⏸';
+  document.getElementById("musicPauseBtn").title=_musicPaused?'Resume':'Pause';
+  fetch('/pipeline/speak',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'pause_music'})}).catch(()=>{});
 }
 
 // ===== VOLUME CONTROL =====

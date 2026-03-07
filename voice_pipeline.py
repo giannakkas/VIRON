@@ -614,6 +614,8 @@ Use 8-12 steps minimum. Include real-world examples. Write in Greek unless stude
 _response_queue = []
 _response_lock = threading.Lock()
 _current_ffplay = None  # Track ffplay process for interrupt
+_music_process = None   # Track music process separately
+_music_playing = False
 
 def interrupt_speech():
     """Kill current TTS playback (called when wake word detected during speech)."""
@@ -624,6 +626,34 @@ def interrupt_speech():
         log.info("🛑 Speech interrupted by wake word!")
         state.tts_end()
         return True
+    return False
+
+def stop_music():
+    """Stop music playback."""
+    global _music_process, _music_playing
+    if _music_process and _music_process.poll() is None:
+        _music_process.kill()
+        _music_process = None
+        _music_playing = False
+        log.info("🎵 Music stopped!")
+        state.tts_end()
+        return True
+    return False
+
+def pause_music():
+    """Pause/resume music by sending SIGSTOP/SIGCONT."""
+    global _music_process, _music_playing
+    import signal
+    if _music_process and _music_process.poll() is None:
+        if _music_playing:
+            _music_process.send_signal(signal.SIGSTOP)
+            _music_playing = False
+            log.info("🎵 Music paused")
+        else:
+            _music_process.send_signal(signal.SIGCONT)
+            _music_playing = True
+            log.info("🎵 Music resumed")
+        return _music_playing
     return False
 
 def speak(text, lang="el"):
@@ -649,6 +679,11 @@ def speak(text, lang="el"):
         msg["emotion"] = emotion
     with _response_lock:
         _response_queue.append(msg)
+    
+    # Skip TTS audio if music is playing (don't talk over music)
+    if _music_playing:
+        log.info(f"🔇 Skipped TTS (music playing): \"{text[:40]}\"")
+        return
     
     # Play locally on Jetson speaker
     try:
@@ -1099,7 +1134,6 @@ CRITICAL RULES:
                         def _play_music(query):
                             try:
                                 log.info(f"🎵 Searching YouTube for: {query}")
-                                # Use yt-dlp to get audio URL
                                 result = subprocess.run(
                                     ["yt-dlp", "--no-playlist", "-f", "bestaudio",
                                      "--get-url", f"ytsearch1:{query}"],
@@ -1108,15 +1142,16 @@ CRITICAL RULES:
                                 if result.returncode == 0 and result.stdout.strip():
                                     url = result.stdout.strip()
                                     log.info(f"🎵 Playing audio stream...")
-                                    # Play for max 3 minutes
-                                    global _current_ffplay
+                                    global _music_process, _music_playing
                                     state.tts_start()
-                                    _current_ffplay = subprocess.Popen(
+                                    _music_playing = True
+                                    _music_process = subprocess.Popen(
                                         ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
-                                         "-t", "180", url],
+                                         "-t", "300", url],
                                     )
-                                    _current_ffplay.wait()
-                                    _current_ffplay = None
+                                    _music_process.wait()
+                                    _music_process = None
+                                    _music_playing = False
                                     state.tts_end()
                                     log.info(f"🎵 Music finished: {query}")
                                     with _response_lock:
@@ -1129,6 +1164,7 @@ CRITICAL RULES:
                                     speak("Δεν μπόρεσα να βρω αυτό το τραγούδι.", lang="el")
                             except Exception as e:
                                 log.warning(f"Music playback failed: {e}")
+                                _music_playing = False
                                 state.tts_end()
                         
                         threading.Thread(target=_play_music, args=(title,), daemon=True).start()
@@ -1402,8 +1438,9 @@ def main_loop(mic):
                         if result >= 0:
                             log.info("🛑 Wake word during speech — interrupting!")
                             interrupt_speech()
+                            stop_music()  # Also stop music
                             state.in_conversation = True
-                            time.sleep(0.5)  # Brief pause for echo
+                            time.sleep(0.5)
                     except:
                         pass
                 time.sleep(0.02)
@@ -1606,31 +1643,40 @@ def ww_pause():
 
 @app.route("/pipeline/speak", methods=["POST"])
 def pipeline_speak():
-    """Browser can trigger speech, stop music, or set volume."""
+    """Browser can trigger speech, stop/pause music, or set volume."""
     data = request.get_json() or {}
     action = data.get("action", "")
     
     if action == "stop_music":
-        log.info("🎵 Stop music requested")
-        interrupt_speech()
+        log.info("🎵 Stop music requested from browser")
+        stopped = stop_music()
         with _response_lock:
             _response_queue.append({"text": "", "lang": "el", "time": time.time(),
                                     "music": {"title": "", "playing": False}})
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "stopped": stopped})
+    
+    if action == "pause_music":
+        log.info("🎵 Pause/resume music requested")
+        playing = pause_music()
+        return jsonify({"ok": True, "playing": playing})
     
     if action == "set_volume":
         vol = data.get("volume", 75)
         log.info(f"🔊 Volume set to {vol}%")
-        # Set ALSA master volume
-        try:
-            subprocess.run(["amixer", "-D", "default", "sset", "Master", f"{vol}%"],
-                         capture_output=True, timeout=3)
-        except:
+        # Try multiple ALSA methods
+        for cmd in [
+            ["amixer", "-D", "default", "sset", "Master", f"{vol}%"],
+            ["amixer", "-D", "default", "sset", "PCM", f"{vol}%"],
+            ["amixer", "sset", "Master", f"{vol}%"],
+            ["amixer", "-D", "hw:0", "sset", "Playback", f"{vol}%"],
+        ]:
             try:
-                subprocess.run(["amixer", "sset", "PCM", f"{vol}%"],
-                             capture_output=True, timeout=3)
+                r = subprocess.run(cmd, capture_output=True, timeout=3)
+                if r.returncode == 0:
+                    log.info(f"🔊 Volume OK via: {' '.join(cmd)}")
+                    break
             except:
-                pass
+                continue
         return jsonify({"ok": True, "volume": vol})
     
     text = data.get("text", "")
