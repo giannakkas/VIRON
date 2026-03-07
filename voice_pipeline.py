@@ -1081,12 +1081,11 @@ def main_loop(mic):
                 if state.set_wake("porcupine", 1.0):
                     log.info("🎯 Wake word detected!")
                     
-                    # Quick "mhm" acknowledgment (non-blocking: face + short TTS)
+                    # Quick acknowledgment
                     with _response_lock:
-                        _response_queue.append({"text": "Μμμ;", "lang": "el", "time": time.time(), "emotion": "hopeful"})
-                    # Play short ack sound in background
-                    threading.Thread(target=speak, args=("Μμμ;", "el"), daemon=True).start()
-                    time.sleep(0.3)  # Brief pause for ack
+                        _response_queue.append({"text": "Ορίστε;", "lang": "el", "time": time.time(), "emotion": "hopeful"})
+                    threading.Thread(target=speak, args=("Ορίστε;", "el"), daemon=True).start()
+                    time.sleep(0.3)
                     
                     # Enter conversation mode
                     _conversation_loop(mic)

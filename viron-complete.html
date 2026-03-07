@@ -850,18 +850,15 @@ function _playNextPipelineSentence(){
   cE("happy");
   D('📢 Face animation: "'+d.text.substring(0,50)+'"');
   
-  // Jetson speaker plays audio — browser just animates the face
-  // Show talking animation for estimated duration
+  // Jetson speaker plays audio — browser animates the face
   const duration = Math.min(d.text.length * 60, 15000); // ~60ms per char
   isSpeaking=true;
   
-  // Animate talking
-  const talkAnim = setInterval(()=>{
-    // Face expression updates happen via CSS/existing animation
-  }, 100);
+  // Start mouth talking animation
+  startT();
   
   setTimeout(()=>{
-    clearInterval(talkAnim);
+    stopT();
     isSpeaking=false;
     pipelineSpeaking=false;
     D('📢 Face animation done, queue='+pipelineQueue.length);
@@ -870,39 +867,51 @@ function _playNextPipelineSentence(){
 }
 
 // ===== PIPELINE STATE INDICATOR =====
-// Poll pipeline state to show red bar when listening, spinner when processing
+// Poll pipeline state to show face expressions + waveform
+let _lastPipelineState='idle';
 setInterval(()=>{
   fetch('/pipeline/state',{signal:AbortSignal.timeout(1000)})
   .then(r=>r.json())
   .then(s=>{
     const ind=document.getElementById("listenInd");
     const txt=document.getElementById("listenText");
-    if(s.listening){
-      ind.className="listen-indicator active";
-      txt.textContent="🎤 Listening...";
+    let newState='idle';
+    
+    if(s.speaking||pipelineSpeaking||isSpeaking){
+      newState='talking';
+      ind.className="listen-indicator speaking";
+      txt.textContent="🔊 Speaking...";
       txt.style.color="rgba(255,80,80,0.9)";
-      wfMode='listening';
+      wfMode='speaking';
+      // Face: mouth should already be animated by startT()
     }else if(s.processing){
+      newState='thinking';
       ind.className="listen-indicator active";
       txt.textContent="🧠 Thinking...";
       txt.style.color="rgba(255,200,50,0.9)";
       wfMode='thinking';
-    }else if(pipelineSpeaking||isSpeaking){
-      ind.className="listen-indicator speaking";
-      txt.textContent="🔊 Speaking...";
-      txt.style.color="rgba(100,200,255,0.9)";
-      wfMode='speaking';
-    }else if(s.in_conversation){
+      if(_lastPipelineState!=='thinking')cE("thinking");
+    }else if(s.listening){
+      newState='listening';
       ind.className="listen-indicator active";
-      txt.textContent="💬 In conversation — just speak...";
+      txt.textContent="🎤 Listening...";
+      txt.style.color="rgba(255,80,80,0.9)";
+      wfMode='listening';
+      if(_lastPipelineState!=='listening')cE("focused");
+    }else if(s.in_conversation){
+      newState='listening';
+      ind.className="listen-indicator active";
+      txt.textContent="💬 Listening...";
       txt.style.color="rgba(100,255,100,0.9)";
-      wfMode='idle';
+      wfMode='listening';
     }else{
+      newState='idle';
       ind.className="listen-indicator wake";
-      txt.textContent='Say "Hey VIRON" or press Space';
+      txt.textContent='Say "Hey Jarvis"';
       txt.style.color="";
       wfMode='idle';
     }
+    _lastPipelineState=newState;
   })
   .catch(()=>{});
 },300);
@@ -912,7 +921,7 @@ let wfMode='idle'; // idle, listening, speaking, thinking
 const wfCanvas=document.getElementById('audioWaveform');
 const wfCtx=wfCanvas.getContext('2d');
 let wfTime=0;
-const WF_COLORS={listening:'rgba(255,60,60,',speaking:'rgba(255,40,40,',thinking:'rgba(255,180,40,'};
+const WF_COLORS={listening:'rgba(255,80,80,',speaking:'rgba(255,40,40,',thinking:'rgba(255,180,40,'};
 
 function drawWaveform(){
   wfTime+=0.04;
