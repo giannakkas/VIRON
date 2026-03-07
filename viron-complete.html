@@ -160,11 +160,11 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .quiz-score{font-size:16px;color:rgba(0,255,140,0.9);font-weight:600}
 .quiz-close{background:rgba(255,60,60,0.1);border:1px solid rgba(255,60,60,0.3);border-radius:8px;padding:6px 14px;font-size:12px;color:rgba(255,100,100,0.9);cursor:pointer}
 .quiz-content{position:absolute;top:50px;left:20px;right:20px;bottom:20px;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.quiz-question{font-size:24px;color:rgba(220,230,255,0.95);text-align:center;margin-bottom:30px;line-height:1.5;max-width:90%}
-.quiz-counter{font-size:14px;color:rgba(0,200,255,0.6);margin-bottom:15px;letter-spacing:2px}
-.quiz-options{display:grid;grid-template-columns:1fr 1fr;gap:14px;width:90%;max-width:700px}
-.quiz-opt{padding:18px 20px;background:rgba(255,255,255,0.05);border:2px solid rgba(255,255,255,0.1);border-radius:14px;
-  color:rgba(220,230,255,0.9);font-size:18px;cursor:pointer;transition:all 0.3s;text-align:center}
+.quiz-question{font-size:30px;color:rgba(220,230,255,0.95);text-align:center;margin-bottom:35px;line-height:1.5;max-width:90%}
+.quiz-counter{font-size:16px;color:rgba(0,200,255,0.6);margin-bottom:20px;letter-spacing:2px}
+.quiz-options{display:grid;grid-template-columns:1fr 1fr;gap:18px;width:92%;max-width:900px}
+.quiz-opt{padding:22px 24px;background:rgba(255,255,255,0.05);border:2px solid rgba(255,255,255,0.1);border-radius:16px;
+  color:rgba(220,230,255,0.9);font-size:22px;cursor:pointer;transition:all 0.3s;text-align:center}
 .quiz-opt:hover{background:rgba(0,180,255,0.1);border-color:rgba(0,180,255,0.4)}
 .quiz-opt.correct{background:rgba(0,255,140,0.15);border-color:rgba(0,255,140,0.6);color:rgba(0,255,140,1)}
 .quiz-opt.wrong{background:rgba(255,60,60,0.15);border-color:rgba(255,60,60,0.6);color:rgba(255,80,80,1)}
@@ -855,6 +855,15 @@ setInterval(()=>{
       if(d.quiz&&d.quiz.questions){
         D('📝 Pipeline quiz: '+d.quiz.title+' ('+d.quiz.questions.length+' Qs)');
         setTimeout(()=>openQuiz(d.quiz),500);
+      }
+      // Handle YouTube from pipeline
+      if(d.youtube&&d.youtube.id){
+        D('🎵 Pipeline YouTube: '+d.youtube.title);
+        setTimeout(()=>{
+          document.getElementById("ytT").textContent="♪ "+d.youtube.title;
+          document.getElementById("ytP").src=`https://www.youtube.com/embed/${d.youtube.id}?autoplay=1&rel=0`;
+          document.getElementById("ytC").classList.add("visible");
+        },1000);
       }
       if(d.text){
         pipelineQueue.push(d);
@@ -3435,23 +3444,52 @@ function answerQuiz(idx){
   opts.forEach(o=>{o.classList.add("disabled");
     if(parseInt(o.dataset.idx)===q.correct)o.classList.add("correct");
   });
+  const correctPhrases=["Μπράβο!","Σωστά!","Τέλεια!","Εξαιρετικά!","Πολύ καλά!"];
+  const wrongPhrases=["Λάθος!","Δεν πειράζει!","Προσπάθησε ξανά!","Σχεδόν!"];
   if(idx===q.correct){
     _quizCorrect++;cE("happy");
-    // Send correct to pipeline for voice
-    fetch('/pipeline/response').catch(()=>{});
+    // Speak random praise
+    const praise=correctPhrases[Math.floor(Math.random()*correctPhrases.length)];
+    opts[idx].innerHTML+=' ✓';
   }else{
     opts[idx].classList.add("wrong");cE("sad");
+    opts[idx].innerHTML+=' ✗';
   }
   document.getElementById("quizScore").textContent=`${_quizCorrect}/${_quizIdx+1}`;
-  setTimeout(()=>{_quizIdx++;showQuizQ()},2000);
+  setTimeout(()=>{_quizIdx++;showQuizQ()},2500);
 }
 
 function showQuizResult(){
-  const pct=Math.round((_quizCorrect/_quizData.questions.length)*100);
+  const total=_quizData.questions.length;
+  const pct=Math.round((_quizCorrect/total)*100);
   const emoji=pct>=80?"🏆":pct>=60?"👍":pct>=40?"💪":"📚";
-  const msg=pct>=80?"Εξαιρετικά!":pct>=60?"Πολύ καλά!":pct>=40?"Καλή προσπάθεια!":"Χρειάζεσαι λίγο διάβασμα!";
-  document.getElementById("quizContent").innerHTML=`<div class="quiz-result">${emoji}<br>${_quizCorrect} / ${_quizData.questions.length}<br><span style="font-size:24px;color:rgba(255,255,255,0.7)">${msg}</span><br><span style="font-size:18px;color:rgba(0,200,255,0.6);cursor:pointer" onclick="closeQuiz()">Πάτα για να κλείσεις</span></div>`;
+  
+  // Rich spoken responses
+  const responses={
+    100:["Τέλεια! Όλες σωστές! Είσαι φοβερός!","Μπράβο σου! 100%! Είσαι ιδιοφυΐα!"],
+    80:["Εξαιρετικά! Πολύ καλή επίδοση!","Μπράβο! Σχεδόν τέλεια!","Πολύ καλά! Συνέχισε έτσι!"],
+    60:["Καλά πήγε! Λίγο διάβασμα ακόμα!","Πολύ καλή προσπάθεια!","Μπράβο, αλλά μπορείς καλύτερα!"],
+    40:["Χρειάζεσαι λίγο διάβασμα! Μην ανησυχείς!","Συνέχισε να προσπαθείς!"],
+    0:["Πρέπει να διαβάσεις λίγο ακόμα! Θα τα καταφέρεις!","Μην απογοητεύεσαι! Η μάθηση θέλει χρόνο!"]
+  };
+  const tier=pct>=100?100:pct>=80?80:pct>=60?60:pct>=40?40:0;
+  const msgs=responses[tier];
+  const msg=msgs[Math.floor(Math.random()*msgs.length)];
+  
+  document.getElementById("quizContent").innerHTML=`<div class="quiz-result">
+    <div style="font-size:80px;margin-bottom:20px">${emoji}</div>
+    <div style="font-size:48px;font-weight:200;color:#fff;margin-bottom:10px">${_quizCorrect} / ${total}</div>
+    <div style="font-size:28px;color:rgba(255,255,255,0.7);margin-bottom:5px">${pct}%</div>
+    <div style="font-size:22px;color:rgba(0,200,255,0.8);margin-bottom:30px">${msg}</div>
+    <div style="font-size:16px;color:rgba(0,200,255,0.5);cursor:pointer;border:1px solid rgba(0,200,255,0.3);padding:12px 30px;border-radius:12px;display:inline-block" onclick="closeQuiz()">Κλείσε</div>
+  </div>`;
   cE(pct>=60?"proud":"thinking");
+  
+  // Speak the result
+  setTimeout(()=>{
+    const spokenResult=`${_quizCorrect} στα ${total} σωστά. ${msg}`;
+    fetch('/pipeline/speak',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:spokenResult})}).catch(()=>{});
+  },500);
 }
 
 function closeQuiz(){

@@ -897,6 +897,23 @@ Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index 
             wants_tomorrow = any(w in t_lower for w in ["αύριο", "tomorrow"])
             wants_week = any(w in t_lower for w in ["εβδομάδ", "week", "ολόκληρ"])
             
+            # Detect city from query
+            CITIES = {
+                "ορόκλινη": (34.88, 33.66, "Ορόκλινη"), "λάρνακα": (34.92, 33.63, "Λάρνακα"),
+                "λευκωσία": (35.17, 33.36, "Λευκωσία"), "λεμεσό": (34.68, 33.04, "Λεμεσός"),
+                "πάφο": (34.77, 32.42, "Πάφος"), "αμμόχωστ": (35.12, 33.94, "Αμμόχωστος"),
+                "αθήνα": (37.98, 23.73, "Αθήνα"), "θεσσαλονίκ": (40.63, 22.95, "Θεσσαλονίκη"),
+                "λονδίνο": (51.51, -0.13, "Λονδίνο"), "παρίσι": (48.86, 2.35, "Παρίσι"),
+                "nicosia": (35.17, 33.36, "Λευκωσία"), "london": (51.51, -0.13, "London"),
+                "paris": (48.86, 2.35, "Paris"), "athens": (37.98, 23.73, "Athens"),
+                "larnaca": (34.92, 33.63, "Larnaca"), "limassol": (34.68, 33.04, "Limassol"),
+            }
+            lat, lon, city_name = 34.88, 33.66, "Ορόκλινη"  # default
+            for city_key, (clat, clon, cname) in CITIES.items():
+                if city_key in t_lower:
+                    lat, lon, city_name = clat, clon, cname
+                    break
+            
             try:
                 import requests as _req
                 from datetime import datetime
@@ -911,8 +928,8 @@ Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index 
                 r = _req.get(
                     "https://api.open-meteo.com/v1/forecast",
                     params={
-                        "latitude": 34.88,   # Oroklini, Larnaca
-                        "longitude": 33.66,
+                        "latitude": lat,
+                        "longitude": lon,
                         "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
                         "hourly": "temperature_2m,weather_code",
                         "daily": "temperature_2m_max,temperature_2m_min,weather_code",
@@ -973,15 +990,15 @@ Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index 
                     
                     # Build spoken response based on query type
                     if wants_week:
-                        parts = ["Ο καιρός για την εβδομάδα στην Ορόκλινη:"]
+                        parts = [f"Ο καιρός για την εβδομάδα στην {city_name}:"]
                         for d in daily_items[:5]:
                             parts.append(f"{d['day']}, {d['desc']}, {d['min']} με {d['max']} βαθμούς.")
                         weather_text = " ".join(parts)
                     elif wants_tomorrow and len(daily_items) > 1:
                         d = daily_items[1]
-                        weather_text = f"Αύριο {d['day']} στην Ορόκλινη: {d['desc']}, θερμοκρασία από {d['min']} μέχρι {d['max']} βαθμούς Κελσίου."
+                        weather_text = f"Αύριο {d['day']} στην {city_name}: {d['desc']}, θερμοκρασία από {d['min']} μέχρι {d['max']} βαθμούς Κελσίου."
                     else:
-                        weather_text = f"Ο καιρός στην Ορόκλινη: {desc}, {temp} βαθμούς Κελσίου, υγρασία {humidity}%, άνεμος {wind} χιλιόμετρα την ώρα."
+                        weather_text = f"Ο καιρός στην {city_name}: {desc}, {temp} βαθμούς Κελσίου, υγρασία {humidity}%, άνεμος {wind} χιλιόμετρα την ώρα."
                         if hourly_items:
                             next3 = hourly_items[1:4]
                             if next3:
@@ -994,7 +1011,7 @@ Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index 
                             "text": weather_text, "lang": "el", "time": time.time(),
                             "weather": {
                                 "temp": temp, "desc": desc, "humidity": humidity,
-                                "wind": wind, "city": "Ορόκλινη",
+                                "wind": wind, "city": city_name,
                                 "hourly": hourly_items,
                                 "daily": daily_items,
                             }
@@ -1025,6 +1042,43 @@ Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index 
                     return
             except Exception as e:
                 log.warning(f"News failed: {e}")
+        
+        # ── MUSIC ──
+        if any(w in t_lower for w in ["βάλε μουσική", "παίξε", "τραγούδι", "μουσική", "play", "song", "music", "ακούσ"]):
+            log.info("🎵 Music request detected")
+            try:
+                import requests as _req
+                t0 = time.time()
+                resp = _req.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": [{"role": "system", "content": "You are a music assistant. When asked to play a song, respond ONLY with a YouTube video ID and title in this exact format: [YOUTUBE:VIDEO_ID:Song Title - Artist]. Use REAL YouTube video IDs that you know. If asked for Greek music, use popular Greek songs. If the request is vague, pick a popular song. Respond with NOTHING else, just the [YOUTUBE:...] tag."},
+                            {"role": "user", "content": text}],
+                        "max_tokens": 100, "temperature": 0.5,
+                    },
+                    timeout=10,
+                )
+                ms = int((time.time() - t0) * 1000)
+                if resp.status_code == 200:
+                    reply = resp.json()["choices"][0]["message"]["content"].strip()
+                    import re as _re
+                    yt_match = _re.search(r'\[YOUTUBE:([a-zA-Z0-9_-]+):([^\]]+)\]', reply)
+                    if yt_match:
+                        vid = yt_match.group(1)
+                        title = yt_match.group(2)
+                        log.info(f"🎵 YouTube: {title} ({vid}) in {ms}ms")
+                        with _response_lock:
+                            _response_queue.append({
+                                "text": f"Παίζω: {title}!", "lang": "el", "time": time.time(),
+                                "youtube": {"id": vid, "title": title},
+                            })
+                        state.is_processing = False
+                        speak(f"Βάζω {title}!", lang="el")
+                        return
+            except Exception as e:
+                log.warning(f"Music failed: {e}")
         
         use_claude = _needs_claude(text)
         
@@ -1461,6 +1515,8 @@ def pipeline_response():
                 result["weather"] = resp["weather"]
             if "quiz" in resp:
                 result["quiz"] = resp["quiz"]
+            if "youtube" in resp:
+                result["youtube"] = resp["youtube"]
             return jsonify(result)
     return jsonify({"has_response": False})
 
@@ -1477,6 +1533,15 @@ def pipeline_state():
 @app.route("/wakeword/pause", methods=["POST"])
 def ww_pause():
     return jsonify({"status": "paused"})
+
+@app.route("/pipeline/speak", methods=["POST"])
+def pipeline_speak():
+    """Browser can trigger VIRON to say something (e.g. quiz results)."""
+    data = request.get_json() or {}
+    text = data.get("text", "")
+    if text:
+        threading.Thread(target=speak, args=(text, "el"), daemon=True).start()
+    return jsonify({"ok": True})
 
 @app.route("/wakeword/resume", methods=["POST"])
 def ww_resume():
