@@ -494,23 +494,24 @@ def chat(user_message, system="You are VIRON (ΒΙΡΟΝ), a friendly AI compani
         if use_claude and ANTHROPIC_API_KEY:
             wb_system = system + """
 
-WHITEBOARD — You MUST use a whiteboard when explaining concepts. Start with 1-sentence intro, then:
+You are an expert teacher. Give DETAILED, RICH explanations. Do NOT give simple 1-sentence answers.
+
+WHITEBOARD — You MUST use a whiteboard when explaining concepts. Start with a short spoken intro, then provide a DETAILED whiteboard with:
+- TEXT: thorough explanation (2-3 sentences per concept)
+- STEP: clear step labels
+- MATH: equations with actual numbers and units
+- RESULT: meaningful conclusions
+
+Format:
 [WHITEBOARD:Title]
-TEXT: explanation
+TEXT: detailed explanation
 STEP: label
-MATH: equation
-RESULT: answer
+MATH: equation with numbers
+TEXT: why this matters
+RESULT: key takeaway
 [/WHITEBOARD]
 
-Example: Ας δούμε!
-[WHITEBOARD:Η Βαρύτητα]
-TEXT: Η βαρύτητα είναι η δύναμη έλξης
-STEP: Νόμος Νεύτωνα
-MATH: F = m × g
-RESULT: 687 Νιούτον
-[/WHITEBOARD]
-
-Write in Greek. 5-8 steps minimum."""
+Use 8-12 steps minimum. Include real-world examples. Write in Greek unless student asks in English."""
             try:
                 t0 = time.time()
                 resp = requests.post(
@@ -521,8 +522,8 @@ Write in Greek. 5-8 steps minimum."""
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": ANTHROPIC_MODEL,
-                        "max_tokens": 1000,
+                        "model": "claude-sonnet-4-20250514",  # Sonnet for educational depth
+                        "max_tokens": 2000,
                         "system": wb_system,
                         "messages": [{"role": "user", "content": user_message}],
                     },
@@ -862,9 +863,15 @@ def conversation_turn(mic, text, lang):
                     json={
                         "model": GROQ_MODEL,
                         "messages": [{"role": "system", "content": """Generate a quiz in JSON format. Return ONLY valid JSON, no markdown, no backticks.
-Format: {"title":"Quiz Title in Greek","questions":[{"q":"Question in Greek?","options":["Option A","Option B","Option C","Option D"],"correct":0}]}
-Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index of the correct answer."""},
-                            {"role": "user", "content": f"Φτιάξε κουίζ για: {topic}"}],
+Format: {"title":"Quiz Title","questions":[{"q":"Question?","options":["A","B","C","D"],"correct":0}]}
+CRITICAL RULES:
+- Generate 5 questions with 4 options each
+- The correct answer MUST be randomly placed at position 0, 1, 2, or 3 — NOT always position 0!
+- Vary the correct answer position: some at 0, some at 1, some at 2, some at 3
+- "correct" is the 0-based index of the correct option
+- If the user asks in English, write in English. If Greek, write in Greek.
+- Make questions interesting and educational, not too easy"""},
+                            {"role": "user", "content": f"Create a quiz about: {topic}"}],
                         "max_tokens": 1000, "temperature": 0.7,
                     },
                     timeout=15,
@@ -876,6 +883,14 @@ Generate 5 questions. Write EVERYTHING in Greek. "correct" is the 0-based index 
                     json_match = _re.search(r'\{[\s\S]*\}', reply)
                     if json_match:
                         quiz_data = json.loads(json_match.group())
+                        
+                        # Shuffle answer positions so correct isn't always first
+                        import random
+                        for q in quiz_data.get("questions", []):
+                            correct_text = q["options"][q["correct"]]
+                            random.shuffle(q["options"])
+                            q["correct"] = q["options"].index(correct_text)
+                        
                         log.info(f"📝 Quiz: \"{quiz_data.get('title','')}\" ({len(quiz_data.get('questions',[]))} Qs) in {ms}ms")
                         with _response_lock:
                             _response_queue.append({

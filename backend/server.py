@@ -2220,6 +2220,19 @@ def pipeline_state_proxy():
     except:
         return jsonify({"listening": False, "processing": False, "speaking": False})
 
+@app.route('/pipeline/speak', methods=['POST'])
+def pipeline_speak_proxy():
+    """Proxy to voice pipeline's speak endpoint."""
+    import urllib.request
+    try:
+        data = json.dumps(request.get_json() or {}).encode()
+        url = f'http://127.0.0.1:{OWW_PORT}/pipeline/speak'
+        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+        resp = urllib.request.urlopen(req, timeout=5)
+        return jsonify(json.loads(resp.read()))
+    except:
+        return jsonify({"ok": False})
+
 # ============ START ============
 # ── VOICE IMPROVEMENT: Combined record+STT endpoint ──
 try:
