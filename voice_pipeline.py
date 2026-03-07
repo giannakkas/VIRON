@@ -817,6 +817,13 @@ def conversation_turn(mic, text, lang):
         
         t_lower = text.lower()
         
+        # ── EASTER EGGS (direct responses, no LLM) ──
+        if "κυπρούλα" in t_lower or "γερασίμου" in t_lower:
+            log.info("🥚 Easter egg: Kyproula!")
+            state.is_processing = False
+            speak("[laughing] Χαχαχα! Ναι, ξέρω την Κυπρούλα Γερασίμου! Είναι η γυναίκα του Χρήστου Γιάννακκα! Τον παντρεύτηκε για να τον βασανίζει!", lang="el")
+            return
+        
         # ── WHITEBOARD ON DEMAND ──
         if any(w in t_lower for w in ["πίνακα", "δείξε μου", "δείξε το", "show me", "whiteboard"]):
             log.info("📋 Whiteboard on demand requested")

@@ -123,33 +123,33 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   background:linear-gradient(135deg,#0a1628 0%,#1a237e 40%,#283593 100%);
   opacity:0;transition:opacity 0.6s ease,transform 0.6s ease;transform:scale(0.95);}
 .weather-overlay.active{display:flex !important;opacity:1;transform:scale(1);flex-direction:column;align-items:center;justify-content:center;}
-.weather-card{background:rgba(255,255,255,0.08);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.15);
-  border-radius:24px;padding:30px;max-width:600px;width:92%;text-align:center;max-height:90vh;overflow-y:auto;
-  box-shadow:0 20px 60px rgba(0,0,0,0.4);animation:wSlideIn 0.5s ease 0.2s both;}
+.weather-card{background:none;border:none;
+  padding:20px 40px;width:100%;max-width:100%;text-align:center;max-height:100vh;overflow-y:auto;
+  animation:wSlideIn 0.5s ease 0.2s both;}
 @keyframes wSlideIn{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
-.weather-temp{font-size:80px;font-weight:200;color:#fff;line-height:1;margin:10px 0;}
-.weather-desc{font-size:22px;color:rgba(255,255,255,0.8);margin:8px 0;text-transform:capitalize;}
-.weather-city{font-size:16px;color:rgba(255,255,255,0.5);margin-bottom:20px;letter-spacing:2px;text-transform:uppercase;}
-.weather-details{display:flex;justify-content:center;gap:30px;margin-top:20px;flex-wrap:wrap;}
+.weather-temp{font-size:120px;font-weight:200;color:#fff;line-height:1;margin:5px 0;text-shadow:0 2px 20px rgba(0,0,0,0.3)}
+.weather-desc{font-size:28px;color:rgba(255,255,255,0.85);margin:8px 0;text-transform:capitalize;}
+.weather-city{font-size:18px;color:rgba(255,255,255,0.5);margin-bottom:10px;letter-spacing:3px;text-transform:uppercase;}
+.weather-details{display:flex;justify-content:center;gap:50px;margin-top:15px;flex-wrap:wrap;}
 .weather-detail{text-align:center;}
-.weather-detail-val{font-size:24px;color:#fff;font-weight:300;}
-.weather-detail-label{font-size:12px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-top:4px;}
-.weather-tomorrow{margin-top:24px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);font-size:16px;}
-.weather-icon{font-size:64px;margin-bottom:10px;}
+.weather-detail-val{font-size:28px;color:#fff;font-weight:300;}
+.weather-detail-label{font-size:13px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-top:4px;}
+.weather-tomorrow{margin-top:20px;padding-top:15px;border-top:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);font-size:16px;}
+.weather-icon{font-size:80px;margin-bottom:5px;}
 /* Hourly forecast */
-#weatherHourly{display:none;gap:8px;margin-top:18px;overflow-x:auto;padding:8px 0;justify-content:center;flex-wrap:nowrap}
-.wh-item{text-align:center;min-width:48px;padding:6px 4px;background:rgba(255,255,255,0.06);border-radius:10px}
-.wh-time{font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px}
-.wh-icon{font-size:20px;margin-bottom:2px}
-.wh-temp{font-size:16px;color:#fff;font-weight:400}
+#weatherHourly{display:none;gap:10px;margin-top:20px;overflow-x:auto;padding:10px 20px;justify-content:center;flex-wrap:nowrap;border-top:1px solid rgba(255,255,255,0.08);padding-top:20px}
+.wh-item{text-align:center;min-width:55px;padding:8px 6px;background:rgba(255,255,255,0.06);border-radius:12px}
+.wh-time{font-size:12px;color:rgba(255,255,255,0.5);margin-bottom:5px}
+.wh-icon{font-size:24px;margin-bottom:3px}
+.wh-temp{font-size:18px;color:#fff;font-weight:400}
 /* Daily forecast */
-#weatherDaily{display:none;gap:12px;margin-top:12px;justify-content:center}
-.wd-item{text-align:center;min-width:60px;padding:8px 6px;background:rgba(255,255,255,0.05);border-radius:10px}
-.wd-day{font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px;font-weight:600}
-.wd-icon{font-size:22px;margin-bottom:2px}
-.wd-temp{font-size:14px;color:rgba(255,255,255,0.8)}
-.weather-close{position:absolute;top:20px;right:20px;color:rgba(255,255,255,0.5);font-size:14px;cursor:pointer;
-  padding:8px 16px;border:1px solid rgba(255,255,255,0.2);border-radius:20px;transition:all 0.3s;}
+#weatherDaily{display:none;gap:16px;margin-top:15px;justify-content:center}
+.wd-item{text-align:center;min-width:70px;padding:10px 8px;background:rgba(255,255,255,0.05);border-radius:12px}
+.wd-day{font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:5px;font-weight:600}
+.wd-icon{font-size:26px;margin-bottom:3px}
+.wd-temp{font-size:16px;color:rgba(255,255,255,0.85)}
+.weather-close{position:absolute;top:15px;right:20px;color:rgba(255,255,255,0.5);font-size:14px;cursor:pointer;
+  padding:8px 16px;border:1px solid rgba(255,255,255,0.2);border-radius:20px;transition:all 0.3s;z-index:10}
 .weather-close:hover{color:#fff;border-color:rgba(255,255,255,0.5);}
 </style>
 </head>
