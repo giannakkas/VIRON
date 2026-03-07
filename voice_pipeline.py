@@ -536,7 +536,7 @@ Use 8-12 steps minimum. Include real-world examples. Write in Greek unless stude
                         "model": "claude-sonnet-4-20250514",  # Sonnet for educational depth
                         "max_tokens": 2000,
                         "system": wb_system,
-                        "messages": [{"role": "user", "content": user_message}],
+                        "messages": _conversation_history + [{"role": "user", "content": user_message}],
                     },
                     timeout=15,
                 )
@@ -627,6 +627,23 @@ _response_lock = threading.Lock()
 _current_ffplay = None  # Track ffplay process for interrupt
 _music_process = None   # Track music process separately
 _music_playing = False
+
+# Conversation history (last 10 exchanges for context)
+_conversation_history = []
+MAX_HISTORY = 10
+
+def _add_to_history(role, content):
+    """Add a message to conversation history."""
+    global _conversation_history
+    _conversation_history.append({"role": role, "content": content})
+    # Keep only last N messages
+    if len(_conversation_history) > MAX_HISTORY * 2:
+        _conversation_history = _conversation_history[-(MAX_HISTORY * 2):]
+
+def _clear_history():
+    """Clear conversation history (e.g. when conversation ends)."""
+    global _conversation_history
+    _conversation_history = []
 
 def interrupt_speech():
     """Kill current TTS playback (called when wake word detected during speech)."""
@@ -1304,6 +1321,7 @@ You MUST follow this exact format. Write everything in Greek."""
                 "model": GROQ_MODEL,
                 "messages": [
                     {"role": "system", "content": system},
+                ] + _conversation_history + [
                     {"role": "user", "content": user_message},
                 ],
                 "max_tokens": max_tok,
@@ -1319,6 +1337,9 @@ You MUST follow this exact format. Write everything in Greek."""
             return None
         
         state.tts_start()
+        
+        # Add user message to conversation history
+        _add_to_history("user", user_message)
         
         full_response = ""
         sent_sentences = []
@@ -1401,12 +1422,14 @@ You MUST follow this exact format. Write everything in Greek."""
                     elif s.get("result"):
                         narration_parts.append(s["result"])
                 speak(". ".join(narration_parts) or "Κοίτα στον πίνακα!", lang="el")
+                _add_to_history("assistant", ". ".join(narration_parts) if narration_parts else full_response[:200])
                 state.tts_end()
                 return True
             else:
                 # Educational but no whiteboard format - just speak it
                 log.info(f"⚡ Groq [{ms}ms]: \"{full_response[:80]}\"")
                 speak(full_response.strip())
+                _add_to_history("assistant", full_response.strip()[:200])
                 state.tts_end()
                 return True
         
@@ -1417,6 +1440,12 @@ You MUST follow this exact format. Write everything in Greek."""
             speak(remaining, lang="el")
         
         log.info(f"⚡ Groq complete: {len(sent_sentences)} sentences in {ms}ms")
+        
+        # Save full response to conversation history
+        full_text = " ".join(sent_sentences)
+        if remaining:
+            full_text = full_text + " " + remaining if full_text else remaining
+        _add_to_history("assistant", full_text.strip()[:200])
         
         state.tts_end()
         return True
@@ -1598,6 +1627,8 @@ def _conversation_loop(mic):
             log.info(f"💬 Ready for next question (silence for {CONVERSATION_TIMEOUT}s to exit)...")
     finally:
         state.in_conversation = False
+        # Don't clear history here — keep context across conversation turns
+        # History clears naturally when it exceeds MAX_HISTORY
 
 
 

@@ -9,7 +9,12 @@
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.18/dist/bundle.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding-top:2vh;transition:opacity 0.5s;cursor:none}
+body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding-top:2vh;transition:opacity 0.5s;cursor:none !important}
+*{cursor:none !important}
+.settings-panel *{cursor:auto !important}
+.settings-panel select,.settings-panel input,.settings-panel button,.hamburger{cursor:pointer !important}
+/* WiFi indicator */
+#wifiInd{position:fixed;top:12px;left:12px;z-index:100;font-size:14px;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:6px}
 svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-color:transparent;display:block}
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
@@ -62,7 +67,7 @@ svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-co
 .hamburger.open span:nth-child(3){transform:rotate(-45deg) translate(4px,-4px)}
 .settings-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:90;opacity:0;pointer-events:none;transition:opacity 0.3s}
 .settings-overlay.open{opacity:1;pointer-events:all}
-.settings-panel{position:fixed;top:0;right:-320px;width:300px;height:100vh;background:rgba(8,12,22,0.97);border-left:1px solid rgba(255,255,255,0.08);z-index:95;padding:60px 20px 20px;overflow-y:auto;transition:right 0.3s ease;backdrop-filter:blur(20px);cursor:auto}
+.settings-panel{position:fixed;top:0;right:-320px;width:300px;height:100vh;background:rgba(8,12,22,0.97);border-left:1px solid rgba(255,255,255,0.08);z-index:95;padding:60px 20px 20px;overflow-y:auto;transition:right 0.3s ease;backdrop-filter:blur(20px)}
 .settings-panel.open{right:0}
 .settings-panel h2{font-size:18px;color:#e0f0ff;margin-bottom:20px}
 .setting-group{margin-bottom:20px}
@@ -305,6 +310,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <style>
 @keyframes achievePulse{0%{transform:scale(0.8);opacity:0}20%{transform:scale(1.1);opacity:1}80%{transform:scale(1);opacity:1}100%{transform:scale(1);opacity:0}}
 </style>
+<div id="wifiInd">📶 <span id="wifiStr">--</span></div>
 <button class="hamburger" id="hb" onclick="toggleSettings()"><span></span><span></span><span></span></button>
 <div class="settings-overlay" id="so" onclick="toggleSettings()"></div>
 <div class="settings-panel" id="sp">
@@ -3359,33 +3365,14 @@ function startVironNormal(){
   },5000);
 }
 
-// Boot splash → check setup, then start
+// Boot splash → auto-start immediately (no tap needed)
 const splash=document.getElementById('bootSplash');
-// Auto-start after 2 seconds (no tap needed)
-setTimeout(async function startViron(){
+setTimeout(()=>{
   splash.classList.add('hidden');
-  setTimeout(()=>{splash.style.display='none'},1000);
+  setTimeout(()=>{splash.style.display='none'},800);
   unlockAudio();
-  
-  // Check if setup is needed
-  try{
-    const r=await fetch('/api/setup/status');
-    const status=await r.json();
-    
-    if(!status.setup_complete){
-      // Show setup wizard
-      document.getElementById('setupWizard').style.display='block';
-      return;
-    }
-  }catch(e){
-    D('Setup check failed: '+e+' — proceeding normally');
-  }
-  
-  // Setup already done — start normally
   startVironNormal();
-},2000);
-// Also allow tap to start immediately
-splash.addEventListener('click',()=>{splash.click=true;splash.classList.add('hidden');setTimeout(()=>{splash.style.display='none'},500)},{once:true});
+},1500);
 
 // Keepalive: ensure always-on listening stays alive (NOT during setup)
 setInterval(()=>{
@@ -3516,6 +3503,13 @@ if(volSlider){
       body:JSON.stringify({action:'set_volume',volume:vol})}).catch(()=>{});
   });
 }
+
+// ===== WIFI INDICATOR =====
+setInterval(()=>{
+  fetch('/pipeline/state',{signal:AbortSignal.timeout(1000)})
+  .then(()=>{document.getElementById("wifiStr").textContent="OK";document.getElementById("wifiInd").style.color="rgba(0,255,140,0.6)"})
+  .catch(()=>{document.getElementById("wifiStr").textContent="--";document.getElementById("wifiInd").style.color="rgba(255,80,80,0.6)"});
+},5000);
 
 // ===== QUIZ =====
 let _quizData=null,_quizIdx=0,_quizCorrect=0,_quizActive=false;
