@@ -9,12 +9,19 @@
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.18/dist/bundle.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding-top:2vh;transition:opacity 0.5s;cursor:none !important}
-*{cursor:none !important}
-.settings-panel *{cursor:auto !important}
-.settings-panel select,.settings-panel input,.settings-panel button,.hamburger{cursor:pointer !important}
+body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding-top:2vh;transition:opacity 0.5s}
+.settings-panel,.settings-panel *{cursor:auto !important}
+.hamburger{cursor:pointer !important}
 /* WiFi indicator */
-#wifiInd{position:fixed;top:12px;left:12px;z-index:100;font-size:14px;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:6px}
+#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:flex;align-items:flex-end;gap:3px;height:30px}
+.wifi-bar{width:5px;border-radius:2px;transition:background 0.3s}
+.wifi-bar:nth-child(1){height:8px}
+.wifi-bar:nth-child(2){height:14px}
+.wifi-bar:nth-child(3){height:20px}
+.wifi-bar:nth-child(4){height:26px}
+.wifi-bar.on{background:rgba(0,220,100,0.7)}
+.wifi-bar.off{background:rgba(255,255,255,0.15)}
+#wifiText{font-size:11px;margin-left:4px;font-weight:700;letter-spacing:1px;align-self:center}
 svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-color:transparent;display:block}
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
@@ -310,7 +317,10 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <style>
 @keyframes achievePulse{0%{transform:scale(0.8);opacity:0}20%{transform:scale(1.1);opacity:1}80%{transform:scale(1);opacity:1}100%{transform:scale(1);opacity:0}}
 </style>
-<div id="wifiInd">📶 <span id="wifiStr">--</span></div>
+<div id="wifiInd">
+  <div class="wifi-bar off"></div><div class="wifi-bar off"></div><div class="wifi-bar off"></div><div class="wifi-bar off"></div>
+  <span id="wifiText" style="color:rgba(255,60,60,0.8)">NO SIGNAL</span>
+</div>
 <button class="hamburger" id="hb" onclick="toggleSettings()"><span></span><span></span><span></span></button>
 <div class="settings-overlay" id="so" onclick="toggleSettings()"></div>
 <div class="settings-panel" id="sp">
@@ -3340,29 +3350,14 @@ async function setupFinish(){
 function startVironNormal(){
   unlockAudio();
   
-  // Personalized greeting if we have a name
+  // Face animation greeting
   setTimeout(()=>{
     cE("excited");
-    if(setupData.name){
-      if(setupData.language==='el'||isGreekMode()){
-        say(`Γεια σου ${setupData.name}! Πες Hey VIRON για να μου μιλήσεις!`);
-      }else{
-        say(`Hi ${setupData.name}! Say Hey VIRON to talk to me!`);
-      }
-    }else{
-      if(isGreekMode()){
-        say("Γεια σου! Πες Hey VIRON για να μου μιλήσεις!");
-      }else{
-        say("Hi there! Say Hey VIRON to talk to me!");
-      }
-    }
+    // No browser TTS - pipeline handles greeting via speaker
   },500);
   
-  // Start listening after greeting
-  setTimeout(()=>{
-    D('Starting always-on listening');
-    startAlwaysListening();
-  },5000);
+  // Pipeline handles ALL listening via Porcupine - browser just displays face
+  D('✅ VIRON face started — pipeline handles wake word + STT');
 }
 
 // Boot splash → auto-start immediately (no tap needed)
@@ -3373,6 +3368,19 @@ setTimeout(()=>{
   unlockAudio();
   startVironNormal();
 },1500);
+
+// Hide cursor everywhere except settings
+(function hideCursor(){
+  const style=document.createElement('style');
+  style.textContent='html,body,svg,div,canvas,#face,#audioWaveform,.boot-splash,.weather-overlay,.quiz-overlay,.wb-overlay{cursor:none !important}';
+  document.head.appendChild(style);
+  // Also move cursor off screen on any mouse movement
+  document.addEventListener('mousemove',function(e){
+    // Don't hide if settings panel is open
+    if(document.getElementById('sp').classList.contains('open'))return;
+    document.body.style.cursor='none';
+  });
+})();
 
 // Keepalive: ensure always-on listening stays alive (NOT during setup)
 setInterval(()=>{
@@ -3505,11 +3513,24 @@ if(volSlider){
 }
 
 // ===== WIFI INDICATOR =====
+function updateWifi(ok){
+  const bars=document.querySelectorAll('.wifi-bar');
+  const txt=document.getElementById('wifiText');
+  if(ok){
+    bars.forEach(b=>b.className='wifi-bar on');
+    txt.textContent='';txt.style.color='';
+  }else{
+    bars.forEach(b=>b.className='wifi-bar off');
+    txt.textContent='NO SIGNAL';txt.style.color='rgba(255,60,60,0.8)';
+  }
+}
 setInterval(()=>{
-  fetch('/pipeline/state',{signal:AbortSignal.timeout(1000)})
-  .then(()=>{document.getElementById("wifiStr").textContent="OK";document.getElementById("wifiInd").style.color="rgba(0,255,140,0.6)"})
-  .catch(()=>{document.getElementById("wifiStr").textContent="--";document.getElementById("wifiInd").style.color="rgba(255,80,80,0.6)"});
+  fetch('/pipeline/state',{signal:AbortSignal.timeout(2000)})
+  .then(r=>{if(r.ok)updateWifi(true);else updateWifi(false)})
+  .catch(()=>updateWifi(false));
 },5000);
+// Initial check
+setTimeout(()=>{fetch('/pipeline/state',{signal:AbortSignal.timeout(2000)}).then(r=>updateWifi(r.ok)).catch(()=>updateWifi(false))},2000);
 
 // ===== QUIZ =====
 let _quizData=null,_quizIdx=0,_quizCorrect=0,_quizActive=false;
