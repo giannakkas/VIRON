@@ -936,6 +936,9 @@ function _playNextPipelineSentence(){
 // Poll pipeline state to show face expressions + waveform + mouth sync
 let _lastPipelineState='idle';
 let _pipelineTalking=false;
+let _pipelineDancing=false;
+let _danceTime=0;
+
 setInterval(()=>{
   fetch('/pipeline/state',{signal:AbortSignal.timeout(1000)})
   .then(r=>r.json())
@@ -944,13 +947,22 @@ setInterval(()=>{
     const txt=document.getElementById("listenText");
     let newState='idle';
     
-    if(s.speaking||pipelineSpeaking||isSpeaking){
+    if(s.music){
+      newState='music';
+      ind.className="listen-indicator speaking";
+      txt.textContent="🎵 Playing...";
+      txt.style.color="rgba(0,200,255,0.9)";
+      wfMode='speaking';
+      // Dance animation: stop mouth, start head bobbing
+      if(_pipelineTalking){_pipelineTalking=false;stopT()}
+      if(!_pipelineDancing){_pipelineDancing=true;startDance()}
+    }else if(s.speaking||pipelineSpeaking||isSpeaking){
       newState='talking';
       ind.className="listen-indicator speaking";
       txt.textContent="🔊 Speaking...";
       txt.style.color="rgba(255,80,80,0.9)";
       wfMode='speaking';
-      // Sync mouth: start talking animation when pipeline is speaking
+      if(_pipelineDancing){_pipelineDancing=false;stopDance()}
       if(!_pipelineTalking){_pipelineTalking=true;startT()}
     }else if(s.processing){
       newState='thinking';
@@ -959,8 +971,8 @@ setInterval(()=>{
       txt.style.color="rgba(255,200,50,0.9)";
       wfMode='thinking';
       if(_lastPipelineState!=='thinking')cE("thinking");
-      // Stop mouth if was talking
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
+      if(_pipelineDancing){_pipelineDancing=false;stopDance()}
     }else if(s.listening){
       newState='listening';
       ind.className="listen-indicator active";
@@ -969,6 +981,7 @@ setInterval(()=>{
       wfMode='listening';
       if(_lastPipelineState!=='listening')cE("focused");
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
+      if(_pipelineDancing){_pipelineDancing=false;stopDance()}
     }else if(s.in_conversation){
       newState='listening';
       ind.className="listen-indicator active";
@@ -976,6 +989,7 @@ setInterval(()=>{
       txt.style.color="rgba(100,255,100,0.9)";
       wfMode='listening';
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
+      if(_pipelineDancing){_pipelineDancing=false;stopDance()}
     }else{
       newState='idle';
       ind.className="listen-indicator wake";
@@ -983,11 +997,37 @@ setInterval(()=>{
       txt.style.color="";
       wfMode='idle';
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
+      if(_pipelineDancing){_pipelineDancing=false;stopDance()}
     }
     _lastPipelineState=newState;
   })
   .catch(()=>{});
 },200); // Poll faster (200ms) for better mouth sync
+
+// ===== DANCE ANIMATION =====
+let _danceAnim=null;
+function startDance(){
+  cE("happy");
+  _danceTime=0;
+  if(_danceAnim)return;
+  const face=document.getElementById("face");
+  (function d(){
+    _danceTime+=0.08;
+    // Head bob: gentle up/down + slight tilt
+    const bobY=Math.sin(_danceTime*3)*4;
+    const tilt=Math.sin(_danceTime*1.5)*2;
+    const scale=1+Math.sin(_danceTime*3)*0.01;
+    face.style.transform=`translateY(${bobY}px) rotate(${tilt}deg) scale(${scale})`;
+    _danceAnim=requestAnimationFrame(d);
+  })();
+}
+function stopDance(){
+  if(_danceAnim){cancelAnimationFrame(_danceAnim);_danceAnim=null}
+  const face=document.getElementById("face");
+  face.style.transition="transform 0.5s ease";
+  face.style.transform="";
+  setTimeout(()=>{face.style.transition=""},600);
+}
 
 // ===== AUDIO WAVEFORM ANIMATION =====
 let wfMode='idle'; // idle, listening, speaking, thinking

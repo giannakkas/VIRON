@@ -1641,7 +1641,8 @@ def pipeline_state():
     return jsonify({
         "listening": state.is_listening,
         "processing": state.is_processing,
-        "speaking": state.is_speaking,
+        "speaking": state.is_speaking and not _music_playing,
+        "music": _music_playing,
         "in_conversation": state.in_conversation,
     })
 
