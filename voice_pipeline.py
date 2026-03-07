@@ -527,7 +527,7 @@ Use 8-12 steps minimum. Include real-world examples. Write in Greek unless stude
                         "system": wb_system,
                         "messages": [{"role": "user", "content": user_message}],
                     },
-                    timeout=30,
+                    timeout=15,
                 )
                 ms = int((time.time() - t0) * 1000)
                 if resp.status_code == 200:
@@ -1097,58 +1097,58 @@ CRITICAL RULES:
         
         use_claude = _needs_claude(text)
         
-        # Groq streaming for all queries (educational gets whiteboard support)
-        # Only skip to Claude if ANTHROPIC_API_KEY is actually set
-        if GROQ_API_KEY and (not use_claude or not ANTHROPIC_API_KEY):
+        # For educational: try Claude first (rich answers), fall back to Groq streaming with whiteboard
+        if use_claude and ANTHROPIC_API_KEY:
+            reply = chat(text, lang=lang)
+            if reply:
+                state.is_processing = False
+                import re as _re
+                wb_match = _re.search(r'\[WHITEBOARD:(.*?)\]([\s\S]*?)\[/WHITEBOARD\]', reply)
+                if wb_match:
+                    spoken = _re.sub(r'\[WHITEBOARD:.*?\][\s\S]*?\[/WHITEBOARD\]\s*', '', reply).strip()
+                    wb_title = wb_match.group(1).strip()
+                    wb_steps = []
+                    for line in wb_match.group(2).strip().split('\n'):
+                        line = line.strip()
+                        if not line: continue
+                        if line.startswith('STEP:'): wb_steps.append({"label": line[5:].strip()})
+                        elif line.startswith('MATH:'): wb_steps.append({"math": line[5:].strip()})
+                        elif line.startswith('RESULT:'): wb_steps.append({"result": line[7:].strip()})
+                        elif line.startswith('TEXT:'): wb_steps.append({"text": line[5:].strip()})
+                    with _response_lock:
+                        _response_queue.append({
+                            "text": spoken or "Κοίτα στον πίνακα!", "lang": "el", "time": time.time(),
+                            "whiteboard": {"title": wb_title, "steps": wb_steps},
+                        })
+                    log.info(f"📋 Whiteboard: \"{wb_title}\" ({len(wb_steps)} steps)")
+                    narration_parts = [spoken] if spoken else []
+                    for s in wb_steps:
+                        if s.get("text"): narration_parts.append(s["text"])
+                        elif s.get("result"): narration_parts.append(s["result"])
+                    speak(". ".join(narration_parts) or "Κοίτα στον πίνακα!", lang="el")
+                else:
+                    speak(reply, lang="el")
+                return
+            else:
+                # Claude failed — fall back to Groq streaming WITH whiteboard
+                log.info("⚠ Claude failed, falling back to Groq with whiteboard")
+                result = _groq_streaming_chat(text, lang, force_whiteboard=True)
+                if result:
+                    state.is_processing = False
+                    return
+        
+        # Non-educational: Groq streaming (fast)
+        if GROQ_API_KEY:
             result = _groq_streaming_chat(text, lang)
             if result:
                 state.is_processing = False
-                return  # streaming already queued everything
+                return
         
-        # Non-streaming fallback (Claude or gateway)
+        # Final fallback
         reply = chat(text, lang=lang)
         if reply:
             state.is_processing = False
-            # Check for whiteboard content
-            import re as _re
-            wb_match = _re.search(r'\[WHITEBOARD:(.*?)\]([\s\S]*?)\[/WHITEBOARD\]', reply)
-            if wb_match:
-                # Extract spoken text (everything outside WHITEBOARD tags)
-                spoken = _re.sub(r'\[WHITEBOARD:.*?\][\s\S]*?\[/WHITEBOARD\]\s*', '', reply).strip()
-                # Parse whiteboard steps
-                wb_title = wb_match.group(1).strip()
-                wb_steps = []
-                for line in wb_match.group(2).strip().split('\n'):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.startswith('STEP:'):
-                        wb_steps.append({"label": line[5:].strip()})
-                    elif line.startswith('MATH:'):
-                        wb_steps.append({"math": line[5:].strip()})
-                    elif line.startswith('RESULT:'):
-                        wb_steps.append({"result": line[7:].strip()})
-                    elif line.startswith('TEXT:'):
-                        wb_steps.append({"text": line[5:].strip()})
-                # Send whiteboard to browser
-                with _response_lock:
-                    _response_queue.append({
-                        "text": spoken or "Κοίτα στον πίνακα!",
-                        "whiteboard": {"title": wb_title, "steps": wb_steps},
-                        "lang": "el",
-                        "time": time.time()
-                    })
-                log.info(f"📋 Whiteboard: \"{wb_title}\" ({len(wb_steps)} steps)")
-                # Speak the intro + step narration
-                narration_parts = [spoken] if spoken else []
-                for s in wb_steps:
-                    if s.get("text"):
-                        narration_parts.append(s["text"])
-                    elif s.get("result"):
-                        narration_parts.append(s["result"])
-                speak(". ".join(narration_parts) or "Κοίτα στον πίνακα!", lang="el")
-            else:
-                speak(reply, lang="el")
+            speak(reply, lang="el")
     finally:
         state.is_processing = False
 
