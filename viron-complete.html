@@ -815,6 +815,11 @@ setInterval(()=>{
         D('📋 Pipeline says close whiteboard');
         closeWB();
       }
+      // Handle weather data from pipeline
+      if(d.weather){
+        D('🌤️ Pipeline weather: '+JSON.stringify(d.weather));
+        setTimeout(()=>showWeather(d.weather),500);
+      }
       if(d.text){
         pipelineQueue.push(d);
         D('📢 Queued: "'+d.text.substring(0,40)+'..." (queue='+pipelineQueue.length+')');
@@ -3314,23 +3319,23 @@ function getWeatherIcon(desc){
 }
 
 function showWeather(data){
-  if(!data||!data.temp)return;
+  if(!data||(!data.temp&&data.temp!==0))return;
   weatherVisible=true;
   const face=document.getElementById("face");
   if(face){face.style.transition="opacity 0.5s ease,transform 0.5s ease";face.style.opacity="0";face.style.transform="scale(0.9)";}
   document.getElementById("weatherIcon").textContent=getWeatherIcon(data.desc||"");
-  document.getElementById("weatherCity").textContent=data.city||"Nicosia";
-  document.getElementById("weatherTemp").textContent=(data.temp||"--")+"°C";
+  document.getElementById("weatherCity").textContent=data.city||"Λευκωσία";
+  document.getElementById("weatherTemp").textContent=data.temp+"°C";
   document.getElementById("weatherDesc").textContent=data.desc||"--";
-  document.getElementById("weatherFeels").textContent=(data.feels||"--")+"°C";
+  document.getElementById("weatherFeels").textContent=(data.feels||data.temp)+"°C";
   document.getElementById("weatherHumidity").textContent=(data.humidity||"-")+"%";
   document.getElementById("weatherWind").textContent=(data.wind||"--")+" km/h";
   const tmr=document.getElementById("weatherTomorrow");
-  if(data.tomorrow){tmr.textContent=(isGreekMode()?"Αύριο: ":"Tomorrow: ")+data.tomorrow;tmr.style.display="";}
+  if(data.tomorrow){tmr.textContent="Αύριο: "+data.tomorrow;tmr.style.display="";}
   else{tmr.style.display="none";}
   setTimeout(()=>{document.getElementById("weatherOverlay").classList.add("active");},100);
   clearTimeout(_weatherCloseTimer);
-  _weatherCloseTimer=setTimeout(()=>{if(weatherVisible)closeWeather();},20000);
+  _weatherCloseTimer=setTimeout(()=>{if(weatherVisible)closeWeather();},15000);
 }
 
 function closeWeather(){
@@ -3357,13 +3362,13 @@ function parseWeatherFromGateway(d){
   <div class="weather-close" onclick="closeWeather()">✕</div>
   <div class="weather-card" onclick="event.stopPropagation()">
     <div class="weather-icon" id="weatherIcon">☀️</div>
-    <div class="weather-city" id="weatherCity">Nicosia</div>
+    <div class="weather-city" id="weatherCity">Λευκωσία</div>
     <div class="weather-temp" id="weatherTemp">--°C</div>
     <div class="weather-desc" id="weatherDesc">--</div>
     <div class="weather-details">
-      <div class="weather-detail"><div class="weather-detail-val" id="weatherFeels">--°</div><div class="weather-detail-label">Feels Like</div></div>
-      <div class="weather-detail"><div class="weather-detail-val" id="weatherHumidity">--%</div><div class="weather-detail-label">Humidity</div></div>
-      <div class="weather-detail"><div class="weather-detail-val" id="weatherWind">--</div><div class="weather-detail-label">Wind</div></div>
+      <div class="weather-detail"><div class="weather-detail-val" id="weatherFeels">--°</div><div class="weather-detail-label">Αίσθηση</div></div>
+      <div class="weather-detail"><div class="weather-detail-val" id="weatherHumidity">--%</div><div class="weather-detail-label">Υγρασία</div></div>
+      <div class="weather-detail"><div class="weather-detail-val" id="weatherWind">--</div><div class="weather-detail-label">Άνεμος</div></div>
     </div>
     <div class="weather-tomorrow" id="weatherTomorrow"></div>
   </div>

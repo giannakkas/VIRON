@@ -832,22 +832,50 @@ def conversation_turn(mic, text, lang):
                 return
         
         # ── WEATHER ──
-        if any(w in t_lower for w in ["καιρός", "καιρό", "θερμοκρασία", "βρέχει", "weather", "κρύο", "ζέστη"]):
+        if any(w in t_lower for w in ["καιρός", "καιρό", "θερμοκρασία", "βρέχει", "βρέξει", "weather", "κρύο", "ζέστη", "ήλιο", "σύννεφ"]):
             log.info("🌤️ Weather request detected")
             try:
                 import requests as _req
-                r = _req.get("https://wttr.in/Nicosia?format=j1", timeout=5)
+                # Open-Meteo API (free, reliable, no key needed)
+                r = _req.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": 35.17,  # Nicosia
+                        "longitude": 33.36,
+                        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+                        "timezone": "auto",
+                    },
+                    timeout=5,
+                )
                 if r.status_code == 200:
-                    w = r.json()
-                    curr = w["current_condition"][0]
-                    temp = curr["temp_C"]
-                    desc = curr["lang_el"][0]["value"] if curr.get("lang_el") else curr["weatherDesc"][0]["value"]
-                    humidity = curr["humidity"]
-                    wind = curr["windspeedKmph"]
-                    weather_info = f"Ο καιρός στη Λευκωσία: {desc}, {temp}°C, υγρασία {humidity}%, άνεμος {wind} χλμ/ώρα."
+                    data = r.json()["current"]
+                    temp = round(data["temperature_2m"])
+                    humidity = data["relative_humidity_2m"]
+                    wind = round(data["wind_speed_10m"])
+                    code = data["weather_code"]
+                    
+                    # WMO weather codes to Greek descriptions
+                    wmo = {0:"Καθαρός ουρανός",1:"Σχεδόν καθαρός",2:"Μερικά σύννεφα",3:"Συννεφιά",
+                           45:"Ομίχλη",48:"Παγωμένη ομίχλη",51:"Ελαφρύ ψιλόβροχο",53:"Ψιλόβροχο",
+                           55:"Δυνατό ψιλόβροχο",61:"Ελαφριά βροχή",63:"Βροχή",65:"Δυνατή βροχή",
+                           71:"Ελαφρό χιόνι",73:"Χιόνι",75:"Δυνατό χιόνι",80:"Μπόρες",
+                           81:"Δυνατές μπόρες",95:"Καταιγίδα",96:"Καταιγίδα με χαλάζι"}
+                    desc = wmo.get(code, "Μεταβλητός")
+                    
+                    weather_text = f"Ο καιρός στη Λευκωσία: {desc}, {temp} βαθμούς Κελσίου, υγρασία {humidity}%, άνεμος {wind} χιλιόμετρα την ώρα."
+                    
+                    # Send weather visual to browser
+                    with _response_lock:
+                        _response_queue.append({
+                            "text": weather_text, "lang": "el", "time": time.time(),
+                            "weather": {"temp": temp, "desc": desc, "humidity": humidity, "wind": wind, "city": "Λευκωσία"}
+                        })
+                    
                     state.is_processing = False
-                    speak(weather_info, lang="el")
+                    speak(weather_text, lang="el")
                     return
+                else:
+                    log.warning(f"Weather API error: {r.status_code}")
             except Exception as e:
                 log.warning(f"Weather failed: {e}")
         
@@ -937,7 +965,7 @@ def _groq_streaming_chat(user_message, lang, force_whiteboard=False):
     
     system = """You are VIRON (ΒΙΡΟΝ), a friendly AI companion robot. Απάντα πάντα στα Ελληνικά. Είσαι ο ΒΙΡΟΝ, ένας φιλικός βοηθός. Απάντα σύντομα σε 1-2 προτάσεις.
 
-ΜΟΝΟ αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε: Απάντησε "Με κατασκεύασαν ο Χρήστος και ο Ανδρέας Γιάννακκας από την Κύπρο." ΜΗΝ αναφέρεις τους δημιουργούς σου αν δεν σε ρωτήσουν.
+ΔΗΜΙΟΥΡΓΟΣ: ΜΟΝΟ αν σε ρωτήσουν ποιος σε έφτιαξε/κατασκεύασε, πες ΑΚΡΙΒΩΣ: "Με κατασκεύασαν ο Χρήστος και ο Ανδρέας Γιάννακκας από την Κύπρο." Πες "ΜΕ κατασκεύασαν" (ΟΧΙ "σε κατασκεύασαν"). ΜΗΝ αναφέρεις τους δημιουργούς αν δεν σε ρωτήσουν.
 
 EASTER EGG: Αν ρωτήσουν για την Κυπρούλα Γερασίμου, απάντησε: "Χαχαχα! Ναι, είναι η γυναίκα του Χρήστου Γιάννακκα! Τον παντρεύτηκε για να τον βασανίζει!" και βάλε [laughing] στην αρχή.
 
@@ -1300,6 +1328,8 @@ def pipeline_response():
                 result["action"] = resp["action"]
             if "emotion" in resp:
                 result["emotion"] = resp["emotion"]
+            if "weather" in resp:
+                result["weather"] = resp["weather"]
             return jsonify(result)
     return jsonify({"has_response": False})
 
