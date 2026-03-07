@@ -1081,9 +1081,12 @@ def main_loop(mic):
                 if state.set_wake("porcupine", 1.0):
                     log.info("🎯 Wake word detected!")
                     
-                    # Say "Ορίστε" through browser
+                    # Quick "mhm" acknowledgment (non-blocking: face + short TTS)
                     with _response_lock:
-                        _response_queue.append({"text": "Ορίστε;", "lang": "el", "time": time.time()})
+                        _response_queue.append({"text": "Μμμ;", "lang": "el", "time": time.time(), "emotion": "hopeful"})
+                    # Play short ack sound in background
+                    threading.Thread(target=speak, args=("Μμμ;", "el"), daemon=True).start()
+                    time.sleep(0.3)  # Brief pause for ack
                     
                     # Enter conversation mode
                     _conversation_loop(mic)
@@ -1206,6 +1209,8 @@ def pipeline_response():
                 result["whiteboard"] = resp["whiteboard"]
             if "action" in resp:
                 result["action"] = resp["action"]
+            if "emotion" in resp:
+                result["emotion"] = resp["emotion"]
             return jsonify(result)
     return jsonify({"has_response": False})
 

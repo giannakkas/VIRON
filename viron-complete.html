@@ -808,6 +808,8 @@ setInterval(()=>{
   .then(r=>r.json())
   .then(d=>{
     if(d.has_response){
+      // Handle emotion hints from pipeline
+      if(d.emotion&&E[d.emotion])cE(d.emotion);
       // Handle actions from pipeline (e.g. close whiteboard)
       if(d.action==='close_whiteboard'&&wbO){
         D('📋 Pipeline says close whiteboard');
