@@ -392,7 +392,7 @@ setInterval(()=>{blink=true;setTimeout(()=>blink=false,emo==="sleepy"?400:150)},
 document.addEventListener("mousemove",e=>{lx=((e.clientX-innerWidth/2)/(innerWidth/2))*8;ly=((e.clientY-innerHeight/2)/(innerHeight/2))*6});
 
 let tAn=null;
-function startT(){talking=true;if(typeof wfMode!=='undefined')wfMode='speaking';if(tAn)return;(function a(){tTime+=.12;tO=Math.min(1,Math.max(0,Math.sin(tTime*2.8)*.4+Math.sin(tTime*4.5)*.2+Math.sin(tTime*1.2)*.15)*1.4);tAn=requestAnimationFrame(a)})()}
+function startT(){talking=true;if(typeof wfMode!=='undefined')wfMode='speaking';if(tAn)return;(function a(){tTime+=.22;tO=Math.min(1,Math.max(0,Math.sin(tTime*4.2)*.45+Math.sin(tTime*6.8)*.25+Math.sin(tTime*2.0)*.15)*1.4);tAn=requestAnimationFrame(a)})()}
 function stopT(){talking=false;if(typeof wfMode!=='undefined')wfMode='idle';cancelAnimationFrame(tAn);tAn=null;(function c(){tO*=.85;if(tO>.02)requestAnimationFrame(c);else tO=0})()}
 
 function showSub(text){const el=document.getElementById("subtitle");el.textContent=text;el.classList.add("visible");clearTimeout(subTimer);subTimer=setTimeout(()=>el.classList.remove("visible"),Math.max(3000,text.length*60))}
