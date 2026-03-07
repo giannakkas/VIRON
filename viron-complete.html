@@ -9,7 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.18/dist/bundle.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding-top:2vh;transition:opacity 0.5s}
+body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding-top:2vh;transition:opacity 0.5s;cursor:none}
 svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-color:transparent;display:block}
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
@@ -62,7 +62,7 @@ svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-co
 .hamburger.open span:nth-child(3){transform:rotate(-45deg) translate(4px,-4px)}
 .settings-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:90;opacity:0;pointer-events:none;transition:opacity 0.3s}
 .settings-overlay.open{opacity:1;pointer-events:all}
-.settings-panel{position:fixed;top:0;right:-320px;width:300px;height:100vh;background:rgba(8,12,22,0.97);border-left:1px solid rgba(255,255,255,0.08);z-index:95;padding:60px 20px 20px;overflow-y:auto;transition:right 0.3s ease;backdrop-filter:blur(20px)}
+.settings-panel{position:fixed;top:0;right:-320px;width:300px;height:100vh;background:rgba(8,12,22,0.97);border-left:1px solid rgba(255,255,255,0.08);z-index:95;padding:60px 20px 20px;overflow-y:auto;transition:right 0.3s ease;backdrop-filter:blur(20px);cursor:auto}
 .settings-panel.open{right:0}
 .settings-panel h2{font-size:18px;color:#e0f0ff;margin-bottom:20px}
 .setting-group{margin-bottom:20px}
@@ -311,7 +311,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <h2>⚙️ Settings</h2>
   <div class="setting-group"><h3>📶 Wi-Fi</h3><div class="setting-item"><label>📶 Wi-Fi</label><button class="toggle on" onclick="this.classList.toggle('on')"></button></div><div><div class="wifi-item connected"><span>🔒 HomeNetwork</span><span style="color:rgba(255,255,255,0.4)">Connected</span></div></div></div>
   <div class="setting-group"><h3>🔆 Display</h3><div class="setting-item"><label>🔆 Brightness</label><input type="range" min="10" max="100" value="80" oninput="document.body.style.filter='brightness('+this.value/100+')'"></div><div class="setting-item"><label>🌙 Night Mode</label><button class="toggle" onclick="this.classList.toggle('on');document.body.style.background=this.classList.contains('on')?'#0a0508':'#000'"></button></div></div>
-  <div class="setting-group"><h3>🗣️ Language</h3><div class="setting-item"><label>🌍 VIRON Language</label><select id="langSelect" onchange="setVironLang(this.value)" style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px"><option value="en">🇬🇧 English</option><option value="el">🇬🇷 Greek</option></select></div></div>
+  <div class="setting-group"><h3>🗣️ Language</h3><div class="setting-item"><label>🌍 VIRON Language</label><select id="langSelect" onchange="setVironLang(this.value)" style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px"><option value="el">🇬🇷 Ελληνικά</option><option value="en">🇬🇧 English</option></select></div><div id="langStatus" style="font-size:11px;color:rgba(0,200,255,0.5);padding:4px 12px"></div></div>
   <div class="setting-group"><h3>🔊 Sound</h3><div class="setting-item"><label>🔊 Volume</label><input type="range" id="volSlider" min="0" max="100" value="75"></div></div>
   <div class="setting-group"><h3>🔋 Battery</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:8px"><div style="display:flex;justify-content:space-between"><label>🔋</label><span style="color:rgba(0,200,255,0.8)" id="bp">78%</span></div><div class="battery-bar"><div class="battery-fill" id="bf" style="width:78%;background:linear-gradient(90deg,#00e0ff,#00ff88)"></div><span class="battery-text" id="bt">78%</span></div></div></div>
   <div class="setting-group"><h3>🤖 AI</h3><div class="setting-item"><label>📷 Emotion Detection</label><button class="toggle on" onclick="this.classList.toggle('on');emotionDetectionOn=this.classList.contains('on')"></button></div><div class="setting-item"><label>🎭 Proactive Care</label><button class="toggle on" onclick="this.classList.toggle('on');proactiveEnabled=this.classList.contains('on')"></button></div></div>
@@ -421,14 +421,27 @@ let voiceState=VOICE_IDLE;
 let vironLang=localStorage.getItem('viron-lang')||'en';
 function setVironLang(lang){
   vironLang=lang;
-  localStorage.setItem('viron-lang',lang);
-  D('Language set to: '+lang);
-  // Restart listener with new language (but not during setup)
+  D('🌍 Language set to: '+lang);
+  const status=document.getElementById("langStatus");
+  if(status)status.textContent="Changing...";
+  // Tell pipeline to change language (affects Deepgram, TTS, LLM)
+  fetch('/pipeline/language',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({language:lang})})
+    .then(r=>r.json())
+    .then(d=>{
+      if(status)status.textContent=d.language==='en'?'🔊 American English voice':'🔊 Ελληνική φωνή';
+      setTimeout(()=>{if(status)status.textContent=''},3000);
+    }).catch(()=>{if(status)status.textContent='⚠ Failed to change'});
+  // Restart listener with new language
   if(document.getElementById('setupWizard').style.display!=='block'){
     stopAllRecognition();
     setTimeout(startAlwaysListening,500);
   }
 }
+// Load language on startup
+fetch('/pipeline/language').then(r=>r.json()).then(d=>{
+  if(d.language){vironLang=d.language;const sel=document.getElementById('langSelect');if(sel)sel.value=d.language}
+}).catch(()=>{});
 function getSRLang(){return vironLang==='el'?'el-GR':'en-US';}
 function isGreekMode(){return vironLang==='el';}
 
