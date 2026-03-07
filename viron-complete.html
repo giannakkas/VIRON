@@ -10,7 +10,7 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;display:flex;align-items:center;justify-content:center;transition:opacity 0.5s}
-svg{width:min(95vw,800px);height:auto;min-height:40vh;-webkit-tap-highlight-color:transparent;display:block}
+svg{width:min(98vw,1200px);height:auto;min-height:55vh;-webkit-tap-highlight-color:transparent;display:block}
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
 .listen-indicator.active{opacity:1}
@@ -3235,7 +3235,8 @@ function startVironNormal(){
 
 // Boot splash → check setup, then start
 const splash=document.getElementById('bootSplash');
-splash.addEventListener('click',async function startViron(){
+// Auto-start after 2 seconds (no tap needed)
+setTimeout(async function startViron(){
   splash.classList.add('hidden');
   setTimeout(()=>{splash.style.display='none'},1000);
   unlockAudio();
@@ -3256,7 +3257,9 @@ splash.addEventListener('click',async function startViron(){
   
   // Setup already done — start normally
   startVironNormal();
-},{once:true});
+},2000);
+// Also allow tap to start immediately
+splash.addEventListener('click',()=>{splash.click=true;splash.classList.add('hidden');setTimeout(()=>{splash.style.display='none'},500)},{once:true});
 
 // Keepalive: ensure always-on listening stays alive (NOT during setup)
 setInterval(()=>{

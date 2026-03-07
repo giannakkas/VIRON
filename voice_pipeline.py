@@ -142,7 +142,7 @@ porcupine = None
 PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
 PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.6"))
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.4"))
 
 def init_wake():
     global porcupine
@@ -1126,6 +1126,12 @@ def _conversation_loop(mic):
             text, lang = transcribe(audio, lang="el")
             if not text or len(text) < 2:
                 log.info("  (empty transcription, continuing...)")
+                continue
+            
+            # Filter out Whisper hallucinations (common garbage patterns)
+            noise_patterns = ["ευχαριστώ.", "...", "aaaaa", "χειροκρότημα", "υπότιτλοι", "σας ευχαριστώ"]
+            if any(text.strip().lower() == n.lower() for n in noise_patterns) or len(set(text.replace(" ",""))) < 3:
+                log.info(f"  (noise filtered: \"{text}\", skipping...)")
                 continue
             
             lang = detect_language(text)
