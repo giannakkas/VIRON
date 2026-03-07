@@ -856,14 +856,16 @@ setInterval(()=>{
         D('📝 Pipeline quiz: '+d.quiz.title+' ('+d.quiz.questions.length+' Qs)');
         setTimeout(()=>openQuiz(d.quiz),500);
       }
-      // Handle YouTube from pipeline
-      if(d.youtube&&d.youtube.id){
-        D('🎵 Pipeline YouTube: '+d.youtube.title);
-        setTimeout(()=>{
-          document.getElementById("ytT").textContent="♪ "+d.youtube.title;
-          document.getElementById("ytP").src=`https://www.youtube.com/embed/${d.youtube.id}?autoplay=1&rel=0`;
-          document.getElementById("ytC").classList.add("visible");
-        },1000);
+      // Handle YouTube from pipeline (now plays through speaker, show status on face)
+      if(d.music){
+        D('🎵 Pipeline music: '+d.music.title+' playing='+d.music.playing);
+        const sub=document.getElementById("subtitle");
+        if(d.music.playing){
+          sub.textContent="🎵 "+d.music.title;
+          sub.classList.add("visible");
+        }else{
+          sub.classList.remove("visible");
+        }
       }
       if(d.text){
         pipelineQueue.push(d);

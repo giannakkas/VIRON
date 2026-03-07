@@ -1069,7 +1069,7 @@ CRITICAL RULES:
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
                     json={
                         "model": GROQ_MODEL,
-                        "messages": [{"role": "system", "content": "You are a music assistant. When asked to play a song, respond ONLY with a YouTube video ID and title in this exact format: [YOUTUBE:VIDEO_ID:Song Title - Artist]. Use REAL YouTube video IDs that you know. If asked for Greek music, use popular Greek songs. If the request is vague, pick a popular song. Respond with NOTHING else, just the [YOUTUBE:...] tag."},
+                        "messages": [{"role": "system", "content": "You are a music assistant. When asked to play a song, respond ONLY with the song title and artist in this exact format: [MUSIC:Song Title - Artist]. Pick REAL popular songs. If asked for Greek music, use popular Greek songs. Respond with NOTHING else."},
                             {"role": "user", "content": text}],
                         "max_tokens": 100, "temperature": 0.5,
                     },
@@ -1079,18 +1079,59 @@ CRITICAL RULES:
                 if resp.status_code == 200:
                     reply = resp.json()["choices"][0]["message"]["content"].strip()
                     import re as _re
-                    yt_match = _re.search(r'\[YOUTUBE:([a-zA-Z0-9_-]+):([^\]]+)\]', reply)
-                    if yt_match:
-                        vid = yt_match.group(1)
-                        title = yt_match.group(2)
-                        log.info(f"🎵 YouTube: {title} ({vid}) in {ms}ms")
+                    music_match = _re.search(r'\[MUSIC:([^\]]+)\]', reply)
+                    if music_match:
+                        title = music_match.group(1).strip()
+                        log.info(f"🎵 Music: {title} in {ms}ms")
+                        
+                        # Send music status to browser
                         with _response_lock:
                             _response_queue.append({
-                                "text": f"Παίζω: {title}!", "lang": "el", "time": time.time(),
-                                "youtube": {"id": vid, "title": title},
+                                "text": f"🎵 {title}", "lang": "el", "time": time.time(),
+                                "emotion": "happy",
+                                "music": {"title": title, "playing": True},
                             })
+                        
                         state.is_processing = False
                         speak(f"Βάζω {title}!", lang="el")
+                        
+                        # Play via yt-dlp + ffplay in background
+                        def _play_music(query):
+                            try:
+                                log.info(f"🎵 Searching YouTube for: {query}")
+                                # Use yt-dlp to get audio URL
+                                result = subprocess.run(
+                                    ["yt-dlp", "--no-playlist", "-f", "bestaudio",
+                                     "--get-url", f"ytsearch1:{query}"],
+                                    capture_output=True, text=True, timeout=15,
+                                )
+                                if result.returncode == 0 and result.stdout.strip():
+                                    url = result.stdout.strip()
+                                    log.info(f"🎵 Playing audio stream...")
+                                    # Play for max 3 minutes
+                                    global _current_ffplay
+                                    state.tts_start()
+                                    _current_ffplay = subprocess.Popen(
+                                        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+                                         "-t", "180", url],
+                                    )
+                                    _current_ffplay.wait()
+                                    _current_ffplay = None
+                                    state.tts_end()
+                                    log.info(f"🎵 Music finished: {query}")
+                                    with _response_lock:
+                                        _response_queue.append({
+                                            "text": "", "lang": "el", "time": time.time(),
+                                            "music": {"title": query, "playing": False},
+                                        })
+                                else:
+                                    log.warning(f"yt-dlp failed: {result.stderr[:100]}")
+                                    speak("Δεν μπόρεσα να βρω αυτό το τραγούδι.", lang="el")
+                            except Exception as e:
+                                log.warning(f"Music playback failed: {e}")
+                                state.tts_end()
+                        
+                        threading.Thread(target=_play_music, args=(title,), daemon=True).start()
                         return
             except Exception as e:
                 log.warning(f"Music failed: {e}")
@@ -1543,6 +1584,8 @@ def pipeline_response():
                 result["quiz"] = resp["quiz"]
             if "youtube" in resp:
                 result["youtube"] = resp["youtube"]
+            if "music" in resp:
+                result["music"] = resp["music"]
             return jsonify(result)
     return jsonify({"has_response": False})
 
