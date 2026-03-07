@@ -1427,9 +1427,10 @@ def main_loop(mic):
                 time_since_tts = time.time() - state.last_tts_end
                 
                 # Reject if: too quiet (background noise), or too soon after VIRON spoke (echo)
-                if rms < 200:
+                if rms < 80:
+                    log.info(f"  (wake rejected: RMS={rms:.0f} too low)")
                     continue  # Too quiet to be real speech
-                if time_since_tts < 2.0:
+                if time_since_tts < 1.5:
                     log.info(f"  (wake rejected: too soon after TTS, {time_since_tts:.1f}s, RMS={rms:.0f})")
                     continue  # Likely hearing own echo
                 
