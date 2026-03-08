@@ -1,5 +1,5 @@
 #!/bin/bash
-# VIRON Start/Restart All Services
+# VIRON Start/Restart All Services + Logs
 
 echo "🤖 Restarting VIRON..."
 
@@ -31,8 +31,8 @@ echo ""
 echo "✅ VIRON is running!"
 echo "   Say 'Hey Jarvis' to talk"
 echo ""
-echo "📋 Live logs (Ctrl+C to stop watching):"
-echo "═══════════════════════════════════════════"
+echo "📋 Live logs (Ctrl+C to stop):"
+echo "═══════════════════════════════"
 
-# Show ALL pipeline logs unfiltered
-sudo journalctl -u viron-pipeline -f --no-pager
+# Show important logs only — no HTTP noise
+sudo journalctl -u viron-pipeline -f --no-pager | grep -v '"GET /\|HTTP/1.1" 200\|rd/poll\|ne/state\|ne/response\|/wakewo'

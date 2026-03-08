@@ -176,19 +176,19 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .weather-close:hover{color:#fff;border-color:rgba(255,255,255,0.5);}
 /* News overlay */
 .news-overlay{position:fixed;inset:0;z-index:85;background:linear-gradient(160deg,#0a0f1e 0%,#121828 50%,#0d1320 100%);
-  opacity:0;pointer-events:none;transition:opacity 0.6s;overflow-y:auto;padding:20px}
+  opacity:0;pointer-events:none;transition:opacity 0.6s;overflow-y:auto;padding:10px 10px 20px}
 .news-overlay.active{opacity:1;pointer-events:all}
-.news-header{text-align:center;padding:10px 0 20px;font-size:24px;color:rgba(0,200,255,0.8);font-weight:700;letter-spacing:2px}
+.news-header{text-align:center;padding:8px 0 14px;font-size:20px;color:rgba(0,200,255,0.8);font-weight:700;letter-spacing:2px}
 .news-close{position:fixed;top:12px;right:16px;background:rgba(255,60,60,0.1);border:1px solid rgba(255,60,60,0.3);
   border-radius:8px;padding:8px 16px;font-size:13px;color:rgba(255,100,100,0.9);cursor:pointer !important;z-index:90}
-.news-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:900px;margin:0 auto}
-.news-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;overflow:hidden;transition:transform 0.2s}
+.news-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;max-width:100%;margin:0 auto;padding:0 16px}
+.news-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden;transition:transform 0.2s}
 .news-card:hover{transform:scale(1.02)}
-.news-card-img{width:100%;height:140px;object-fit:cover;background:rgba(255,255,255,0.03)}
-.news-card-img.placeholder{display:flex;align-items:center;justify-content:center;font-size:48px;background:linear-gradient(135deg,rgba(0,100,200,0.15),rgba(0,200,255,0.08))}
-.news-card-body{padding:14px}
-.news-card-title{font-size:15px;color:rgba(220,230,255,0.9);line-height:1.4;margin-bottom:8px;font-weight:500}
-.news-card-source{font-size:11px;color:rgba(0,200,255,0.6);font-weight:600;letter-spacing:1px;text-transform:uppercase}
+.news-card-img{width:100%;height:100px;object-fit:cover;background:rgba(255,255,255,0.03)}
+.news-card-img.placeholder{display:flex;align-items:center;justify-content:center;font-size:36px;background:linear-gradient(135deg,rgba(0,100,200,0.15),rgba(0,200,255,0.08))}
+.news-card-body{padding:10px}
+.news-card-title{font-size:12px;color:rgba(220,230,255,0.9);line-height:1.4;margin-bottom:6px;font-weight:500;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.news-card-source{font-size:10px;color:rgba(0,200,255,0.6);font-weight:600;letter-spacing:1px;text-transform:uppercase}
 /* Quiz overlay */
 .quiz-overlay{position:fixed;inset:0;z-index:85;pointer-events:none;opacity:0;transition:opacity 0.6s ease,transform 0.6s ease;transform:scale(1.02)}
 .quiz-overlay.active{opacity:1;pointer-events:all;transform:scale(1)}
@@ -932,20 +932,24 @@ setInterval(()=>{
       // Handle news from pipeline — fullscreen overlay
       if(d.news&&d.news.items){
         D('📰 Pipeline news: '+d.news.items.length+' items'+(d.news.update?' (image update)':''));
-        if(d.news.update&&_newsVisible){
-          // Update images in existing cards
-          d.news.items.forEach((n,i)=>{
-            if(n.image){
-              const card=document.querySelectorAll('.news-card')[i];
-              if(card){
-                const imgEl=card.querySelector('.news-card-img');
-                if(imgEl&&imgEl.classList.contains('placeholder')){
-                  imgEl.outerHTML=`<img class="news-card-img" src="${n.image}" onerror="this.style.display='none'">`;
+        if(d.news.update){
+          // Image update — only update if news is still showing
+          if(_newsVisible){
+            d.news.items.forEach((n,i)=>{
+              if(n.image){
+                const card=document.querySelectorAll('.news-card')[i];
+                if(card){
+                  const imgEl=card.querySelector('.news-card-img');
+                  if(imgEl&&imgEl.classList.contains('placeholder')){
+                    imgEl.outerHTML=`<img class="news-card-img" src="${n.image}" onerror="this.style.display='none'">`;
+                  }
                 }
               }
-            }
-          });
+            });
+          }
+          // Do NOT reopen if closed
         }else{
+          // First news load — open overlay
           setTimeout(()=>showNews(d.news),500);
         }
       }
@@ -3536,7 +3540,7 @@ function showNews(data){
   
   setTimeout(()=>document.getElementById("newsOverlay").classList.add("active"),200);
   clearTimeout(_newsCloseTimer);
-  _newsCloseTimer=setTimeout(()=>{if(_newsVisible)closeNews()},30000);
+  // No auto-close — user closes manually or by voice
 }
 
 function closeNews(){

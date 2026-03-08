@@ -1150,7 +1150,7 @@ CRITICAL RULES:
                 log.warning(f"Weather failed: {e}")
         
         # ── NEWS ──
-        is_news = any(w in t_lower for w in ["νέα σήμερα", "ειδήσεις", "news today", "τι νέα", "σημερινά νέα", "νέα κύπρο", "νεα κυπρο", "νέα στην", "latest news", "πες μου νέα", "πες μου τα νέα"])
+        is_news = any(w in t_lower for w in ["νέα σήμερα", "ειδήσεις", "news today", "τι νέα", "σημερινά νέα", "νέα κύπρο", "νεα κυπρο", "νέα στην", "latest news", "πες μου νέα", "πες μου τα νέα", "νέα", "news"])
         if is_news:
             log.info("📰 News request detected")
             try:
@@ -1171,7 +1171,7 @@ CRITICAL RULES:
                 r = _req.get(rss_url, timeout=5)
                 if r.status_code == 200:
                     root = ET.fromstring(r.content)
-                    items = root.findall(".//item")[:6]
+                    items = root.findall(".//item")[:20]
                     news_items = []
                     urls_to_fetch = []
                     
@@ -1218,34 +1218,40 @@ CRITICAL RULES:
                         import re as _re2
                         for idx, url in urls:
                             try:
-                                log.info(f"  📸 Fetching image for [{idx}]: {url[:60]}...")
+                                # Google News URLs redirect — follow them
                                 resp2 = _req.get(url, timeout=5, allow_redirects=True,
-                                                headers={"User-Agent": "Mozilla/5.0 (X11; Linux) Chrome/120"})
+                                                headers={"User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 Chrome/120"})
                                 if resp2.status_code != 200:
-                                    log.info(f"  📸 [{idx}] HTTP {resp2.status_code}")
                                     continue
-                                html = resp2.text[:15000]
+                                
+                                # Use the final URL (after redirect)
+                                final_url = resp2.url
+                                html = resp2.text[:20000]
                                 img = None
-                                # Try og:image (multiple formats)
+                                
+                                # Try multiple og:image patterns
                                 for pattern in [
-                                    r'og:image["\'][^>]*content=["\']([^"\']+)["\']',
-                                    r'content=["\']([^"\']+)["\'][^>]*og:image',
-                                    r'twitter:image["\'][^>]*content=["\']([^"\']+)["\']',
-                                    r'content=["\']([^"\']+)["\'][^>]*twitter:image',
+                                    r'property="og:image"\s+content="([^"]+)"',
+                                    r'content="([^"]+)"\s+property="og:image"',
+                                    r"property='og:image'\s+content='([^']+)'",
+                                    r'name="twitter:image"\s+content="([^"]+)"',
+                                    r'name="twitter:image:src"\s+content="([^"]+)"',
                                     r'"og:image"\s*content="([^"]+)"',
-                                    r"'og:image'\s*content='([^']+)'",
+                                    r'"image"\s*content="(https?://[^"]+\.(jpg|jpeg|png|webp)[^"]*)"',
                                 ]:
-                                    m = _re2.search(pattern, html)
+                                    m = _re2.search(pattern, html, _re2.IGNORECASE)
                                     if m and m.group(1).startswith('http'):
                                         img = m.group(1)
                                         break
+                                
                                 if img:
                                     items[idx]["image"] = img
-                                    log.info(f"  📸 [{idx}] ✅ Got image")
+                                    log.info(f"  📸 [{idx}] ✅ {final_url[:40]}...")
                                 else:
-                                    log.info(f"  📸 [{idx}] ❌ No og:image found")
+                                    log.info(f"  📸 [{idx}] ❌ {final_url[:40]}...")
                             except Exception as e:
-                                log.info(f"  📸 [{idx}] Error: {e}")
+                                log.info(f"  📸 [{idx}] Error: {str(e)[:50]}")
+                        
                         # Send updated items with images
                         with _response_lock:
                             _response_queue.append({
