@@ -443,6 +443,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # Keywords that trigger Claude (tutoring, complex reasoning)
 CLAUDE_TRIGGERS = [
@@ -501,12 +502,12 @@ def chat(user_message, system=None, lang=None):
         use_claude = _needs_claude(user_message)
         
         if use_claude:
-            log.info(f"🧠 Routing to Claude (complex/tutoring)")
+            log.info(f"🧠 Routing to {'Gemini' if GEMINI_API_KEY else 'Claude'} (complex/tutoring)")
         else:
             log.info(f"⚡ Routing to Groq (quick answer)")
         
-        # 1. Claude for complex/tutoring
-        if use_claude and ANTHROPIC_API_KEY:
+        # 1. Gemini for complex/tutoring (fast, free, reliable)
+        if use_claude and GEMINI_API_KEY:
             wb_system = system + """
 
 You are an expert teacher. Give DETAILED, RICH explanations. Do NOT give simple 1-sentence answers.
@@ -529,6 +530,41 @@ RESULT: key takeaway
 Use 8-12 steps minimum. Include real-world examples. Write in Greek unless student asks in English."""
             try:
                 t0 = time.time()
+                # Build Gemini conversation format
+                gemini_contents = []
+                for msg in _conversation_history:
+                    role = "user" if msg["role"] == "user" else "model"
+                    gemini_contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+                gemini_contents.append({"role": "user", "parts": [{"text": user_message}]})
+                
+                resp = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "system_instruction": {"parts": [{"text": wb_system}]},
+                        "contents": gemini_contents,
+                        "generationConfig": {"maxOutputTokens": 2000, "temperature": 0.7},
+                    },
+                    timeout=15,
+                )
+                ms = int((time.time() - t0) * 1000)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    reply = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                    if reply:
+                        log.info(f"🧠 Gemini ({ms}ms): \"{reply[:80]}\"")
+                        return reply
+                    else:
+                        log.warning(f"Gemini empty response: {json.dumps(data)[:200]}")
+                else:
+                    log.warning(f"Gemini error {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                log.warning(f"Gemini failed: {e}")
+        
+        # 1b. Claude fallback for complex/tutoring
+        if use_claude and ANTHROPIC_API_KEY and not GEMINI_API_KEY:
+            try:
+                t0 = time.time()
                 resp = requests.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
@@ -537,9 +573,9 @@ Use 8-12 steps minimum. Include real-world examples. Write in Greek unless stude
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "claude-sonnet-4-20250514",  # Sonnet for educational depth
+                        "model": ANTHROPIC_MODEL,
                         "max_tokens": 2000,
-                        "system": wb_system,
+                        "system": system,
                         "messages": _conversation_history + [{"role": "user", "content": user_message}],
                     },
                     timeout=15,
@@ -938,14 +974,20 @@ def conversation_turn(mic, text, lang):
             return
         
         # ── WHITEBOARD ON DEMAND ──
-        if any(w in t_lower for w in ["πίνακα", "δείξε μου", "δείξε το", "show me", "whiteboard"]):
+        if any(w in t_lower for w in ["πίνακα", "δείξε μου", "δείξε το", "show me", "whiteboard", "show on board", "δείξ' το"]):
             log.info("📋 Whiteboard on demand requested")
-            # Force educational route with whiteboard
             state.is_processing = True
-            wb_text = text.replace("πίνακα", "").replace("δείξε μου", "").replace("στον", "").strip()
-            if len(wb_text) < 5:
-                wb_text = "αυτό που μόλις μιλήσαμε"
-            # Route directly to Groq with whiteboard instructions
+            # Build context from conversation history
+            if _conversation_history:
+                last_topic = ""
+                for msg in reversed(_conversation_history):
+                    if msg["role"] == "user":
+                        last_topic = msg["content"]
+                        break
+                wb_text = f"Εξήγησε αναλυτικά στον πίνακα: {last_topic}" if last_topic else text
+            else:
+                wb_text = text
+            log.info(f"📋 Whiteboard topic from history: \"{wb_text[:60]}\"")
             result = _groq_streaming_chat(wb_text, lang, force_whiteboard=True)
             if result:
                 state.is_processing = False
@@ -1357,8 +1399,8 @@ CRITICAL RULES:
         
         use_claude = _needs_claude(text)
         
-        # For educational: try Claude first (rich answers), fall back to Groq streaming with whiteboard
-        if use_claude and ANTHROPIC_API_KEY:
+        # For educational: try Gemini/Claude first (rich answers), fall back to Groq streaming with whiteboard
+        if use_claude and (GEMINI_API_KEY or ANTHROPIC_API_KEY):
             reply = chat(text, lang=lang)
             if reply:
                 state.is_processing = False
@@ -1390,8 +1432,8 @@ CRITICAL RULES:
                     speak(reply)
                 return
             else:
-                # Claude failed — fall back to Groq streaming WITH whiteboard
-                log.info("⚠ Claude failed, falling back to Groq with whiteboard")
+                # Gemini/Claude failed — fall back to Groq streaming WITH whiteboard
+                log.info("⚠ Gemini/Claude failed, falling back to Groq with whiteboard")
                 result = _groq_streaming_chat(text, lang, force_whiteboard=True)
                 if result:
                     state.is_processing = False
@@ -2023,7 +2065,8 @@ def main():
     print(f"  STT:     {stt_status}")
     print(f"  Gateway: {GATEWAY_URL}")
     print(f"  TTS:     {TTS_URL}")
-    print(f"  Claude:  {'✅ ' + ANTHROPIC_MODEL if ANTHROPIC_API_KEY else '❌ No ANTHROPIC_API_KEY'}")
+    print(f"  Gemini:  {'✅ gemini-2.0-flash' if GEMINI_API_KEY else '❌ No GEMINI_API_KEY'}")
+    print(f"  Claude:  {'✅ ' + ANTHROPIC_MODEL if ANTHROPIC_API_KEY else '⚠ Fallback only'}")
     print(f"  Mic:     {ALSA_DEVICE} ch{MIC_CHANNEL}")
     print()
     
