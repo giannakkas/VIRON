@@ -84,6 +84,37 @@ log = logging.getLogger("viron-pipeline")
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # ═══════════════════════════════════════════════════════════
+# NOISE REDUCTION
+# ═══════════════════════════════════════════════════════════
+_noise_profile = None  # Stored during calibration
+_noise_rms = 0         # Noise floor RMS
+
+def reduce_noise(audio_int16):
+    """Apply spectral gating noise reduction using calibrated noise profile."""
+    global _noise_profile, _noise_rms
+    if _noise_profile is None or len(_noise_profile) == 0:
+        return audio_int16
+    try:
+        import noisereduce as nr
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        noise_float = _noise_profile.astype(np.float32) / 32768.0
+        cleaned = nr.reduce_noise(
+            y=audio_float, sr=SAMPLE_RATE, y_noise=noise_float,
+            prop_decrease=0.8,  # 80% noise reduction
+            stationary=True,    # TV is relatively stationary noise
+        )
+        return (cleaned * 32768).astype(np.int16)
+    except ImportError:
+        # Fallback: simple noise gate
+        rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
+        if rms < _noise_rms * 1.5:
+            return np.zeros_like(audio_int16)
+        return audio_int16
+    except Exception as e:
+        log.warning(f"Noise reduction failed: {e}")
+        return audio_int16
+
+# ═══════════════════════════════════════════════════════════
 # STATE
 # ═══════════════════════════════════════════════════════════
 
@@ -230,13 +261,14 @@ def init_silero_vad():
 
 def vad_is_speech(audio_int16, threshold=0.5):
     """Check if audio chunk contains speech using Silero VAD."""
-    # RMS floor: ignore very quiet audio (TV background noise is typically < 200 RMS)
     rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
-    if rms < 150:
+    # Dynamic noise gate: must be well above calibrated noise floor
+    noise_gate = max(150, _noise_rms * 2.5) if _noise_rms > 0 else 150
+    if rms < noise_gate:
         return False
     
     if silero_vad is None:
-        return rms > 300  # rough threshold without Silero
+        return rms > noise_gate  # RMS-only fallback
     
     try:
         import torch
@@ -246,7 +278,7 @@ def vad_is_speech(audio_int16, threshold=0.5):
         prob = silero_vad(audio_float[:512], SAMPLE_RATE).item()
         return prob > threshold
     except Exception:
-        return rms > 300
+        return rms > noise_gate
 
 # ═══════════════════════════════════════════════════════════
 # 3. STT: Deepgram streaming (~300ms) > whisper.cpp GPU > local CPU
@@ -920,6 +952,9 @@ def record_command(mic, timeout=MAX_SPEECH_SEC, no_speech_timeout=None):
         if speech_frames:
             audio = np.concatenate(speech_frames)
             log.info(f"  Captured {len(audio)/SAMPLE_RATE:.1f}s of audio")
+            # Apply noise reduction to clean TV/background noise
+            audio = reduce_noise(audio)
+            log.info(f"  Noise reduction applied")
             return audio
         return np.array([], dtype=np.int16)
     finally:
@@ -1769,7 +1804,12 @@ def main_loop(mic):
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
                 log.info(f"🎤 Mic alive: frame={_frame_count} RMS={rms:.0f}")
             
-            # Check wake word on EVERY frame
+            # Check wake word on EVERY frame (but skip if just background noise)
+            frame_rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
+            if _noise_rms > 0 and frame_rms < _noise_rms * 2.0:
+                # Below noise gate — just TV/background, don't even check wake word
+                continue
+            
             if check_wake(frame):
                 _wake_checks += 1
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
@@ -2132,11 +2172,15 @@ def main():
     time.sleep(0.5)
     
     # Calibrate noise
-    log.info("🔇 Calibrating noise level (1s)...")
-    noise_audio = mic.read_seconds(1.0)
+    log.info("🔇 Calibrating noise level (2s with TV on)...")
+    noise_audio = mic.read_seconds(2.0)
+    global _noise_profile, _noise_rms
+    _noise_profile = noise_audio
+    _noise_rms = 0
     if len(noise_audio) > 0:
-        noise_rms = np.sqrt(np.mean(noise_audio.astype(np.float32) ** 2))
-        log.info(f"  Noise floor: RMS={noise_rms:.0f}")
+        _noise_rms = np.sqrt(np.mean(noise_audio.astype(np.float32) ** 2))
+        log.info(f"  Noise floor: RMS={_noise_rms:.0f}")
+        log.info(f"  Speech threshold will be: RMS>{_noise_rms * 2.5:.0f}")
     
     # Startup greeting — wait for face to load first
     log.info("🗣️ Waiting for face to load before greeting...")

@@ -104,14 +104,25 @@ fi
 echo ""
 
 # Set mic gain to maximum and disable AGC
-echo "🎤 Setting mic gain..."
-amixer -c 0 sset 'Mic' 100% 2>/dev/null && echo "   ✅ Mic gain: 100%" || true
+echo "🎤 Configuring microphone..."
+# List all mic controls for debugging
+echo "   Available controls:"
+amixer -c 0 contents 2>/dev/null | grep -E "name=|numid|: values=" | head -20
+echo ""
+# Set all capture/mic volumes to max
+amixer -c 0 sset 'Mic' 100% 2>/dev/null || true
 amixer -c 0 sset 'Capture' 100% 2>/dev/null || true
-amixer -c 0 sset 'Auto Gain Control' off 2>/dev/null && echo "   ✅ AGC disabled" || true
-# For XVF3800: try to disable AGC via xvf_host
+amixer -c 0 sset 'Input' 100% 2>/dev/null || true
+# Disable AGC/automatic controls
+amixer -c 0 sset 'Auto Gain Control' off 2>/dev/null || true
+amixer -c 0 sset 'AGC' off 2>/dev/null || true
+# For XVF3800: disable AGC + enable AEC via xvf_host
 if [ -f /tmp/xvf3800/host_control/jetson/xvf_host ]; then
     /tmp/xvf3800/host_control/jetson/xvf_host AGC 0 2>/dev/null && echo "   ✅ XVF3800 AGC disabled" || true
+    /tmp/xvf3800/host_control/jetson/xvf_host AEC 1 2>/dev/null && echo "   ✅ XVF3800 AEC enabled" || true
+    /tmp/xvf3800/host_control/jetson/xvf_host NS 1 2>/dev/null && echo "   ✅ XVF3800 Noise Suppression enabled" || true
 fi
+echo "   ✅ Mic configured"
 
 echo "🧠 Starting Voice Pipeline (port 8085)..."
 python3 voice_pipeline.py > /tmp/viron_pipeline.log 2>&1 &
