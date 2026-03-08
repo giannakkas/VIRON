@@ -898,6 +898,30 @@ def conversation_turn(mic, text, lang):
             speak("[happy] Βεβαίως! Η Αγγελίκα Γιάννακκα! Είναι η πριγκίπισσα κόρη του Χρήστου Γιάννακκα! Πολύ έξυπνη και όμορφη!", lang="el")
             return
         
+        # ── CASUAL GREETINGS (direct, no LLM needed) ──
+        import random as _rand
+        greet_triggers = {"τι κάνεις", "τι κανεις", "πώς είσαι", "πως εισαι", "how are you", "what's up", "τι γίνεται φίλε"}
+        if any(g in t_lower for g in greet_triggers):
+            log.info("👋 Casual greeting detected")
+            state.is_processing = False
+            if state.language == "en":
+                replies = [
+                    "I'm doing great, thanks for asking! How about you?",
+                    "I'm fantastic! What can I help you with today?",
+                    "Doing well! Always happy to chat with you. How are you?",
+                    "I'm good! Ready to help. What's on your mind?",
+                ]
+            else:
+                replies = [
+                    "Είμαι μια χαρά, ευχαριστώ! Εσύ πώς είσαι σήμερα;",
+                    "Πολύ καλά! Χαίρομαι που μου μιλάς! Εσύ τι κάνεις;",
+                    "Μια χαρά είμαι! Τι θέλεις να κάνουμε σήμερα;",
+                    "Είμαι τέλεια! Πάντα χαίρομαι όταν μιλάμε! Πώς είσαι;",
+                    "Καλά είμαι φίλε μου! Εσύ πώς τα πας σήμερα;",
+                ]
+            speak(_rand.choice(replies))
+            return
+        
         # ── WHITEBOARD ON DEMAND ──
         if any(w in t_lower for w in ["πίνακα", "δείξε μου", "δείξε το", "show me", "whiteboard"]):
             log.info("📋 Whiteboard on demand requested")
@@ -1108,19 +1132,69 @@ CRITICAL RULES:
                 log.warning(f"Weather failed: {e}")
         
         # ── NEWS ──
-        if any(w in t_lower for w in ["νέα", "ειδήσεις", "news", "τι γίνεται", "τι συμβαίνει"]):
+        if any(w in t_lower for w in ["νέα σήμερα", "ειδήσεις", "news today", "τι νέα", "σημερινά νέα"]):
             log.info("📰 News request detected")
             try:
                 import requests as _req
                 import xml.etree.ElementTree as ET
-                r = _req.get("https://news.google.com/rss?hl=el&gl=GR&ceid=GR:el", timeout=5)
+                
+                if state.language == "en":
+                    rss_url = "https://news.google.com/rss?hl=en&gl=US&ceid=US:en"
+                else:
+                    rss_url = "https://news.google.com/rss?hl=el&gl=GR&ceid=GR:el"
+                
+                r = _req.get(rss_url, timeout=5)
                 if r.status_code == 200:
                     root = ET.fromstring(r.content)
-                    items = root.findall(".//item")[:5]
-                    headlines = [item.find("title").text.split(" - ")[0] for item in items if item.find("title") is not None]
-                    news_text = "Τα σημερινά νέα: " + ". ".join(headlines[:3]) + "."
+                    items = root.findall(".//item")[:6]
+                    news_items = []
+                    for item in items:
+                        title_el = item.find("title")
+                        source_el = item.find("source")
+                        link_el = item.find("link")
+                        desc_el = item.find("description")
+                        if title_el is None:
+                            continue
+                        
+                        full_title = title_el.text or ""
+                        # Split "headline - Source" format
+                        parts = full_title.rsplit(" - ", 1)
+                        headline = parts[0].strip()
+                        source = parts[1].strip() if len(parts) > 1 else (source_el.text if source_el is not None else "")
+                        
+                        # Try to extract image from description HTML
+                        img_url = ""
+                        if desc_el is not None and desc_el.text:
+                            import re as _re
+                            img_match = _re.search(r'src="([^"]+)"', desc_el.text)
+                            if img_match:
+                                img_url = img_match.group(1)
+                        
+                        news_items.append({
+                            "headline": headline,
+                            "source": source,
+                            "image": img_url,
+                            "url": link_el.text if link_el is not None else "",
+                        })
+                    
+                    # Send news visual to browser
+                    with _response_lock:
+                        _response_queue.append({
+                            "text": "", "lang": state.language, "time": time.time(),
+                            "news": {"items": news_items},
+                        })
+                    
+                    # Speak top 3 headlines
+                    spoken = []
+                    for n in news_items[:3]:
+                        spoken.append(n["headline"])
+                    if state.language == "en":
+                        news_text = "Here are today's headlines: " + ". ".join(spoken) + "."
+                    else:
+                        news_text = "Τα σημερινά νέα: " + ". ".join(spoken) + "."
+                    
                     state.is_processing = False
-                    speak(news_text, lang="el")
+                    speak(news_text)
                     return
             except Exception as e:
                 log.warning(f"News failed: {e}")
@@ -1680,6 +1754,8 @@ def pipeline_response():
                 result["youtube"] = resp["youtube"]
             if "music" in resp:
                 result["music"] = resp["music"]
+            if "news" in resp:
+                result["news"] = resp["news"]
             return jsonify(result)
     return jsonify({"has_response": False})
 
