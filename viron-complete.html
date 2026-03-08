@@ -3738,5 +3738,22 @@ function closeQuiz(){
   </div>
   <div class="quiz-content" id="quizContent"></div>
 </div>
+<script>
+// ===== HEARTBEAT: auto-reload if Flask restarts =====
+(function(){
+  let wasDown=false;
+  setInterval(()=>{
+    fetch('/api/ping',{method:'GET',signal:AbortSignal.timeout(3000)})
+    .then(r=>{
+      if(wasDown){console.log('💓 Flask back — reloading!');location.reload();}
+      wasDown=false;
+    })
+    .catch(()=>{
+      if(!wasDown)console.log('💔 Flask down — waiting for restart...');
+      wasDown=true;
+    });
+  },5000);
+})();
+</script>
 </body>
 </html>

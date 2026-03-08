@@ -16,6 +16,7 @@ if [ "$1" = "stop" ]; then
     pkill -f "wakeword/service.py" 2>/dev/null
     pkill -f "backend/server.py" 2>/dev/null
     pkill -f "gateway/main.py" 2>/dev/null
+    pkill -f "chromium" 2>/dev/null
     sleep 2
     echo "✓ Stopped"
     exit 0
@@ -34,6 +35,7 @@ pkill -f "llama-server" 2>/dev/null
 pkill -f "wakeword/service.py" 2>/dev/null
 pkill -f "backend/server.py" 2>/dev/null
 pkill -f "gateway/main.py" 2>/dev/null
+pkill -f "chromium" 2>/dev/null
 sleep 2
 
 # ─── Find llama-server ───
@@ -149,25 +151,23 @@ curl -sf http://localhost:8080/health >/dev/null 2>&1 && echo "   ✅ Gateway (8
 echo ""
 
 # ─── 5. Refresh the browser (face) ───
-echo "🔄 Refreshing browser face..."
-# Try xdotool first (sends F5 to any Chromium/Firefox window)
-if command -v xdotool &>/dev/null; then
-    WID=$(xdotool search --onlyvisible --name "VIRON\|Chromium\|Firefox\|chrome" 2>/dev/null | head -1)
-    if [ -n "$WID" ]; then
-        xdotool key --window "$WID" F5
-        echo "   ✅ Browser refreshed (xdotool)"
-    else
-        echo "   ⚠ No browser window found — refresh manually (F5)"
-    fi
-else
-    # Fallback: try wmctrl
-    if command -v wmctrl &>/dev/null; then
-        wmctrl -a "Chromium" 2>/dev/null || wmctrl -a "VIRON" 2>/dev/null
-        xdotool key F5 2>/dev/null && echo "   ✅ Browser refreshed" || echo "   ⚠ Refresh manually (F5)"
-    else
-        echo "   ⚠ No xdotool/wmctrl — refresh browser manually (F5)"
-    fi
-fi
+echo "🔄 Restarting browser face..."
+export DISPLAY=:0
+export XAUTHORITY=/home/test/.Xauthority
+FACE_URL="http://localhost:5000"
+
+# Kill existing browser
+pkill -f "chromium" 2>/dev/null
+sleep 2
+
+# Reopen with same kiosk flags as setup.sh autostart
+chromium-browser --kiosk --noerrdialogs --disable-translate --no-first-run \
+    --fast --fast-start --disable-features=TranslateUI \
+    --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream \
+    --disable-pinch --overscroll-history-navigation=0 \
+    --disable-session-crashed-bubble --check-for-update-interval=31536000 \
+    "$FACE_URL" &>/dev/null &
+echo "   ✅ Chromium kiosk restarted (PID: $!)"
 echo ""
 
 # ─── 6. Tail logs (gateway is the primary log to watch) ───
