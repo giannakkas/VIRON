@@ -928,6 +928,8 @@ def conversation_turn(mic, text, lang):
             return
         
         t_lower = text.lower()
+        log.info(f"🎤 TRANSCRIPTION: '{text}'")
+        log.info(f"🎤 t_lower: '{t_lower}'")
         
         # ── EASTER EGGS (direct responses, no LLM) ──
         # Kyproula: catch all possible transcriptions
@@ -1198,10 +1200,21 @@ CRITICAL RULES:
                 log.warning(f"Weather failed: {e}")
         
         # ── NEWS ──
-        is_news = any(w in t_lower for w in ["νέα σήμερα", "ειδήσεις", "news today", "τι νέα", "σημερινά νέα", "νέα κύπρο", "νεα κυπρο", "νέα στην", "latest news", "πες μου νέα", "πες μου τα νέα", "νέα", "news"])
+        is_news = any(w in t_lower for w in [
+            "νέα σήμερα", "νεα σημερα", "ειδήσεις", "ειδησεις", "ιδησεις", "ειδήσεις σήμερα", "ειδησεις σημερα",
+            "news today", "τι νέα", "τι νεα", "σημερινά νέα", "σημερινα νεα",
+            "νέα κύπρο", "νεα κυπρο", "νέα στην", "νεα στην",
+            "latest news", "πες μου νέα", "πες μου νεα", "πες μου τα νέα", "πες μου τα νεα",
+            "πες τα νέα", "πες τα νεα", "τα νέα", "τα νεα",
+            "νέα", "νεα", "news", "ειδήσ", "ειδησ",
+            "τι γίνεται στον κόσμο", "τι γινεται στον κοσμο",
+            "what's happening", "tell me the news",
+        ])
         if is_news:
-            log.info("📰 News request detected")
+            log.info(f"📰 News request detected in: '{text[:60]}'")
+            log.info(f"📰 t_lower='{t_lower[:60]}'")
             try:
+
                 import requests as _req
                 import xml.etree.ElementTree as ET
                 import re as _re

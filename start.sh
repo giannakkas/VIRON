@@ -13,6 +13,7 @@ cd "$(dirname "$0")"
 if [ "$1" = "stop" ]; then
     echo "🛑 Stopping VIRON..."
     pkill -f "llama-server" 2>/dev/null
+    pkill -f "voice_pipeline.py" 2>/dev/null
     pkill -f "wakeword/service.py" 2>/dev/null
     pkill -f "backend/server.py" 2>/dev/null
     pkill -f "gateway/main.py" 2>/dev/null
@@ -32,6 +33,7 @@ export OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
 # Kill any existing VIRON processes
 echo "🧹 Cleaning up old processes..."
 pkill -f "llama-server" 2>/dev/null
+pkill -f "voice_pipeline.py" 2>/dev/null
 pkill -f "wakeword/service.py" 2>/dev/null
 pkill -f "backend/server.py" 2>/dev/null
 pkill -f "gateway/main.py" 2>/dev/null
@@ -98,12 +100,12 @@ else
     echo "   Gateway will use cloud-only mode"
 fi
 
-# ─── 2. Start wakeword service ───
+# ─── 2. Start Voice Pipeline (wake word + STT + AI + TTS — port 8085) ───
 echo ""
-echo "🎯 Starting wake word service (port 8085)..."
-python3 wakeword/service.py > /tmp/viron_wakeword.log 2>&1 &
-echo "   PID: $! (log: /tmp/viron_wakeword.log)"
-sleep 3
+echo "🧠 Starting Voice Pipeline (port 8085)..."
+python3 voice_pipeline.py > /tmp/viron_pipeline.log 2>&1 &
+echo "   PID: $! (log: /tmp/viron_pipeline.log)"
+sleep 5
 
 # ─── 3. Start Flask backend ───
 echo ""
@@ -134,7 +136,7 @@ echo "════════════════════════�
 echo "   🖥️  Face: http://$(hostname -I | awk '{print $1}'):5000"
 echo "   🧠 LLM:  http://localhost:8081 (Gemma 2B)"
 echo "   🌐 API:  http://localhost:8080/v1/chat"
-echo "   🎯 Wake: http://localhost:8085 (ReSpeaker)"
+echo "   🎯 Pipeline: http://localhost:8085 (wake+STT+AI+TTS)"
 echo "═══════════════════════════════════════════"
 echo ""
 echo "   Logs: tail -f /tmp/viron_*.log"
@@ -145,7 +147,7 @@ echo ""
 sleep 1
 echo "Status:"
 curl -sf http://localhost:8081/health >/dev/null 2>&1 && echo "   ✅ Gemma 2B (8081)" || echo "   ❌ Gemma 2B (8081)"
-curl -sf http://localhost:8085/wakeword/status >/dev/null 2>&1 && echo "   ✅ Wake word (8085)" || echo "   ❌ Wake word (8085)"
+curl -sf http://localhost:8085/health >/dev/null 2>&1 && echo "   ✅ Voice Pipeline (8085)" || echo "   ❌ Voice Pipeline (8085)"
 curl -sf http://localhost:5000/api/ping >/dev/null 2>&1 && echo "   ✅ Flask (5000)" || echo "   ❌ Flask (5000)"
 curl -sf http://localhost:8080/health >/dev/null 2>&1 && echo "   ✅ Gateway (8080)" || echo "   ❌ Gateway (8080)"
 echo ""
@@ -160,9 +162,9 @@ python3 /home/test/viron_kiosk.py &>/dev/null &
 echo "   ✅ Face restarted (PID: $!)"
 echo ""
 
-# ─── 6. Tail logs (gateway is the primary log to watch) ───
+# ─── 6. Tail logs (ALL services) ───
 echo "═══════════════════════════════════════════"
-echo "📋 LIVE GATEWAY LOG (Ctrl+C to stop watching)"
+echo "📋 LIVE LOGS — ALL SERVICES (Ctrl+C to stop watching)"
 echo "═══════════════════════════════════════════"
 echo ""
-tail -f /tmp/viron_gateway.log
+tail -f /tmp/viron_gateway.log /tmp/viron_pipeline.log /tmp/viron_flask.log
