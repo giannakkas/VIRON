@@ -142,7 +142,7 @@ porcupine = None
 PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
 PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.6"))
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.45"))
 
 def init_wake():
     global porcupine
@@ -228,22 +228,23 @@ def init_silero_vad():
 
 def vad_is_speech(audio_int16, threshold=0.5):
     """Check if audio chunk contains speech using Silero VAD."""
+    # RMS floor: ignore very quiet audio (TV background noise is typically < 200 RMS)
+    rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
+    if rms < 150:
+        return False
+    
     if silero_vad is None:
-        # Fallback: simple RMS threshold
-        rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
-        return rms > 150  # rough threshold
+        return rms > 300  # rough threshold without Silero
     
     try:
         import torch
         audio_float = torch.FloatTensor(audio_int16.astype(np.float32) / 32768.0)
-        # Silero expects 512 samples at 16kHz
         if len(audio_float) < 512:
             audio_float = torch.nn.functional.pad(audio_float, (0, 512 - len(audio_float)))
         prob = silero_vad(audio_float[:512], SAMPLE_RATE).item()
         return prob > threshold
     except Exception:
-        rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
-        return rms > 150
+        return rms > 300
 
 # ═══════════════════════════════════════════════════════════
 # 3. STT: Deepgram streaming (~300ms) > whisper.cpp GPU > local CPU
@@ -310,8 +311,9 @@ def _transcribe_deepgram(wav_path, lang=None):
             confidence = result.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("confidence", 0)
             detected_lang = result.get("results", {}).get("channels", [{}])[0].get("detected_language", lang)
             log.info(f"⚡ Deepgram ({ms}ms, conf={confidence:.2f}, lang={detected_lang}): \"{text[:80]}\"")
-            if not text or confidence < 0.1:
-                log.warning(f"Deepgram low confidence/empty — raw: {json.dumps(result.get('results',{}))[:200]}")
+            if not text or confidence < 0.5:
+                log.warning(f"⚠ Deepgram low confidence ({confidence:.2f}) — likely TV/noise, skipping")
+                return None, None
             return text, detected_lang or lang
         else:
             log.warning(f"Deepgram error {resp.status_code}: {resp.text[:100]}")
@@ -1597,7 +1599,7 @@ You MUST follow this exact format. Write everything in Greek."""
         return None
 
 
-CONVERSATION_TIMEOUT = float(os.environ.get("VIRON_CONVERSATION_TIMEOUT", "7.0"))
+CONVERSATION_TIMEOUT = float(os.environ.get("VIRON_CONVERSATION_TIMEOUT", "5.0"))
 
 def main_loop(mic):
     """Main voice assistant loop — Porcupine + conversation mode."""
@@ -1767,10 +1769,16 @@ def _conversation_loop(mic):
                 state.is_processing = False
                 continue
             
-            # Filter out Whisper hallucinations (common garbage patterns)
-            noise_patterns = ["ευχαριστώ.", "...", "aaaaa", "χειροκρότημα", "υπότιτλοι", "σας ευχαριστώ"]
-            if any(text.strip().lower() == n.lower() for n in noise_patterns) or len(set(text.replace(" ",""))) < 3:
-                log.info(f"  (noise filtered: \"{text}\", skipping...)")
+            # Filter out Whisper hallucinations and TV broadcast noise
+            noise_exact = ["ευχαριστώ.", "...", "aaaaa", "χειροκρότημα", "υπότιτλοι", "σας ευχαριστώ", 
+                          "thank you.", "thanks for watching", "subscribe", "like and subscribe"]
+            noise_contains = ["υπότιτλοι", "εγγραφείτε", "subscribe", "παρακολουθήσατε", "χορηγ",
+                            "like and subscribe", "κάντε like", "thank you for watching"]
+            is_noise = any(text.strip().lower() == n.lower() for n in noise_exact) or \
+                       any(n in text.lower() for n in noise_contains) or \
+                       len(set(text.replace(" ",""))) < 3
+            if is_noise:
+                log.info(f"  (TV/noise filtered: \"{text}\", skipping...)")
                 state.is_processing = False
                 continue
             
