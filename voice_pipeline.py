@@ -1137,6 +1137,8 @@ CRITICAL RULES:
             try:
                 import requests as _req
                 import xml.etree.ElementTree as ET
+                import re as _re
+                from concurrent.futures import ThreadPoolExecutor, as_completed
                 
                 if state.language == "en":
                     rss_url = "https://news.google.com/rss?hl=en&gl=US&ceid=US:en"
@@ -1148,34 +1150,64 @@ CRITICAL RULES:
                     root = ET.fromstring(r.content)
                     items = root.findall(".//item")[:6]
                     news_items = []
+                    urls_to_fetch = []
+                    
                     for item in items:
                         title_el = item.find("title")
                         source_el = item.find("source")
                         link_el = item.find("link")
-                        desc_el = item.find("description")
                         if title_el is None:
                             continue
                         
                         full_title = title_el.text or ""
-                        # Split "headline - Source" format
                         parts = full_title.rsplit(" - ", 1)
                         headline = parts[0].strip()
                         source = parts[1].strip() if len(parts) > 1 else (source_el.text if source_el is not None else "")
-                        
-                        # Try to extract image from description HTML
-                        img_url = ""
-                        if desc_el is not None and desc_el.text:
-                            import re as _re
-                            img_match = _re.search(r'src="([^"]+)"', desc_el.text)
-                            if img_match:
-                                img_url = img_match.group(1)
+                        url = link_el.text if link_el is not None else ""
                         
                         news_items.append({
                             "headline": headline,
                             "source": source,
-                            "image": img_url,
-                            "url": link_el.text if link_el is not None else "",
+                            "image": "",
+                            "url": url,
                         })
+                        urls_to_fetch.append((len(news_items) - 1, url))
+                    
+                    # Fetch og:image from each article in parallel
+                    def _fetch_og_image(idx_url):
+                        idx, url = idx_url
+                        try:
+                            resp = _req.get(url, timeout=4, allow_redirects=True,
+                                          headers={"User-Agent": "Mozilla/5.0"})
+                            if resp.status_code == 200:
+                                # Look for og:image
+                                og = _re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', resp.text[:8000])
+                                if not og:
+                                    og = _re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', resp.text[:8000])
+                                if og:
+                                    return idx, og.group(1)
+                                # Fallback: twitter:image
+                                tw = _re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', resp.text[:8000])
+                                if tw:
+                                    return idx, tw.group(1)
+                        except:
+                            pass
+                        return idx, ""
+                    
+                    log.info(f"📰 Fetching images for {len(urls_to_fetch)} articles...")
+                    with ThreadPoolExecutor(max_workers=6) as pool:
+                        futures = [pool.submit(_fetch_og_image, u) for u in urls_to_fetch]
+                        for f in as_completed(futures, timeout=6):
+                            try:
+                                idx, img = f.result()
+                                if img:
+                                    news_items[idx]["image"] = img
+                                    log.info(f"  📸 Got image for article {idx}")
+                            except:
+                                pass
+                    
+                    img_count = sum(1 for n in news_items if n["image"])
+                    log.info(f"📰 {len(news_items)} articles, {img_count} with images")
                     
                     # Send news visual to browser
                     with _response_lock:
@@ -1185,9 +1217,7 @@ CRITICAL RULES:
                         })
                     
                     # Speak top 3 headlines
-                    spoken = []
-                    for n in news_items[:3]:
-                        spoken.append(n["headline"])
+                    spoken = [n["headline"] for n in news_items[:3]]
                     if state.language == "en":
                         news_text = "Here are today's headlines: " + ". ".join(spoken) + "."
                     else:
