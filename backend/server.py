@@ -403,6 +403,7 @@ detector = StudentEmotionDetector()
 
 import logging
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 try:
     from viron_ai_router import VironAIRouterSync, RouterConfig

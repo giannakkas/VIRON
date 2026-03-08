@@ -71,7 +71,7 @@ GATEWAY_URL = os.environ.get("VIRON_GATEWAY_URL", "http://127.0.0.1:8080")
 BACKEND_URL = os.environ.get("VIRON_BACKEND_URL", "http://127.0.0.1:5000")
 TTS_URL = os.environ.get("VIRON_TTS_URL", "http://127.0.0.1:5000/api/tts")
 
-ECHO_COOLDOWN = float(os.environ.get("VIRON_ECHO_COOLDOWN", "1.0"))
+ECHO_COOLDOWN = float(os.environ.get("VIRON_ECHO_COOLDOWN", "2.0"))
 MAX_SPEECH_SEC = float(os.environ.get("VIRON_MAX_SPEECH", "15.0"))
 SILENCE_TIMEOUT = float(os.environ.get("VIRON_SILENCE_TIMEOUT", "0.7"))
 NO_SPEECH_TIMEOUT = float(os.environ.get("VIRON_NO_SPEECH_TIMEOUT", "6.0"))
@@ -80,6 +80,8 @@ PORT = int(os.environ.get("VIRON_PIPELINE_PORT", "8085"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("viron-pipeline")
+# Suppress noisy Flask/werkzeug HTTP request logs (GET /pipeline/state etc)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # ═══════════════════════════════════════════════════════════
 # STATE
@@ -1848,10 +1850,16 @@ def _conversation_loop(mic):
             noise_exact = ["ευχαριστώ.", "...", "aaaaa", "χειροκρότημα", "υπότιτλοι", "σας ευχαριστώ", 
                           "thank you.", "thanks for watching", "subscribe", "like and subscribe",
                           "okay.", "okay", "ok.", "ναι.", "ναι", "so.", "the end.", "bye.",
-                          "you", "the", "i", "a", "σε", "με", "να", "μου"]
+                          "you", "the", "i", "a", "σε", "με", "να", "μου",
+                          "hmm", "hmm.", "um", "uh", "ah", "oh", "huh",
+                          "thanks.", "yes.", "no.", "right.", "yeah.", "yep.",
+                          "ωραία.", "ωραία", "μμμ", "εε", "αα", "οο"]
             noise_contains = ["υπότιτλοι", "εγγραφείτε", "subscribe", "παρακολουθήσατε", "χορηγ",
                             "like and subscribe", "κάντε like", "thank you for watching",
-                            "[χειροκρότημα]", "[μουσική]", "[γέλια]"]
+                            "[χειροκρότημα]", "[μουσική]", "[γέλια]", "[Μουσική]", "[Music]",
+                            "subtitles by", "captions by", "amara.org",
+                            "ΕΡΤ", "ALPHA", "MEGA", "ΑΝΤ1", "ΣΚΑΪ",
+                            "θα επιστρέψουμε", "μετά τα μηνύματα", "stay tuned"]
             t_stripped = text.strip().lower()
             # Remove brackets from whisper tags
             t_clean = t_stripped.replace("[", "").replace("]", "")
@@ -2116,7 +2124,19 @@ def main():
         noise_rms = np.sqrt(np.mean(noise_audio.astype(np.float32) ** 2))
         log.info(f"  Noise floor: RMS={noise_rms:.0f}")
     
-    # Startup greeting
+    # Startup greeting — wait for face to load first
+    log.info("🗣️ Waiting for face to load before greeting...")
+    for i in range(15):
+        try:
+            import requests as _rq
+            r = _rq.get("http://localhost:5000/api/ping", timeout=2)
+            if r.status_code == 200:
+                log.info("🗣️ Face is ready!")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    time.sleep(3)  # Extra wait for kiosk.py to render
     log.info("🗣️ Playing startup greeting...")
     if state.language == "en":
         speak("Hello! I'm VIRON, your study buddy! Say Hey Jarvis to talk to me.", lang="en")

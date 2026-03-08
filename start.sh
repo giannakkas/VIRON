@@ -156,6 +156,18 @@ echo ""
 echo "🔄 Restarting face (viron_kiosk.py)..."
 export DISPLAY=:0
 export XAUTHORITY=/home/test/.Xauthority
+
+# Hide cursor system-wide (unclutter is more reliable than CSS)
+pkill -f "unclutter" 2>/dev/null
+if command -v unclutter &>/dev/null; then
+    unclutter -idle 0 -root &>/dev/null &
+    echo "   ✅ Cursor hidden (unclutter)"
+else
+    # Move cursor to bottom-right corner where it's invisible
+    xdotool mousemove 1920 1080 2>/dev/null
+    echo "   ⚠ Install unclutter for permanent fix: sudo apt install -y unclutter"
+fi
+
 pkill -f "viron_kiosk.py" 2>/dev/null
 sleep 2
 python3 /home/test/viron_kiosk.py &>/dev/null &
