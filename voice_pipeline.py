@@ -90,29 +90,20 @@ _noise_profile = None  # Stored during calibration
 _noise_rms = 0         # Noise floor RMS
 
 def reduce_noise(audio_int16):
-    """Apply spectral gating noise reduction using calibrated noise profile."""
-    global _noise_profile, _noise_rms
-    if _noise_profile is None or len(_noise_profile) == 0:
+    """Simple noise gate: zero out frames below noise floor."""
+    global _noise_rms
+    if _noise_rms <= 0:
         return audio_int16
-    try:
-        import noisereduce as nr
-        audio_float = audio_int16.astype(np.float32) / 32768.0
-        noise_float = _noise_profile.astype(np.float32) / 32768.0
-        cleaned = nr.reduce_noise(
-            y=audio_float, sr=SAMPLE_RATE, y_noise=noise_float,
-            prop_decrease=0.8,  # 80% noise reduction
-            stationary=True,    # TV is relatively stationary noise
-        )
-        return (cleaned * 32768).astype(np.int16)
-    except ImportError:
-        # Fallback: simple noise gate
-        rms = np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2))
-        if rms < _noise_rms * 1.5:
-            return np.zeros_like(audio_int16)
-        return audio_int16
-    except Exception as e:
-        log.warning(f"Noise reduction failed: {e}")
-        return audio_int16
+    # Process in chunks of 512 samples
+    chunk_size = 512
+    result = audio_int16.copy()
+    gate_threshold = _noise_rms * 1.8
+    for i in range(0, len(result), chunk_size):
+        chunk = result[i:i+chunk_size]
+        rms = np.sqrt(np.mean(chunk.astype(np.float32) ** 2))
+        if rms < gate_threshold:
+            result[i:i+chunk_size] = 0  # Silence this chunk
+    return result
 
 # ═══════════════════════════════════════════════════════════
 # STATE
@@ -759,6 +750,18 @@ def pause_music():
         return _music_playing
     return False
 
+def _mute_mic():
+    """Mute mic capture during TTS to prevent self-listening."""
+    for ctrl in ["Capture", "Mic", "Input"]:
+        subprocess.run(["amixer", "-c", "0", "sset", ctrl, "0%"],
+                      capture_output=True, timeout=2)
+
+def _unmute_mic():
+    """Unmute mic capture after TTS."""
+    for ctrl in ["Capture", "Mic", "Input"]:
+        subprocess.run(["amixer", "-c", "0", "sset", ctrl, "100%"],
+                      capture_output=True, timeout=2)
+
 def speak(text, lang="auto"):
     """Play TTS through Jetson speaker AND send to browser for face animation."""
     global _current_ffplay
@@ -817,6 +820,8 @@ def speak(text, lang="auto"):
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 tmp.write(resp.content)
                 tmp_path = tmp.name
+            # MUTE mic during TTS to prevent self-listening
+            _mute_mic()
             # Set speaking ONLY when audio actually starts playing
             global _audio_playing
             state.tts_start()
@@ -828,6 +833,8 @@ def speak(text, lang="auto"):
             _audio_playing = False
             _current_ffplay = None
             state.tts_end()
+            # UNMUTE mic after TTS
+            _unmute_mic()
             try:
                 os.unlink(tmp_path)
             except:
@@ -838,6 +845,9 @@ def speak(text, lang="auto"):
     except Exception as e:
         log.warning(f"Local TTS failed: {e}")
         state.tts_end()
+    finally:
+        # ALWAYS unmute mic after TTS (even on crash)
+        _unmute_mic()
 
 # ═══════════════════════════════════════════════════════════
 # MIC CAPTURE + MAIN LOOP
@@ -1250,17 +1260,28 @@ CRITICAL RULES:
                 log.warning(f"Weather failed: {e}")
         
         # ── NEWS ──
-        is_news = any(w in t_lower for w in [
-            "νέα σήμερα", "νεα σημερα", "ειδήσεις", "ειδησεις", "ιδησεις", "ειδήσεις σήμερα", "ειδησεις σημερα",
-            "ιδίσεις", "ιδίσεις", "ιδισεις", "ιδίσ",  # Whisper misspellings!
+        # Whisper mangles "ειδήσεις" in many ways: ιδίσεις, σίτισης, ειδίσεις, etc.
+        # Use both exact keywords AND pattern matching
+        _news_exact = [
+            "νέα σήμερα", "νεα σημερα", "ειδήσεις", "ειδησεις", "ιδησεις",
+            "ιδίσεις", "ιδισεις", "σίτισης", "σιτισης",  # Whisper misspellings
+            "ειδίσεις", "ιδήσεις", "ειδήσεις σήμερα", "ειδησεις σημερα",
             "news today", "τι νέα", "τι νεα", "σημερινά νέα", "σημερινα νεα",
-            "νέα κύπρο", "νεα κυπρο", "νέα στην", "νεα στην",
-            "latest news", "πες μου νέα", "πες μου νεα", "πες μου τα νέα", "πες μου τα νεα",
+            "νέα κύπρο", "νεα κυπρο", "latest news",
+            "πες μου νέα", "πες μου νεα", "πες μου τα νέα", "πες μου τα νεα",
             "πες τα νέα", "πες τα νεα", "τα νέα", "τα νεα",
-            "νέα", "νεα", "news", "ειδήσ", "ειδησ",
+            "νέα", "νεα", "news",
             "τι γίνεται στον κόσμο", "τι γινεται στον κοσμο",
             "what's happening", "tell me the news",
+        ]
+        # Pattern: "πες μου" + anything that sounds like ειδήσεις
+        _news_pattern_ask = any(w in t_lower for w in ["πες μου", "πεις τ", "πείστε", "πειστε", "πες τ"])
+        _news_pattern_word = any(w in t_lower for w in [
+            "ιδίσ", "ιδισ", "ιδήσ", "ιδησ", "ειδήσ", "ειδησ", "ειδίσ",
+            "σίτισ", "σιτισ", "ειτισ", "ητισ",  # All Whisper mishearings
+            "νέα", "νεα", "news",
         ])
+        is_news = any(w in t_lower for w in _news_exact) or (_news_pattern_ask and _news_pattern_word)
         if is_news:
             log.info(f"📰 News request detected in: '{text[:60]}'")
             log.info(f"📰 t_lower='{t_lower[:60]}'")
@@ -1804,12 +1825,7 @@ def main_loop(mic):
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
                 log.info(f"🎤 Mic alive: frame={_frame_count} RMS={rms:.0f}")
             
-            # Check wake word on EVERY frame (but skip if just background noise)
-            frame_rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
-            if _noise_rms > 0 and frame_rms < _noise_rms * 2.0:
-                # Below noise gate — just TV/background, don't even check wake word
-                continue
-            
+            # Check wake word on EVERY frame — no filtering here, Porcupine handles it
             if check_wake(frame):
                 _wake_checks += 1
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
