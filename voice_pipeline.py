@@ -1775,12 +1775,19 @@ def _conversation_loop(mic):
             
             # Filter out Whisper hallucinations and TV broadcast noise
             noise_exact = ["ευχαριστώ.", "...", "aaaaa", "χειροκρότημα", "υπότιτλοι", "σας ευχαριστώ", 
-                          "thank you.", "thanks for watching", "subscribe", "like and subscribe"]
+                          "thank you.", "thanks for watching", "subscribe", "like and subscribe",
+                          "okay.", "okay", "ok.", "ναι.", "ναι", "so.", "the end.", "bye.",
+                          "you", "the", "i", "a", "σε", "με", "να", "μου"]
             noise_contains = ["υπότιτλοι", "εγγραφείτε", "subscribe", "παρακολουθήσατε", "χορηγ",
-                            "like and subscribe", "κάντε like", "thank you for watching"]
-            is_noise = any(text.strip().lower() == n.lower() for n in noise_exact) or \
-                       any(n in text.lower() for n in noise_contains) or \
-                       len(set(text.replace(" ",""))) < 3
+                            "like and subscribe", "κάντε like", "thank you for watching",
+                            "[χειροκρότημα]", "[μουσική]", "[γέλια]"]
+            t_stripped = text.strip().lower()
+            # Remove brackets from whisper tags
+            t_clean = t_stripped.replace("[", "").replace("]", "")
+            is_noise = any(t_clean == n.lower() for n in noise_exact) or \
+                       any(n in t_stripped for n in noise_contains) or \
+                       len(set(t_clean.replace(" ",""))) < 3 or \
+                       len(t_clean) < 3
             if is_noise:
                 log.info(f"  (TV/noise filtered: \"{text}\", skipping...)")
                 state.is_processing = False
@@ -1790,9 +1797,12 @@ def _conversation_loop(mic):
             log.info(f"📝 Turn {turn}: \"{text}\" (lang={lang})")
             
             # Check for whiteboard close commands
-            close_phrases = ["ok", "οκ", "οκέι", "εντάξει", "κλείσε", "close", "done", "πίσω", "back"]
-            if any(c in text.lower() for c in close_phrases) and len(text) < 30:
+            # Check for whiteboard close commands (only if whiteboard was recently opened)
+            close_exact = ["οκ", "οκέι", "εντάξει", "κλείσε", "κλείσε το", "close", "done", "πίσω", "back"]
+            if any(text.strip().lower() == c for c in close_exact) or \
+               any(text.strip().lower().startswith(c + " ") for c in ["κλείσε", "close"]):
                 log.info("📋 Closing whiteboard via voice command")
+                state.is_processing = False
                 state.is_processing = False
                 with _response_lock:
                     _response_queue.append({
