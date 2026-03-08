@@ -471,6 +471,10 @@ NEWS_KEYWORDS = [
     "νέα", "news", "ειδήσ", "headlines", "τι γίνεται στον κόσμο",
     "what's happening", "τι έγινε σήμερα", "what happened today",
     "τελευταία νέα", "latest news", "ενημέρωσ", "update",
+    "σήμερα νέα", "νεα", "ειδησ", "τι νέα", "τι νεα",
+    "πες μου νέα", "πες μου νεα", "πες τα νέα", "πες τα νεα",
+    "τι γίνεται", "τι γινεται", "what's going on", "whats going on",
+    "tell me the news", "say the news", "any news",
 ]
 
 
@@ -517,27 +521,38 @@ async def fetch_news(language: str = "el") -> str:
     try:
         url = "https://news.google.com/rss?hl=el&gl=CY&ceid=CY:el" if language == "el" \
             else "https://news.google.com/rss?hl=en&gl=US&ceid=US:en"
-        resp = await client.get(url, timeout=8)
+        logger.info(f"📰 fetch_news: fetching {url}")
+        resp = await client.get(url, timeout=10, follow_redirects=True)
+        logger.info(f"📰 fetch_news: status={resp.status_code}, content_len={len(resp.text)}")
         resp.raise_for_status()
         # Simple XML parsing for RSS titles
         import xml.etree.ElementTree as ET
         root = ET.fromstring(resp.text)
         items = root.findall(".//item")
         headlines = []
-        for item in items[:6]:
+        for item in items[:8]:
             title = item.find("title")
+            source = item.find("source")
             if title is not None and title.text:
-                headlines.append(title.text.split(" - ")[0])  # Remove source suffix
+                headline = title.text.split(" - ")[0].strip()
+                src = source.text if source is not None and source.text else ""
+                headlines.append({"headline": headline, "source": src})
         if headlines:
-            return (
-                f"[NEWS HEADLINES]\n"
-                + "\n".join(f"- {h}" for h in headlines)
-                + "\n[/NEWS HEADLINES]"
-            )
-        return ""
+            logger.info(f"📰 fetch_news: ✅ got {len(headlines)} headlines")
+            news_text = "[NEWS HEADLINES - PRESENT THESE TO THE STUDENT]\n"
+            for h in headlines:
+                news_text += f"- {h['headline']}"
+                if h['source']:
+                    news_text += f" ({h['source']})"
+                news_text += "\n"
+            news_text += "[/NEWS HEADLINES]\n"
+            news_text += "IMPORTANT: You HAVE the news above. Present them conversationally. Do NOT say you don't have access."
+            return news_text
+        logger.warning("📰 fetch_news: no items found in RSS")
+        return "[SYSTEM: News fetch returned empty. Tell the student you couldn't find headlines right now, but try again later.]"
     except Exception as e:
-        logger.warning(f"News fetch failed: {e}")
-        return ""
+        logger.warning(f"📰 fetch_news: ❌ failed: {e}")
+        return "[SYSTEM: News service temporarily unavailable. Tell the student you're having trouble fetching news right now, try again in a minute.]"
 
 
 # Track last weather request per student for follow-up city detection
@@ -641,10 +656,10 @@ async def enrich_message(message: str, language: str, student_id: str = "", hist
         _pending_weather.pop(student_id, None)
 
     if _detect_intent(message, NEWS_KEYWORDS):
-        logger.info("📰 News intent detected — fetching headlines")
+        logger.info(f"📰 News intent detected in: '{message[:50]}'")
         news = await fetch_news(language)
-        if news:
-            enriched = f"{enriched}\n\n{news}"
+        logger.info(f"📰 News result: len={len(news)}, preview='{news[:80]}...'")
+        enriched = f"{enriched}\n\n{news}"
 
     return enriched, weather_city
 

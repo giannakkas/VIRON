@@ -1216,7 +1216,9 @@ CRITICAL RULES:
                 else:
                     rss_url = "https://news.google.com/rss?hl=el&gl=CY&ceid=CY:el"
                 
-                r = _req.get(rss_url, timeout=5)
+                log.info(f"📰 Fetching news from: {rss_url}")
+                r = _req.get(rss_url, timeout=10)
+                log.info(f"📰 News RSS response: status={r.status_code}, len={len(r.content)}")
                 if r.status_code == 200:
                     root = ET.fromstring(r.content)
                     items = root.findall(".//item")[:20]
@@ -1311,8 +1313,22 @@ CRITICAL RULES:
                     
                     threading.Thread(target=_fetch_news_images, args=(news_items, urls_to_fetch), daemon=True).start()
                     return
+                else:
+                    log.warning(f"📰 News RSS returned status {r.status_code}")
+                    state.is_processing = False
+                    if state.language == "en":
+                        speak("Sorry, I couldn't reach the news service right now.")
+                    else:
+                        speak("Συγγνώμη, δεν μπόρεσα να συνδεθώ με τα νέα αυτή τη στιγμή.")
+                    return
             except Exception as e:
                 log.warning(f"News failed: {e}")
+                state.is_processing = False
+                if state.language == "en":
+                    speak("Sorry, I'm having trouble fetching the news right now. Try again in a moment.")
+                else:
+                    speak("Συγγνώμη, δεν μπόρεσα να φέρω τα νέα αυτή τη στιγμή. Δοκίμασε ξανά σε λίγο.")
+                return
         
         # ── MUSIC ──
         music_keywords = ["μουσική", "τραγούδι", "song", "music"]
