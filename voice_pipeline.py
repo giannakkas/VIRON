@@ -106,7 +106,7 @@ class PipelineState:
         if self.is_speaking: return False
         if now - self.last_tts_end < ECHO_COOLDOWN: return False
         # Suppress rapid re-triggers
-        if now - self.last_wake < 2.0: return False
+        if now - self.last_wake < 1.0: return False
         
         self.last_wake = now
         self.detection_count += 1
@@ -193,9 +193,12 @@ def check_wake(audio_int16):
     if porcupine is None:
         return False
     try:
+        if len(audio_int16) != porcupine.frame_length:
+            return False  # Wrong frame size
         result = porcupine.process(audio_int16)
         return result >= 0
-    except Exception:
+    except Exception as e:
+        log.error(f"❌ Porcupine crash: {e}")
         return False
 
 # ═══════════════════════════════════════════════════════════
@@ -1573,13 +1576,17 @@ def main_loop(mic):
     
     _last_processing_start = 0
     _heartbeat = time.time()
+    _frame_count = 0
+    _wake_checks = 0
     
     while True:
         try:
-            # Heartbeat every 30s
+            # Heartbeat every 30s with diagnostics
             if time.time() - _heartbeat > 30:
+                log.info(f"💓 Alive — frames={_frame_count} wakes_checked={_wake_checks} proc={state.is_processing} speak={state.is_speaking} conv={state.in_conversation} music={_music_playing}")
                 _heartbeat = time.time()
-                log.info(f"💓 Alive — proc={state.is_processing} speak={state.is_speaking} conv={state.in_conversation} music={_music_playing}")
+                _frame_count = 0
+                _wake_checks = 0
             
             # Safety: auto-reset stuck states after 60s
             if state.is_processing:
@@ -1604,31 +1611,42 @@ def main_loop(mic):
             if frame is None:
                 log.error("Mic read failed, restarting...")
                 mic.stop()
-                time.sleep(1)
+                time.sleep(2)
                 mic.start()
+                time.sleep(1)
                 continue
+            
+            _frame_count += 1
+            
+            # Log mic activity every 300 frames (~10s) to confirm mic is alive
+            if _frame_count % 300 == 0:
+                rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
+                log.info(f"🎤 Mic alive: frame={_frame_count} RMS={rms:.0f}")
             
             # Check wake word on EVERY frame
             if check_wake(frame):
+                _wake_checks += 1
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
                 time_since_tts = time.time() - state.last_tts_end
                 
                 if rms < 30:
+                    log.info(f"  (wake REJECTED: RMS={rms:.0f} < 30)")
                     continue
                 if time_since_tts < 1.0:
-                    log.info(f"  (wake rejected: echo {time_since_tts:.1f}s, RMS={rms:.0f})")
+                    log.info(f"  (wake REJECTED: echo {time_since_tts:.1f}s < 1.0s, RMS={rms:.0f})")
                     continue
                 
-                log.info(f"🎯 Wake word detected! (RMS={rms:.0f})")
-                
-                # Interrupt anything in progress
-                if state.is_speaking:
-                    interrupt_speech()
-                    stop_music()
-                if state.is_processing:
-                    state.is_processing = False
-                
+                # Try to activate
                 if state.set_wake("porcupine", 1.0):
+                    log.info(f"🎯 Wake word ACTIVATED! (RMS={rms:.0f}, tts_ago={time_since_tts:.1f}s)")
+                    
+                    # Interrupt anything in progress
+                    if state.is_speaking:
+                        interrupt_speech()
+                        stop_music()
+                    if state.is_processing:
+                        state.is_processing = False
+                    
                     ack = "Yes?" if state.language == "en" else "Ορίστε;"
                     with _response_lock:
                         _response_queue.append({"text": ack, "lang": state.language, "time": time.time(), "emotion": "hopeful"})
@@ -1637,7 +1655,25 @@ def main_loop(mic):
                     
                     _conversation_loop(mic)
                     
+                    # Flush mic buffer after conversation (prevents stale audio)
+                    log.info("🔄 Flushing mic buffer after conversation...")
+                    for _ in range(20):
+                        mic.read_frame()
+                    
+                    # Reset all states cleanly
+                    state.is_processing = False
+                    state.is_speaking = False
+                    state.in_conversation = False
+                    
                     log.info(f"🎤 Back to standby. Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
+                else:
+                    # set_wake returned False — log why
+                    now = time.time()
+                    reasons = []
+                    if state.is_speaking: reasons.append("is_speaking=True")
+                    if now - state.last_tts_end < ECHO_COOLDOWN: reasons.append(f"echo_cooldown={now-state.last_tts_end:.1f}s")
+                    if now - state.last_wake < 2.0: reasons.append(f"re-trigger={now-state.last_wake:.1f}s<2s")
+                    log.info(f"  (wake BLOCKED by set_wake: {', '.join(reasons) or 'unknown'}, RMS={rms:.0f})")
         
         except KeyboardInterrupt:
             log.info("Shutting down...")
