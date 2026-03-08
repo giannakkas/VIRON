@@ -1638,11 +1638,8 @@ def main_loop(mic):
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
                 time_since_tts = time.time() - state.last_tts_end
                 
-                if rms < 30:
-                    log.info(f"  (wake REJECTED: RMS={rms:.0f} < 30)")
-                    continue
                 if time_since_tts < 1.0:
-                    log.info(f"  (wake REJECTED: echo {time_since_tts:.1f}s < 1.0s, RMS={rms:.0f})")
+                    log.info(f"  (wake REJECTED: echo {time_since_tts:.1f}s, RMS={rms:.0f})")
                     continue
                 
                 # Try to activate
