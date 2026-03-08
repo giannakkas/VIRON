@@ -102,11 +102,10 @@ class PipelineState:
     
     def set_wake(self, source="porcupine", score=1.0):
         now = time.time()
-        # Suppress during TTS + cooldown
-        if self.is_speaking: return False
-        if now - self.last_tts_end < ECHO_COOLDOWN: return False
-        # Suppress rapid re-triggers
-        if now - self.last_wake < 1.0: return False
+        # Only suppress during active TTS playback (not cooldown)
+        if self.is_speaking and not _music_playing: return False
+        # Suppress very rapid re-triggers (within 0.5s)
+        if now - self.last_wake < 0.5: return False
         
         self.last_wake = now
         self.detection_count += 1
@@ -889,7 +888,7 @@ def conversation_turn(mic, text, lang):
         t_lower = text.lower()
         
         # ── EASTER EGGS (direct responses, no LLM) ──
-        if "κυπρούλα" in t_lower or ("γερασίμου" in t_lower and "κυπρούλα" not in t_lower and "αγγελικ" not in t_lower):
+        if any(k in t_lower for k in ["κυπρούλα", "κουμπρούλα", "κιπρούλα", "κυπρουλα", "κουμπρουλα"]) or ("γερασίμου" in t_lower and "αγγελικ" not in t_lower):
             log.info("🥚 Easter egg: Kyproula!")
             state.is_processing = False
             speak("[laughing] Χαχαχα! Ναι, ξέρω την Κυπρούλα Γερασίμου! Είναι η γυναίκα του Χρήστου Γιάννακκα! Τον παντρεύτηκε για να τον βασανίζει!", lang="el")
@@ -1578,15 +1577,25 @@ def main_loop(mic):
     _heartbeat = time.time()
     _frame_count = 0
     _wake_checks = 0
+    _mic_start_time = time.time()
     
     while True:
         try:
             # Heartbeat every 30s with diagnostics
             if time.time() - _heartbeat > 30:
-                log.info(f"💓 Alive — frames={_frame_count} wakes_checked={_wake_checks} proc={state.is_processing} speak={state.is_speaking} conv={state.in_conversation} music={_music_playing}")
+                log.info(f"💓 Alive — frames={_frame_count} wakes={_wake_checks} proc={state.is_processing} speak={state.is_speaking} conv={state.in_conversation} music={_music_playing}")
                 _heartbeat = time.time()
                 _frame_count = 0
                 _wake_checks = 0
+            
+            # Restart mic every 5 min to prevent stale arecord (Jetson quirk)
+            if time.time() - _mic_start_time > 300 and not state.in_conversation and not state.is_speaking:
+                log.info("🔄 Periodic mic restart (5 min)")
+                mic.stop()
+                time.sleep(1)
+                mic.start()
+                _mic_start_time = time.time()
+                continue
             
             # Safety: auto-reset stuck states after 60s
             if state.is_processing:
