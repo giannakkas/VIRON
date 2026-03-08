@@ -13,16 +13,15 @@ body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100v
 .settings-panel,.settings-panel *{cursor:auto !important}
 .hamburger{cursor:pointer !important}
 /* WiFi indicator */
-#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:flex;align-items:flex-end;gap:3px;height:30px;opacity:0;transition:opacity 0.5s}
-#wifiInd.nosignal{opacity:1}
-.wifi-bar{width:5px;border-radius:2px;transition:background 0.3s}
-.wifi-bar:nth-child(1){height:8px}
-.wifi-bar:nth-child(2){height:14px}
-.wifi-bar:nth-child(3){height:20px}
-.wifi-bar:nth-child(4){height:26px}
-.wifi-bar.on{background:rgba(0,220,100,0.7)}
-.wifi-bar.off{background:rgba(255,255,255,0.15)}
-#wifiText{font-size:11px;margin-left:4px;font-weight:700;letter-spacing:1px;align-self:center}
+#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:flex;align-items:flex-end;gap:4px;height:36px}
+.wifi-bar{width:8px;border-radius:3px;transition:background 0.3s}
+.wifi-bar:nth-child(1){height:10px}
+.wifi-bar:nth-child(2){height:18px}
+.wifi-bar:nth-child(3){height:26px}
+.wifi-bar:nth-child(4){height:34px}
+.wifi-bar.on{background:rgba(0,220,100,0.8)}
+.wifi-bar.off{background:rgba(255,255,255,0.2)}
+#wifiText{font-size:12px;margin-left:6px;font-weight:700;letter-spacing:1px;align-self:center}
 svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-color:transparent;display:block}
 /* Listening indicator */
 .listen-indicator{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;opacity:0;transition:all 0.5s;pointer-events:none}
@@ -3569,15 +3568,12 @@ if(volSlider){
 
 // ===== WIFI INDICATOR =====
 function updateWifi(ok){
-  const ind=document.getElementById('wifiInd');
   const bars=document.querySelectorAll('.wifi-bar');
   const txt=document.getElementById('wifiText');
   if(ok){
-    ind.classList.remove('nosignal');
     bars.forEach(b=>b.className='wifi-bar on');
     txt.textContent='';
   }else{
-    ind.classList.add('nosignal');
     bars.forEach(b=>b.className='wifi-bar off');
     txt.textContent='NO SIGNAL';txt.style.color='rgba(255,60,60,0.8)';
   }

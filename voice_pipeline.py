@@ -106,7 +106,7 @@ class PipelineState:
         if self.is_speaking: return False
         if now - self.last_tts_end < ECHO_COOLDOWN: return False
         # Suppress rapid re-triggers
-        if now - self.last_wake < 5.0: return False
+        if now - self.last_wake < 2.0: return False
         
         self.last_wake = now
         self.detection_count += 1
@@ -143,7 +143,7 @@ porcupine = None
 PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
 PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.4"))
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.5"))
 
 def init_wake():
     global porcupine
@@ -1580,33 +1580,35 @@ def main_loop(mic):
     log.info("=" * 50)
     log.info(f"🎤 Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
     
+    _last_processing_start = 0
+    _heartbeat = time.time()
+    
     while True:
         try:
-            if state.is_processing or state.is_paused:
-                time.sleep(0.1)
-                continue
+            # Heartbeat every 30s
+            if time.time() - _heartbeat > 30:
+                _heartbeat = time.time()
+                log.info(f"💓 Alive — proc={state.is_processing} speak={state.is_speaking} conv={state.in_conversation} music={_music_playing}")
             
-            # During speech: still check for wake word to allow interrupt
-            if state.is_speaking:
-                frame = mic.read_frame()
-                if frame is not None and len(frame) == porcupine.frame_length:
-                    try:
-                        result = porcupine.process(frame)
-                        if result >= 0:
-                            log.info("🛑 Wake word during speech — interrupting!")
-                            interrupt_speech()
-                            stop_music()  # Also stop music
-                            state.in_conversation = True
-                            time.sleep(0.5)
-                    except:
-                        pass
-                time.sleep(0.02)
-                continue
+            # Safety: auto-reset stuck states after 60s
+            if state.is_processing:
+                if _last_processing_start == 0:
+                    _last_processing_start = time.time()
+                elif time.time() - _last_processing_start > 60:
+                    log.warning("⚠ is_processing stuck for 60s — force reset!")
+                    state.is_processing = False
+                    state.is_speaking = False
+                    _last_processing_start = 0
+            else:
+                _last_processing_start = 0
             
-            if time.time() - state.last_tts_end < ECHO_COOLDOWN:
-                mic.read_frame()
-                continue
+            if state.is_speaking and time.time() - state.last_tts_end > 0 and not _music_playing:
+                # tts_end was called but is_speaking still True — stuck
+                if time.time() - state.last_wake > 30:
+                    log.warning("⚠ is_speaking stuck — force reset!")
+                    state.is_speaking = False
             
+            # ALWAYS read mic and check wake word (even during processing/speaking)
             frame = mic.read_frame()
             if frame is None:
                 log.error("Mic read failed, restarting...")
@@ -1615,30 +1617,33 @@ def main_loop(mic):
                 mic.start()
                 continue
             
+            # Check wake word on EVERY frame
             if check_wake(frame):
-                # Verify it's real speech, not TV/echo
                 rms = np.sqrt(np.mean(frame.astype(np.float32) ** 2))
                 time_since_tts = time.time() - state.last_tts_end
                 
-                # Reject if: too quiet (background noise), or too soon after VIRON spoke (echo)
-                if rms < 50:
-                    log.info(f"  (wake rejected: RMS={rms:.0f} too low)")
-                    continue  # Too quiet to be real speech
-                if time_since_tts < 1.5:
-                    log.info(f"  (wake rejected: too soon after TTS, {time_since_tts:.1f}s, RMS={rms:.0f})")
-                    continue  # Likely hearing own echo
+                if rms < 30:
+                    continue
+                if time_since_tts < 1.0:
+                    log.info(f"  (wake rejected: echo {time_since_tts:.1f}s, RMS={rms:.0f})")
+                    continue
+                
+                log.info(f"🎯 Wake word detected! (RMS={rms:.0f})")
+                
+                # Interrupt anything in progress
+                if state.is_speaking:
+                    interrupt_speech()
+                    stop_music()
+                if state.is_processing:
+                    state.is_processing = False
                 
                 if state.set_wake("porcupine", 1.0):
-                    log.info(f"🎯 Wake word detected! (RMS={rms:.0f})")
-                    
-                    # Quick acknowledgment
                     ack = "Yes?" if state.language == "en" else "Ορίστε;"
                     with _response_lock:
                         _response_queue.append({"text": ack, "lang": state.language, "time": time.time(), "emotion": "hopeful"})
                     threading.Thread(target=speak, args=(ack, state.language), daemon=True).start()
                     time.sleep(0.3)
                     
-                    # Enter conversation mode
                     _conversation_loop(mic)
                     
                     log.info(f"🎤 Back to standby. Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
@@ -1648,6 +1653,8 @@ def main_loop(mic):
             break
         except Exception as e:
             log.error(f"Pipeline error: {e}")
+            state.is_processing = False
+            state.is_speaking = False
             time.sleep(1)
 
 
