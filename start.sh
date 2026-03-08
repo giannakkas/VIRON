@@ -102,6 +102,17 @@ fi
 
 # ─── 2. Start Voice Pipeline (wake word + STT + AI + TTS — port 8085) ───
 echo ""
+
+# Set mic gain to maximum and disable AGC
+echo "🎤 Setting mic gain..."
+amixer -c 0 sset 'Mic' 100% 2>/dev/null && echo "   ✅ Mic gain: 100%" || true
+amixer -c 0 sset 'Capture' 100% 2>/dev/null || true
+amixer -c 0 sset 'Auto Gain Control' off 2>/dev/null && echo "   ✅ AGC disabled" || true
+# For XVF3800: try to disable AGC via xvf_host
+if [ -f /tmp/xvf3800/host_control/jetson/xvf_host ]; then
+    /tmp/xvf3800/host_control/jetson/xvf_host AGC 0 2>/dev/null && echo "   ✅ XVF3800 AGC disabled" || true
+fi
+
 echo "🧠 Starting Voice Pipeline (port 8085)..."
 python3 voice_pipeline.py > /tmp/viron_pipeline.log 2>&1 &
 echo "   PID: $! (log: /tmp/viron_pipeline.log)"

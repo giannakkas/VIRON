@@ -144,7 +144,7 @@ porcupine = None
 PICOVOICE_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
 PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.45"))
+PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.7"))
 
 def init_wake():
     global porcupine
@@ -733,13 +733,26 @@ def speak(text, lang="auto"):
     if not text:
         return
     
-    # Parse emotion tags like [laughing], [happy], [thinking]
+    # Parse emotion tags like [laughing], [happy], [χαμογελαστό πρόσωπο], etc.
     import re as _re
     emotion = None
-    emotion_match = _re.match(r'\[(\w+)\]\s*', text)
+    # Match any bracket tag at the start (single or multi-word)
+    emotion_match = _re.match(r'\[([^\]]+)\]\s*', text)
     if emotion_match:
-        emotion = emotion_match.group(1).lower()
+        emotion = emotion_match.group(1).lower().strip()
         text = text[emotion_match.end():].strip()
+    
+    # Strip ALL remaining bracket tags from text (AI sometimes puts emotions mid-text)
+    text = _re.sub(r'\[[^\]]{1,40}\]\s*', '', text).strip()
+    
+    # Strip Greek emotion words that AI sometimes includes as text
+    _greek_emotion_phrases = [
+        "χαμογελαστό πρόσωπο", "χαμογελαστο προσωπο", "σκεπτικό πρόσωπο",
+        "λυπημένο πρόσωπο", "ενθουσιασμένο πρόσωπο", "ήρεμο πρόσωπο",
+        "χαρούμενο πρόσωπο", "εκπληκτικό πρόσωπο", "ανησυχημένο πρόσωπο",
+    ]
+    for phrase in _greek_emotion_phrases:
+        text = text.replace(phrase, "").strip()
     
     if not text:
         return
@@ -1204,6 +1217,7 @@ CRITICAL RULES:
         # ── NEWS ──
         is_news = any(w in t_lower for w in [
             "νέα σήμερα", "νεα σημερα", "ειδήσεις", "ειδησεις", "ιδησεις", "ειδήσεις σήμερα", "ειδησεις σημερα",
+            "ιδίσεις", "ιδίσεις", "ιδισεις", "ιδίσ",  # Whisper misspellings!
             "news today", "τι νέα", "τι νεα", "σημερινά νέα", "σημερινα νεα",
             "νέα κύπρο", "νεα κυπρο", "νέα στην", "νεα στην",
             "latest news", "πες μου νέα", "πες μου νεα", "πες μου τα νέα", "πες μου τα νεα",
