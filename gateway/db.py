@@ -97,3 +97,12 @@ def get_recent_messages(student_id: str, limit: int = 20) -> list:
             (student_id, limit)).fetchall()
     # Return in chronological order
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+def get_last_provider(student_id: str) -> str:
+    """Get the cloud provider used for the last assistant response."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT cloud_provider FROM messages WHERE student_id=? AND role='assistant' AND cloud_provider!='' ORDER BY created_at DESC LIMIT 1",
+            (student_id,)).fetchone()
+    return row["cloud_provider"] if row else ""

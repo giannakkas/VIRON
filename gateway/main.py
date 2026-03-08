@@ -31,7 +31,7 @@ import httpx
 
 import config as cfg
 from safety import check_safety, get_blocked_response, age_mode_from_age
-from db import init_db, ensure_student, log_message, get_recent_messages
+from db import init_db, ensure_student, log_message, get_recent_messages, get_last_provider
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("viron-gateway")
@@ -82,7 +82,7 @@ Analyze the student's message and return ONLY a JSON object with these exact fie
 }
 
 ROUTING RULES:
-- math, programming, logic, code → cloud_provider: "chatgpt"
+- math, programming, logic, code → cloud_provider: "gemini"
 - english, writing, literature, emotional support → cloud_provider: "claude"
 - science, STEM, multimodal, geography, translation → cloud_provider: "gemini"
 - greetings, very simple questions, casual chat → mode: "local", cloud_provider: "none"
@@ -154,18 +154,18 @@ def default_routing(message: str) -> RouterResult:
             complexity_level="simple", mode="local",
             cloud_provider="none", safety_flag="safe"
         )
-    # Complex → cloud chatgpt as default
+    # Complex → cloud gemini as default
     return RouterResult(
         intent_type="explanation_request", subject="general",
         complexity_level="moderate", mode="cloud",
-        cloud_provider="chatgpt", safety_flag="safe"
+        cloud_provider="gemini", safety_flag="safe"
     )
 
 
 # Keywords that MUST go to cloud (Greek + English)
 _CLOUD_KEYWORDS = {
     "math": {
-        "chatgpt": [
+        "gemini": [
             "πυθαγόρ", "pythag", "εξίσωση", "equation", "θεώρημα", "theorem",
             "αλγόριθμ", "algorithm", "γεωμετρ", "geometry", "άλγεβρ", "algebra",
             "τριγωνομ", "trigon", "παράγωγ", "derivative", "ολοκλήρωμα", "integral",
@@ -198,25 +198,55 @@ _CLOUD_KEYWORDS = {
         ]
     },
     "weather": {
-        "chatgpt": [
+        "gemini": [
             "καιρ", "weather", "βρέχ", "rain", "ήλιο", "sun", "κρύο", "cold",
             "ζέστη", "hot", "χιόν", "snow", "θερμοκρασ", "temperature",
             "σύννεφ", "cloud", "ομπρέλα", "umbrella",
         ]
     },
     "news": {
-        "chatgpt": [
+        "gemini": [
             "νέα", "news", "ειδήσ", "headlines", "τι γίνεται στον κόσμο",
             "τελευταία νέα", "latest news", "τι έγινε σήμερα",
         ]
     },
     "music": {
-        "chatgpt": [
+        "gemini": [
             "παίξε", "play", "μουσικ", "music", "τραγούδ", "song",
             "ακούσ", "listen", "youtube", "βάλε μουσικ",
         ]
     },
 }
+
+# Continuation/follow-up patterns (Greek + English)
+# These indicate the student is referring to the PREVIOUS topic
+_CONTINUATION_PATTERNS = [
+    "δείξε μου", "δειξε μου", "δείξ' το", "δειξτο", "δείξε το",
+    "show me", "show it", "put it on", "on the board",
+    "στον πίνακα", "στο board", "γράψε το", "γραψε το",
+    "βάλε το στον πίνακα", "βαλε το στον πινακα",
+    "εξήγησε ξανά", "εξηγησε ξανα", "explain again",
+    "πες μου ξανά", "πες μου ξανα", "πες το ξανά",
+    "tell me again", "say it again", "repeat",
+    "more detail", "πιο αναλυτικά", "πιο αναλυτικα",
+    "δεν κατάλαβα", "δεν καταλαβα", "i don't understand",
+    "ξαναπές", "ξαναπες", "show on whiteboard",
+    "one more time", "ακόμα μια φορά", "μπορείς να",
+    "can you show", "ξαναεξήγησε",
+]
+
+def detect_continuation(message: str, student_id: str) -> Optional[str]:
+    """Check if this is a follow-up request. Returns last cloud provider or None."""
+    msg_lower = message.lower()
+    is_followup = any(p in msg_lower for p in _CONTINUATION_PATTERNS)
+    if not is_followup:
+        return None
+    last_provider = get_last_provider(student_id)
+    if last_provider and last_provider != "none":
+        logger.info(f"  🔗 Continuation detected → reusing provider '{last_provider}'")
+        return last_provider
+    return "gemini"  # Default to gemini for continuations
+
 
 # Words that signal educational intent
 _EXPLAIN_WORDS = [
@@ -270,8 +300,8 @@ def override_routing(router_result: RouterResult, message: str) -> RouterResult:
     # If explain words + non-general subject → force cloud
     if has_explain and router_result.subject in ("math", "science", "history", "english", "programming"):
         if router_result.mode == "local":
-            provider = {"math": "chatgpt", "science": "gemini", "history": "claude",
-                        "english": "claude", "programming": "chatgpt"}.get(router_result.subject, "chatgpt")
+            provider = {"math": "gemini", "science": "gemini", "history": "claude",
+                        "english": "claude", "programming": "gemini"}.get(router_result.subject, "gemini")
             logger.info(f"  🔄 Override: explain + {router_result.subject} → cloud/{provider}")
             router_result.mode = "cloud"
             router_result.cloud_provider = provider
@@ -414,9 +444,9 @@ CLOUD_DISPATCH = {
 
 # Fallback order if primary cloud provider fails
 CLOUD_FALLBACK = {
-    "chatgpt": ["claude", "gemini"],
+    "gemini": ["chatgpt", "claude"],
+    "chatgpt": ["gemini", "claude"],
     "claude": ["gemini", "chatgpt"],
-    "gemini": ["claude", "chatgpt"],
 }
 
 
@@ -689,11 +719,11 @@ async def chat(req: ChatRequest):
     is_fast = words <= 12 and any(p in msg_lower for p in _FAST_PATTERNS)
     
     if is_fast:
-        logger.info(f"⚡ FAST PATH: '{req.message[:40]}' → cloud/chatgpt (skip router)")
+        logger.info(f"⚡ FAST PATH: '{req.message[:40]}' → cloud/gemini (skip router)")
         history = get_recent_messages(req.student_id, limit=6)
-        log_message(req.student_id, "user", req.message, "cloud", "chatgpt")
+        log_message(req.student_id, "user", req.message, "cloud", "gemini")
         
-        cloud_reply, used = await call_cloud("chatgpt", req.message, history, req.age, req.language)
+        cloud_reply, used = await call_cloud("gemini", req.message, history, req.age, req.language)
         if not cloud_reply:
             # Cloud failed, try local as last resort
             cloud_reply = await call_tutor(req.message, req.age, req.language, history)
@@ -704,16 +734,52 @@ async def chat(req: ChatRequest):
         logger.info(f"[{req.student_id}] FAST cloud/{used} | {latency:.0f}ms | '{req.message[:60]}'")
         
         return ChatResponse(
-            reply=cloud_reply, mode="cloud", cloud_provider=used or "chatgpt",
+            reply=cloud_reply, mode="cloud", cloud_provider=used or "gemini",
             router=RouterResult(
                 intent_type="casual_chat", subject="general",
                 complexity_level="simple", mode="cloud",
-                cloud_provider="chatgpt", safety_flag="safe"
+                cloud_provider="gemini", safety_flag="safe"
             ),
             latency_ms=latency
         )
 
-    # 3. Call local router (Gemma 2B) for intent classification
+    # 3. Check for conversation continuation BEFORE routing
+    continuation_provider = detect_continuation(req.message, req.student_id)
+    if continuation_provider:
+        # This is a follow-up — skip router, use same provider, inject context hint
+        logger.info(f"🔗 CONTINUATION: '{req.message[:40]}' → cloud/{continuation_provider}")
+        history = get_recent_messages(req.student_id, limit=12)
+        log_message(req.student_id, "user", req.message, "cloud", continuation_provider)
+        
+        # Add hint so the AI knows this is a follow-up about the previous topic
+        context_hint = (
+            "\n\n[SYSTEM HINT: The student is referring to what you JUST discussed in the previous messages. "
+            "They want you to show/explain it on the WHITEBOARD. Use the WHITEBOARD format with detailed steps. "
+            "Do NOT change the topic — continue with the SAME subject from the conversation history.]"
+        )
+        enriched_msg, weather_city = await enrich_message(
+            req.message + context_hint, req.language, req.student_id, history
+        )
+        cloud_reply, used = await call_cloud(continuation_provider, enriched_msg, history, req.age, req.language)
+        if not cloud_reply:
+            cloud_reply = await call_tutor(enriched_msg, req.age, req.language, history)
+            used = "none"
+        
+        latency = _ms(start)
+        log_message(req.student_id, "assistant", cloud_reply, "cloud", used, latency_ms=latency)
+        logger.info(f"[{req.student_id}] CONTINUATION cloud/{used} | {latency:.0f}ms | '{req.message[:60]}'")
+        
+        return ChatResponse(
+            reply=cloud_reply, mode="cloud", cloud_provider=used or continuation_provider,
+            router=RouterResult(
+                intent_type="continuation", subject="general",
+                complexity_level="moderate", mode="cloud",
+                cloud_provider=continuation_provider, safety_flag="safe"
+            ),
+            latency_ms=latency
+        )
+
+    # 3b. Call local router (Gemma 2B) for intent classification
     router_result = await call_router(req.message, req.age, req.language)
     retried = False
     if router_result is None:
@@ -758,11 +824,11 @@ async def chat(req: ChatRequest):
     # Set FORCE_CLOUD=0 to allow local responses (not recommended on Jetson)
     force_cloud = os.environ.get("FORCE_CLOUD", "1") == "1"
     if force_cloud and router_result.mode == "local":
-        logger.info("FORCE_CLOUD: overriding local → cloud/chatgpt")
+        logger.info("FORCE_CLOUD: overriding local → cloud/gemini")
         router_result.mode = "cloud"
-        router_result.cloud_provider = "chatgpt"
+        router_result.cloud_provider = "gemini"
         actual_mode = "cloud"
-        actual_provider = "chatgpt"
+        actual_provider = "gemini"
 
     if router_result.mode == "cloud" and router_result.cloud_provider != "none":
         # Try cloud
@@ -952,9 +1018,9 @@ async def chat_stream(req: ChatRequest):
     force_cloud = os.environ.get("FORCE_CLOUD", "1") == "1"
     if force_cloud and router_result.mode == "local":
         router_result.mode = "cloud"
-        router_result.cloud_provider = "chatgpt"
+        router_result.cloud_provider = "gemini"
     
-    provider = router_result.cloud_provider or "chatgpt"
+    provider = router_result.cloud_provider or "gemini"
     history = get_recent_messages(req.student_id, limit=8)
     
     # Build messages for the cloud API
@@ -994,7 +1060,7 @@ async def chat_stream(req: ChatRequest):
             logger.error(f"Stream error ({provider}): {e}")
             # Try non-streaming fallback
             try:
-                fallback_providers = CLOUD_FALLBACK.get(provider, ["chatgpt"])
+                fallback_providers = CLOUD_FALLBACK.get(provider, ["gemini"])
                 for fb in fallback_providers:
                     try:
                         fb_fn = CLOUD_DISPATCH[fb]
