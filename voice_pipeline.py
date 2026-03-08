@@ -888,7 +888,14 @@ def conversation_turn(mic, text, lang):
         t_lower = text.lower()
         
         # ── EASTER EGGS (direct responses, no LLM) ──
-        if any(k in t_lower for k in ["κυπρούλα", "κουμπρούλα", "κιπρούλα", "κυπρουλα", "κουμπρουλα"]) or ("γερασίμου" in t_lower and "αγγελικ" not in t_lower):
+        # Kyproula: catch all possible transcriptions
+        kyproula_names = ["κυπρούλα", "κουμπρούλα", "κιπρούλα", "κυπρουλα", "κουμπρουλα", "κιπρουλα", 
+                          "κυπρούλλα", "κιπρούλλα", "kiproula", "kiproulla", "kyproula", "kyproulla"]
+        # Also catch "ξέρεις την κύπρο" which is Whisper mishearing Κυπρούλα
+        kyproula_context = any(k in t_lower for k in kyproula_names) or \
+                           ("γερασίμου" in t_lower and "αγγελικ" not in t_lower) or \
+                           (any(w in t_lower for w in ["ξέρεις", "γνωρίζεις", "ξερεις"]) and any(w in t_lower for w in ["κιπρο", "κύπρο", "κυπρο"]) and len(text) < 40)
+        if kyproula_context:
             log.info("🥚 Easter egg: Kyproula!")
             state.is_processing = False
             speak("[laughing] Χαχαχα! Ναι, ξέρω την Κυπρούλα Γερασίμου! Είναι η γυναίκα του Χρήστου Γιάννακκα! Τον παντρεύτηκε για να τον βασανίζει!", lang="el")
