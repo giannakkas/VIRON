@@ -13,8 +13,7 @@ body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100v
 .settings-panel,.settings-panel *{cursor:auto !important}
 .hamburger{cursor:pointer !important}
 /* WiFi indicator */
-#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:none;align-items:flex-end;gap:4px;height:36px}
-#wifiInd.checked{display:flex}
+#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:flex;align-items:flex-end;gap:4px;height:36px}
 .wifi-bar{width:8px;border-radius:3px;transition:background 0.3s}
 .wifi-bar:nth-child(1){height:10px}
 .wifi-bar:nth-child(2){height:18px}
@@ -63,7 +62,7 @@ svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-co
 #audioWaveform{position:fixed;bottom:55px;left:50%;transform:translateX(-50%);width:min(70vw,500px);height:40px;pointer-events:none;z-index:10;opacity:0;transition:opacity 0.4s}
 #audioWaveform.active{opacity:1}
 /* Engagement */
-.engagement-bar{position:fixed;top:12px;left:12px;display:none;align-items:center;gap:8px;z-index:50;background:rgba(0,0,0,0.5);padding:4px 10px;border-radius:20px;font-size:11px}
+.engagement-bar{position:fixed;top:12px;left:60px;display:none;align-items:center;gap:8px;z-index:50;background:rgba(0,0,0,0.5);padding:4px 10px;border-radius:20px;font-size:11px}
 .eng-dot{width:8px;height:8px;border-radius:50%;transition:background 0.5s}
 .eng-label{color:rgba(255,255,255,0.5)}
 /* Hamburger + Settings */
@@ -2521,7 +2520,7 @@ function endStudentSession(){
 
 // ===== STUDENT EMOTION =====
 let _emotionErrors=0;
-function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{_emotionErrors=0;sEmo=d;const b=document.getElementById("engBar"),dot=document.getElementById("engDot"),l=document.getElementById("engLabel");if(!d.face_detected){b.style.display="flex";dot.style.background="#666";l.textContent="";document.getElementById("personName").textContent="";return}b.style.display="flex";const e=d.engagement_score;dot.style.background=e>70?"#00ff88":e>40?"#ffaa00":"#ff4444";l.textContent=`${e}%`;
+function pollSE(){if(!emotionDetectionOn)return;fetch('/api/student/emotion').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{_emotionErrors=0;sEmo=d;const b=document.getElementById("engBar"),dot=document.getElementById("engDot"),l=document.getElementById("engLabel");if(!d.face_detected){b.style.display="none";dot.style.background="#666";l.textContent="";document.getElementById("personName").textContent="";return}b.style.display="flex";const e=d.engagement_score;dot.style.background=e>70?"#00ff88":e>40?"#ffaa00":"#ff4444";l.textContent=`${e}%`;
 // Show recognized person name
 const pn=document.getElementById("personName");
 if(d.recognized_person){pn.textContent=d.recognized_person;pn.style.color="#00ff88";
@@ -3584,15 +3583,12 @@ if(volSlider){
 
 // ===== WIFI INDICATOR =====
 function updateWifi(ok){
-  const ind=document.getElementById('wifiInd');
   const bars=document.querySelectorAll('.wifi-bar');
   const txt=document.getElementById('wifiText');
   if(ok){
-    ind.classList.remove('checked');  // Hide when connected
     bars.forEach(b=>b.className='wifi-bar on');
     txt.textContent='';
   }else{
-    ind.classList.add('checked');  // Show only when NO SIGNAL
     bars.forEach(b=>b.className='wifi-bar off');
     txt.textContent='NO SIGNAL';txt.style.color='rgba(255,60,60,0.8)';
   }
