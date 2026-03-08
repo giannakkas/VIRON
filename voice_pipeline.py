@@ -631,6 +631,7 @@ _response_lock = threading.Lock()
 _current_ffplay = None  # Track ffplay process for interrupt
 _music_process = None   # Track music process separately
 _music_playing = False
+_audio_playing = False  # True ONLY when ffplay is outputting sound
 
 # Conversation history (last 10 exchanges for context)
 _conversation_history = []
@@ -734,11 +735,14 @@ def speak(text, lang="auto"):
                 tmp.write(resp.content)
                 tmp_path = tmp.name
             # Set speaking ONLY when audio actually starts playing
+            global _audio_playing
             state.tts_start()
+            _audio_playing = True
             _current_ffplay = subprocess.Popen(
                 ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
             )
             _current_ffplay.wait()  # Block until done or killed
+            _audio_playing = False
             _current_ffplay = None
             state.tts_end()
             try:
@@ -1898,6 +1902,7 @@ def pipeline_state():
         "listening": state.is_listening,
         "processing": state.is_processing,
         "speaking": state.is_speaking and not _music_playing,
+        "audio_playing": _audio_playing,  # True ONLY when ffplay is outputting sound
         "music": _music_playing,
         "in_conversation": state.in_conversation,
         "language": state.language,
