@@ -147,3 +147,32 @@ curl -sf http://localhost:8085/wakeword/status >/dev/null 2>&1 && echo "   ✅ W
 curl -sf http://localhost:5000/api/ping >/dev/null 2>&1 && echo "   ✅ Flask (5000)" || echo "   ❌ Flask (5000)"
 curl -sf http://localhost:8080/health >/dev/null 2>&1 && echo "   ✅ Gateway (8080)" || echo "   ❌ Gateway (8080)"
 echo ""
+
+# ─── 5. Refresh the browser (face) ───
+echo "🔄 Refreshing browser face..."
+# Try xdotool first (sends F5 to any Chromium/Firefox window)
+if command -v xdotool &>/dev/null; then
+    WID=$(xdotool search --onlyvisible --name "VIRON\|Chromium\|Firefox\|chrome" 2>/dev/null | head -1)
+    if [ -n "$WID" ]; then
+        xdotool key --window "$WID" F5
+        echo "   ✅ Browser refreshed (xdotool)"
+    else
+        echo "   ⚠ No browser window found — refresh manually (F5)"
+    fi
+else
+    # Fallback: try wmctrl
+    if command -v wmctrl &>/dev/null; then
+        wmctrl -a "Chromium" 2>/dev/null || wmctrl -a "VIRON" 2>/dev/null
+        xdotool key F5 2>/dev/null && echo "   ✅ Browser refreshed" || echo "   ⚠ Refresh manually (F5)"
+    else
+        echo "   ⚠ No xdotool/wmctrl — refresh browser manually (F5)"
+    fi
+fi
+echo ""
+
+# ─── 6. Tail logs (gateway is the primary log to watch) ───
+echo "═══════════════════════════════════════════"
+echo "📋 LIVE GATEWAY LOG (Ctrl+C to stop watching)"
+echo "═══════════════════════════════════════════"
+echo ""
+tail -f /tmp/viron_gateway.log
