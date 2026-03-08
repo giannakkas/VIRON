@@ -1014,20 +1014,29 @@ CRITICAL RULES:
             
             # Detect city from query
             CITIES = {
-                "ορόκλινη": (34.88, 33.66, "Ορόκλινη"), "λάρνακα": (34.92, 33.63, "Λάρνακα"),
-                "λευκωσία": (35.17, 33.36, "Λευκωσία"), "λεμεσό": (34.68, 33.04, "Λεμεσός"),
-                "πάφο": (34.77, 32.42, "Πάφος"), "αμμόχωστ": (35.12, 33.94, "Αμμόχωστος"),
-                "αθήνα": (37.98, 23.73, "Αθήνα"), "θεσσαλονίκ": (40.63, 22.95, "Θεσσαλονίκη"),
-                "λονδίνο": (51.51, -0.13, "Λονδίνο"), "παρίσι": (48.86, 2.35, "Παρίσι"),
-                "nicosia": (35.17, 33.36, "Λευκωσία"), "london": (51.51, -0.13, "London"),
-                "paris": (48.86, 2.35, "Paris"), "athens": (37.98, 23.73, "Athens"),
-                "larnaca": (34.92, 33.63, "Larnaca"), "limassol": (34.68, 33.04, "Limassol"),
+                "ορόκλινη": (34.88, 33.66, "Ορόκλινη"), "οροκλινη": (34.88, 33.66, "Ορόκλινη"), "oroklini": (34.88, 33.66, "Oroklini"),
+                "λάρνακα": (34.92, 33.63, "Λάρνακα"), "λαρνακα": (34.92, 33.63, "Λάρνακα"), "larnaca": (34.92, 33.63, "Larnaca"),
+                "λευκωσία": (35.17, 33.36, "Λευκωσία"), "λευκωσια": (35.17, 33.36, "Λευκωσία"), "nicosia": (35.17, 33.36, "Nicosia"),
+                "λεμεσό": (34.68, 33.04, "Λεμεσός"), "λεμεσο": (34.68, 33.04, "Λεμεσός"), "limassol": (34.68, 33.04, "Limassol"),
+                "πάφο": (34.77, 32.42, "Πάφος"), "παφο": (34.77, 32.42, "Πάφος"), "paphos": (34.77, 32.42, "Paphos"),
+                "αμμόχωστ": (35.12, 33.94, "Αμμόχωστος"), "αμμοχωστ": (35.12, 33.94, "Αμμόχωστος"), "famagusta": (35.12, 33.94, "Famagusta"),
+                "αθήνα": (37.98, 23.73, "Αθήνα"), "αθηνα": (37.98, 23.73, "Αθήνα"), "αθίνα": (37.98, 23.73, "Αθήνα"), "athens": (37.98, 23.73, "Athens"),
+                "θεσσαλονίκ": (40.63, 22.95, "Θεσσαλονίκη"), "θεσσαλονικ": (40.63, 22.95, "Θεσσαλονίκη"),
+                "λονδίνο": (51.51, -0.13, "Λονδίνο"), "λονδινο": (51.51, -0.13, "Λονδίνο"), "london": (51.51, -0.13, "London"),
+                "παρίσι": (48.86, 2.35, "Παρίσι"), "παρισι": (48.86, 2.35, "Παρίσι"), "paris": (48.86, 2.35, "Paris"),
+                "νέα υόρκ": (40.71, -74.01, "Νέα Υόρκη"), "new york": (40.71, -74.01, "New York"),
+                "βερολίνο": (52.52, 13.41, "Βερολίνο"), "berlin": (52.52, 13.41, "Berlin"),
+                "ρώμη": (41.90, 12.50, "Ρώμη"), "ρωμη": (41.90, 12.50, "Ρώμη"), "rome": (41.90, 12.50, "Rome"),
+                "κύπρο": (35.00, 33.43, "Κύπρος"), "κυπρο": (35.00, 33.43, "Κύπρος"), "cyprus": (35.00, 33.43, "Cyprus"),
             }
             lat, lon, city_name = 34.88, 33.66, "Ορόκλινη"  # default
             for city_key, (clat, clon, cname) in CITIES.items():
                 if city_key in t_lower:
                     lat, lon, city_name = clat, clon, cname
+                    log.info(f"🌤️ City detected: '{city_key}' → {cname}")
                     break
+            else:
+                log.info(f"🌤️ No city in text, using default: Ορόκλινη")
             
             try:
                 import requests as _req
@@ -1141,17 +1150,23 @@ CRITICAL RULES:
                 log.warning(f"Weather failed: {e}")
         
         # ── NEWS ──
-        if any(w in t_lower for w in ["νέα σήμερα", "ειδήσεις", "news today", "τι νέα", "σημερινά νέα"]):
+        is_news = any(w in t_lower for w in ["νέα σήμερα", "ειδήσεις", "news today", "τι νέα", "σημερινά νέα", "νέα κύπρο", "νεα κυπρο", "νέα στην", "latest news", "πες μου νέα", "πες μου τα νέα"])
+        if is_news:
             log.info("📰 News request detected")
             try:
                 import requests as _req
                 import xml.etree.ElementTree as ET
                 import re as _re
                 
-                if state.language == "en":
+                # Detect if asking for specific region/topic
+                is_cyprus = any(w in t_lower for w in ["κύπρο", "κυπρο", "cyprus"])
+                
+                if is_cyprus:
+                    rss_url = "https://news.google.com/rss/search?q=Cyprus&hl=el&gl=CY&ceid=CY:el"
+                elif state.language == "en":
                     rss_url = "https://news.google.com/rss?hl=en&gl=US&ceid=US:en"
                 else:
-                    rss_url = "https://news.google.com/rss?hl=el&gl=GR&ceid=GR:el"
+                    rss_url = "https://news.google.com/rss?hl=el&gl=CY&ceid=CY:el"
                 
                 r = _req.get(rss_url, timeout=5)
                 if r.status_code == 200:
@@ -1200,29 +1215,45 @@ CRITICAL RULES:
                     
                     # Fetch images in background (non-blocking)
                     def _fetch_news_images(items, urls):
-                        try:
-                            for idx, url in urls:
-                                try:
-                                    resp2 = _req.get(url, timeout=3, allow_redirects=True,
-                                                    headers={"User-Agent": "Mozilla/5.0"})
-                                    if resp2.status_code == 200:
-                                        og = _re.search(r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', resp2.text[:6000])
-                                        if not og:
-                                            og = _re.search(r'content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', resp2.text[:6000])
-                                        if og:
-                                            items[idx]["image"] = og.group(1)
-                                except:
-                                    pass
-                            # Send updated items with images
-                            with _response_lock:
-                                _response_queue.append({
-                                    "text": "", "lang": state.language, "time": time.time(),
-                                    "news": {"items": items, "update": True},
-                                })
-                            img_count = sum(1 for n in items if n.get("image"))
-                            log.info(f"📰 Images fetched: {img_count}/{len(items)}")
-                        except Exception as e:
-                            log.warning(f"News image fetch failed: {e}")
+                        import re as _re2
+                        for idx, url in urls:
+                            try:
+                                log.info(f"  📸 Fetching image for [{idx}]: {url[:60]}...")
+                                resp2 = _req.get(url, timeout=5, allow_redirects=True,
+                                                headers={"User-Agent": "Mozilla/5.0 (X11; Linux) Chrome/120"})
+                                if resp2.status_code != 200:
+                                    log.info(f"  📸 [{idx}] HTTP {resp2.status_code}")
+                                    continue
+                                html = resp2.text[:15000]
+                                img = None
+                                # Try og:image (multiple formats)
+                                for pattern in [
+                                    r'og:image["\'][^>]*content=["\']([^"\']+)["\']',
+                                    r'content=["\']([^"\']+)["\'][^>]*og:image',
+                                    r'twitter:image["\'][^>]*content=["\']([^"\']+)["\']',
+                                    r'content=["\']([^"\']+)["\'][^>]*twitter:image',
+                                    r'"og:image"\s*content="([^"]+)"',
+                                    r"'og:image'\s*content='([^']+)'",
+                                ]:
+                                    m = _re2.search(pattern, html)
+                                    if m and m.group(1).startswith('http'):
+                                        img = m.group(1)
+                                        break
+                                if img:
+                                    items[idx]["image"] = img
+                                    log.info(f"  📸 [{idx}] ✅ Got image")
+                                else:
+                                    log.info(f"  📸 [{idx}] ❌ No og:image found")
+                            except Exception as e:
+                                log.info(f"  📸 [{idx}] Error: {e}")
+                        # Send updated items with images
+                        with _response_lock:
+                            _response_queue.append({
+                                "text": "", "lang": state.language, "time": time.time(),
+                                "news": {"items": items, "update": True},
+                            })
+                        img_count = sum(1 for n in items if n.get("image"))
+                        log.info(f"📰 Images done: {img_count}/{len(items)}")
                     
                     threading.Thread(target=_fetch_news_images, args=(news_items, urls_to_fetch), daemon=True).start()
                     return
