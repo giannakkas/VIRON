@@ -13,7 +13,8 @@ body{background:#000;color:#e0f0ff;font-family:'Segoe UI',sans-serif;height:100v
 .settings-panel,.settings-panel *{cursor:auto !important}
 .hamburger{cursor:pointer !important}
 /* WiFi indicator */
-#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:flex;align-items:flex-end;gap:4px;height:36px}
+#wifiInd{position:fixed;top:10px;left:14px;z-index:100;display:none;align-items:flex-end;gap:4px;height:36px}
+#wifiInd.checked{display:flex}
 .wifi-bar{width:8px;border-radius:3px;transition:background 0.3s}
 .wifi-bar:nth-child(1){height:10px}
 .wifi-bar:nth-child(2){height:18px}
@@ -931,8 +932,23 @@ setInterval(()=>{
       }
       // Handle news from pipeline — fullscreen overlay
       if(d.news&&d.news.items){
-        D('📰 Pipeline news: '+d.news.items.length+' items');
-        setTimeout(()=>showNews(d.news),500);
+        D('📰 Pipeline news: '+d.news.items.length+' items'+(d.news.update?' (image update)':''));
+        if(d.news.update&&_newsVisible){
+          // Update images in existing cards
+          d.news.items.forEach((n,i)=>{
+            if(n.image){
+              const card=document.querySelectorAll('.news-card')[i];
+              if(card){
+                const imgEl=card.querySelector('.news-card-img');
+                if(imgEl&&imgEl.classList.contains('placeholder')){
+                  imgEl.outerHTML=`<img class="news-card-img" src="${n.image}" onerror="this.style.display='none'">`;
+                }
+              }
+            }
+          });
+        }else{
+          setTimeout(()=>showNews(d.news),500);
+        }
       }
       if(d.text){
         pipelineQueue.push(d);
@@ -3568,12 +3584,15 @@ if(volSlider){
 
 // ===== WIFI INDICATOR =====
 function updateWifi(ok){
+  const ind=document.getElementById('wifiInd');
   const bars=document.querySelectorAll('.wifi-bar');
   const txt=document.getElementById('wifiText');
   if(ok){
+    ind.classList.remove('checked');  // Hide when connected
     bars.forEach(b=>b.className='wifi-bar on');
     txt.textContent='';
   }else{
+    ind.classList.add('checked');  // Show only when NO SIGNAL
     bars.forEach(b=>b.className='wifi-bar off');
     txt.textContent='NO SIGNAL';txt.style.color='rgba(255,60,60,0.8)';
   }

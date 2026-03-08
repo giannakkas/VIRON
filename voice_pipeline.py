@@ -1138,7 +1138,6 @@ CRITICAL RULES:
                 import requests as _req
                 import xml.etree.ElementTree as ET
                 import re as _re
-                from concurrent.futures import ThreadPoolExecutor, as_completed
                 
                 if state.language == "en":
                     rss_url = "https://news.google.com/rss?hl=en&gl=US&ceid=US:en"
@@ -1173,43 +1172,7 @@ CRITICAL RULES:
                         })
                         urls_to_fetch.append((len(news_items) - 1, url))
                     
-                    # Fetch og:image from each article in parallel
-                    def _fetch_og_image(idx_url):
-                        idx, url = idx_url
-                        try:
-                            resp = _req.get(url, timeout=4, allow_redirects=True,
-                                          headers={"User-Agent": "Mozilla/5.0"})
-                            if resp.status_code == 200:
-                                # Look for og:image
-                                og = _re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', resp.text[:8000])
-                                if not og:
-                                    og = _re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', resp.text[:8000])
-                                if og:
-                                    return idx, og.group(1)
-                                # Fallback: twitter:image
-                                tw = _re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', resp.text[:8000])
-                                if tw:
-                                    return idx, tw.group(1)
-                        except:
-                            pass
-                        return idx, ""
-                    
-                    log.info(f"📰 Fetching images for {len(urls_to_fetch)} articles...")
-                    with ThreadPoolExecutor(max_workers=6) as pool:
-                        futures = [pool.submit(_fetch_og_image, u) for u in urls_to_fetch]
-                        for f in as_completed(futures, timeout=6):
-                            try:
-                                idx, img = f.result()
-                                if img:
-                                    news_items[idx]["image"] = img
-                                    log.info(f"  📸 Got image for article {idx}")
-                            except:
-                                pass
-                    
-                    img_count = sum(1 for n in news_items if n["image"])
-                    log.info(f"📰 {len(news_items)} articles, {img_count} with images")
-                    
-                    # Send news visual to browser
+                    # Send news to browser IMMEDIATELY (without images)
                     with _response_lock:
                         _response_queue.append({
                             "text": "", "lang": state.language, "time": time.time(),
@@ -1225,6 +1188,34 @@ CRITICAL RULES:
                     
                     state.is_processing = False
                     speak(news_text)
+                    
+                    # Fetch images in background (non-blocking)
+                    def _fetch_news_images(items, urls):
+                        try:
+                            for idx, url in urls:
+                                try:
+                                    resp2 = _req.get(url, timeout=3, allow_redirects=True,
+                                                    headers={"User-Agent": "Mozilla/5.0"})
+                                    if resp2.status_code == 200:
+                                        og = _re.search(r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', resp2.text[:6000])
+                                        if not og:
+                                            og = _re.search(r'content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', resp2.text[:6000])
+                                        if og:
+                                            items[idx]["image"] = og.group(1)
+                                except:
+                                    pass
+                            # Send updated items with images
+                            with _response_lock:
+                                _response_queue.append({
+                                    "text": "", "lang": state.language, "time": time.time(),
+                                    "news": {"items": items, "update": True},
+                                })
+                            img_count = sum(1 for n in items if n.get("image"))
+                            log.info(f"📰 Images fetched: {img_count}/{len(items)}")
+                        except Exception as e:
+                            log.warning(f"News image fetch failed: {e}")
+                    
+                    threading.Thread(target=_fetch_news_images, args=(news_items, urls_to_fetch), daemon=True).start()
                     return
             except Exception as e:
                 log.warning(f"News failed: {e}")
@@ -1726,10 +1717,20 @@ def _conversation_loop(mic):
                 return
             
             # Process and respond
-            conversation_turn(mic, text, lang)
+            try:
+                conversation_turn(mic, text, lang)
+            except Exception as e:
+                log.error(f"❌ conversation_turn crashed: {e}")
+                state.is_processing = False
+                state.is_speaking = False
             
-            # Wait for TTS to finish before listening again
+            # Wait for TTS to finish (with timeout)
+            _tts_wait = time.time()
             while state.is_speaking:
+                if time.time() - _tts_wait > 30:
+                    log.warning("⚠ TTS wait timeout 30s — force reset!")
+                    state.is_speaking = False
+                    break
                 time.sleep(0.2)
             
             # Brief pause after TTS for echo to fade
