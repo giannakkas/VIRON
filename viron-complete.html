@@ -2604,6 +2604,8 @@ if(em)cE(em);stopAllRecognition();msgs.push({role:"assistant",content:m});say(m)
 let wbO=false,wbT=null,wbPresenting=false;
 
 function openWB(t,steps){
+  D('📋 openWB: title="'+t+'", steps='+steps.length);
+  steps.forEach((s,i)=>D('📋   step['+i+']: type='+s.type+' content="'+s.text.substring(0,60)+'..."'));
   wbO=true;
   wbPresenting=true;
   stopAllRecognition();
@@ -2702,6 +2704,8 @@ function closeWB(){
 }
 
 function parseWB(t){
+  D('📋 parseWB: parsing AI response for WHITEBOARD tags, raw_len='+t.length);
+  D('📋 parseWB: raw_content_preview="'+t.substring(0,200)+'..."');
   // Try with proper closing tag first
   let m=t.match(/\[WHITEBOARD:(.*?)\]([\s\S]*?)\[\/WHITEBOARD\]/);
   if(!m){
@@ -3524,7 +3528,8 @@ function parseWeatherFromGateway(d){
 let _newsVisible=false;let _newsCloseTimer=null;
 
 function showNews(data){
-  if(!data||!data.items||data.items.length===0)return;
+  if(!data||!data.items||data.items.length===0){D('📰 showNews: no items');return;}
+  D('📰 showNews: '+data.items.length+' items, opening fullscreen overlay');
   _newsVisible=true;
   const face=document.getElementById("face");
   const wfEl=document.getElementById("audioWaveform");
@@ -3538,6 +3543,7 @@ function showNews(data){
       :`<div class="news-card-img placeholder">${icons[i%icons.length]}</div>`;
     return `<div class="news-card">${imgHtml}<div class="news-card-body"><div class="news-card-title">${n.headline}</div><div class="news-card-source">${n.source}</div></div></div>`;
   }).join("");
+  D('📰 showNews: grid rendered with '+data.items.length+' cards, grid height=calc(100vh-32px)');
   
   setTimeout(()=>document.getElementById("newsOverlay").classList.add("active"),200);
   clearTimeout(_newsCloseTimer);

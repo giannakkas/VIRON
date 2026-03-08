@@ -238,13 +238,20 @@ _CONTINUATION_PATTERNS = [
 def detect_continuation(message: str, student_id: str) -> Optional[str]:
     """Check if this is a follow-up request. Returns last cloud provider or None."""
     msg_lower = message.lower()
-    is_followup = any(p in msg_lower for p in _CONTINUATION_PATTERNS)
-    if not is_followup:
+    matched_pattern = None
+    for p in _CONTINUATION_PATTERNS:
+        if p in msg_lower:
+            matched_pattern = p
+            break
+    if not matched_pattern:
+        logger.info(f"🔗 detect_continuation: no follow-up pattern in '{message[:50]}'")
         return None
+    logger.info(f"🔗 detect_continuation: MATCH pattern='{matched_pattern}' in '{message[:50]}'")
     last_provider = get_last_provider(student_id)
     if last_provider and last_provider != "none":
-        logger.info(f"  🔗 Continuation detected → reusing provider '{last_provider}'")
+        logger.info(f"🔗 detect_continuation: last_provider='{last_provider}' → reusing")
         return last_provider
+    logger.info(f"🔗 detect_continuation: no last_provider found → default 'gemini'")
     return "gemini"  # Default to gemini for continuations
 
 
@@ -656,18 +663,28 @@ async def call_cloud(provider: str, message: str, history: list, age: int, langu
 
     # Try primary provider
     providers_to_try = [provider] + CLOUD_FALLBACK.get(provider, [])
+    logger.info(f"☁️  call_cloud: primary={provider}, fallback_chain={providers_to_try}, history_len={len(history)}")
     for p in providers_to_try:
         fn = CLOUD_DISPATCH.get(p)
         if fn is None:
+            logger.warning(f"☁️  call_cloud: provider '{p}' not in CLOUD_DISPATCH — skipping")
             continue
         try:
+            logger.info(f"☁️  call_cloud: trying {p}...")
+            t0 = time.time()
             reply = await fn(enriched_message, history, system)
+            elapsed = (time.time() - t0) * 1000
             if reply and len(reply.strip()) > 2:
+                logger.info(f"☁️  call_cloud: ✅ {p} responded in {elapsed:.0f}ms, reply_len={len(reply)}")
+                logger.info(f"☁️  call_cloud: reply_preview='{reply[:120]}...'")
                 return reply, p
+            else:
+                logger.warning(f"☁️  call_cloud: {p} returned empty/short reply after {elapsed:.0f}ms")
         except Exception as e:
-            logger.warning(f"Cloud {p} failed: {e}")
+            logger.warning(f"☁️  call_cloud: ❌ {p} failed after {(time.time()-t0)*1000:.0f}ms: {e}")
             continue
 
+    logger.error(f"☁️  call_cloud: ALL providers failed for '{message[:60]}'")
     return None, "none"
 
 
@@ -680,11 +697,19 @@ async def startup():
     logger.info(f"  Router: {cfg.ROUTER_URL}")
     logger.info(f"  Tutor:  {cfg.TUTOR_URL}")
     logger.info(f"  Cloud:  ChatGPT={'✓' if cfg.OPENAI_API_KEY else '✗'} | Claude={'✓' if cfg.ANTHROPIC_API_KEY else '✗'} | Gemini={'✓' if cfg.GEMINI_API_KEY else '✗'}")
+    logger.info(f"  PRIMARY: Gemini ({cfg.GEMINI_MODEL}) | Fallback: ChatGPT ({cfg.OPENAI_MODEL}) → Claude ({cfg.ANTHROPIC_MODEL})")
+    logger.info(f"  Models:  FORCE_CLOUD={os.environ.get('FORCE_CLOUD', '1')} | CLOUD_TIMEOUT={cfg.CLOUD_TIMEOUT}s")
+    logger.info(f"  Continuation patterns: {len(_CONTINUATION_PATTERNS)} loaded")
 
 
 @app.post("/v1/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     start = time.time()
+    logger.info(f"")
+    logger.info(f"{'='*70}")
+    logger.info(f"💬 NEW REQUEST: student={req.student_id} age={req.age} lang={req.language}")
+    logger.info(f"💬 MESSAGE: '{req.message}'")
+    logger.info(f"{'='*70}")
 
     # 1. Ensure student in DB
     ensure_student(req.student_id, req.age, req.language)
@@ -731,7 +756,8 @@ async def chat(req: ChatRequest):
         
         latency = _ms(start)
         log_message(req.student_id, "assistant", cloud_reply, "cloud", used, latency_ms=latency)
-        logger.info(f"[{req.student_id}] FAST cloud/{used} | {latency:.0f}ms | '{req.message[:60]}'")
+        logger.info(f"✅ [{req.student_id}] FAST cloud/{used} | {latency:.0f}ms | reply_len={len(cloud_reply)} | '{req.message[:60]}'")
+        logger.info(f"✅ FAST reply_preview: '{cloud_reply[:150]}...'")
         
         return ChatResponse(
             reply=cloud_reply, mode="cloud", cloud_provider=used or "gemini",
@@ -747,8 +773,9 @@ async def chat(req: ChatRequest):
     continuation_provider = detect_continuation(req.message, req.student_id)
     if continuation_provider:
         # This is a follow-up — skip router, use same provider, inject context hint
-        logger.info(f"🔗 CONTINUATION: '{req.message[:40]}' → cloud/{continuation_provider}")
+        logger.info(f"🔗 CONTINUATION PATH: '{req.message[:60]}' → cloud/{continuation_provider}")
         history = get_recent_messages(req.student_id, limit=12)
+        logger.info(f"🔗 CONTINUATION: history_len={len(history)}, last_msgs={[h['content'][:40] for h in history[-3:]]}")
         log_message(req.student_id, "user", req.message, "cloud", continuation_provider)
         
         # Add hint so the AI knows this is a follow-up about the previous topic
@@ -760,14 +787,17 @@ async def chat(req: ChatRequest):
         enriched_msg, weather_city = await enrich_message(
             req.message + context_hint, req.language, req.student_id, history
         )
+        logger.info(f"🔗 CONTINUATION: calling cloud/{continuation_provider}...")
         cloud_reply, used = await call_cloud(continuation_provider, enriched_msg, history, req.age, req.language)
         if not cloud_reply:
+            logger.warning(f"🔗 CONTINUATION: cloud failed, falling back to local tutor")
             cloud_reply = await call_tutor(enriched_msg, req.age, req.language, history)
             used = "none"
         
         latency = _ms(start)
         log_message(req.student_id, "assistant", cloud_reply, "cloud", used, latency_ms=latency)
-        logger.info(f"[{req.student_id}] CONTINUATION cloud/{used} | {latency:.0f}ms | '{req.message[:60]}'")
+        logger.info(f"✅ [{req.student_id}] CONTINUATION cloud/{used} | {latency:.0f}ms | reply_len={len(cloud_reply)} | '{req.message[:60]}'")
+        logger.info(f"✅ CONTINUATION reply_preview: '{cloud_reply[:150]}...'")
         
         return ChatResponse(
             reply=cloud_reply, mode="cloud", cloud_provider=used or continuation_provider,
@@ -780,20 +810,24 @@ async def chat(req: ChatRequest):
         )
 
     # 3b. Call local router (Gemma 2B) for intent classification
+    logger.info(f"🧠 ROUTER: classifying '{req.message[:60]}'...")
     router_result = await call_router(req.message, req.age, req.language)
     retried = False
     if router_result is None:
         # Retry once
-        logger.info("Router failed, retrying...")
+        logger.info("🧠 ROUTER: failed, retrying...")
         router_result = await call_router(req.message, req.age, req.language)
         retried = True
     if router_result is None:
         # Apply default routing
-        logger.info("Router unavailable, using default routing")
+        logger.info("🧠 ROUTER: unavailable, using default routing")
         router_result = default_routing(req.message)
+    
+    logger.info(f"🧠 ROUTER result: intent={router_result.intent_type} subject={router_result.subject} mode={router_result.mode} provider={router_result.cloud_provider} complexity={router_result.complexity_level} (retried={retried})")
 
     # Override safety: if router says unsafe, block it
     if router_result.safety_flag == "unsafe":
+        logger.warning(f"🛑 SAFETY BLOCK: '{req.message[:60]}'")
         blocked_reply = get_blocked_response(req.age, req.language)
         log_message(req.student_id, "user", req.message, "blocked", "", router_result.dict())
         log_message(req.student_id, "assistant", blocked_reply, "blocked", "")
@@ -803,10 +837,15 @@ async def chat(req: ChatRequest):
         )
 
     # Smart override: catch misclassified educational questions
+    pre_override = f"{router_result.mode}/{router_result.cloud_provider}"
     router_result = override_routing(router_result, req.message)
+    post_override = f"{router_result.mode}/{router_result.cloud_provider}"
+    if pre_override != post_override:
+        logger.info(f"🔄 OVERRIDE: {pre_override} → {post_override}")
 
     # 4. Get conversation history for context (BEFORE logging current message)
     history = get_recent_messages(req.student_id, limit=12)
+    logger.info(f"📜 HISTORY: {len(history)} messages loaded")
 
     # 5. Log user message
     log_message(req.student_id, "user", req.message,
@@ -855,8 +894,8 @@ async def chat(req: ChatRequest):
     latency = _ms(start)
     log_message(req.student_id, "assistant", reply, actual_mode, actual_provider, latency_ms=latency)
 
-    logger.info(f"[{req.student_id}] {actual_mode}/{actual_provider} | {router_result.intent_type}/{router_result.subject} | {latency:.0f}ms | '{req.message[:60]}'")
-
+    logger.info(f"✅ [{req.student_id}] {actual_mode}/{actual_provider} | {router_result.intent_type}/{router_result.subject} | {latency:.0f}ms | reply_len={len(reply)} | '{req.message[:60]}'")
+    logger.info(f"✅ MAIN reply_preview: '{reply[:150]}...'")
     # Check if weather was in context → return structured data for visual overlay
     weather_data = None
     if weather_city and reply and "[WEATHER DATA" in reply:
