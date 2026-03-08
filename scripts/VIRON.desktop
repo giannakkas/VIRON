@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VIRON Robot
+Comment=Start or Restart VIRON AI Robot
+Exec=bash -c 'cd ~/VIRON && bash scripts/start_viron.sh'
+Icon=face-smile
+Terminal=true
+Categories=Utility;
+StartupNotify=false

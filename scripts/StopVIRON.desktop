@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Stop VIRON
+Comment=Stop all VIRON services
+Exec=bash -c 'cd ~/VIRON && bash scripts/stop_viron.sh'
+Icon=process-stop
+Terminal=true
+Categories=Utility;
+StartupNotify=false
