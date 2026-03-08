@@ -16,7 +16,7 @@ if [ "$1" = "stop" ]; then
     pkill -f "wakeword/service.py" 2>/dev/null
     pkill -f "backend/server.py" 2>/dev/null
     pkill -f "gateway/main.py" 2>/dev/null
-    pkill -f "chromium" 2>/dev/null
+    pkill -f "viron_kiosk.py" 2>/dev/null
     sleep 2
     echo "✓ Stopped"
     exit 0
@@ -35,7 +35,7 @@ pkill -f "llama-server" 2>/dev/null
 pkill -f "wakeword/service.py" 2>/dev/null
 pkill -f "backend/server.py" 2>/dev/null
 pkill -f "gateway/main.py" 2>/dev/null
-pkill -f "chromium" 2>/dev/null
+pkill -f "viron_kiosk.py" 2>/dev/null
 sleep 2
 
 # ─── Find llama-server ───
@@ -150,24 +150,14 @@ curl -sf http://localhost:5000/api/ping >/dev/null 2>&1 && echo "   ✅ Flask (5
 curl -sf http://localhost:8080/health >/dev/null 2>&1 && echo "   ✅ Gateway (8080)" || echo "   ❌ Gateway (8080)"
 echo ""
 
-# ─── 5. Refresh the browser (face) ───
-echo "🔄 Restarting browser face..."
+# ─── 5. Restart the face (viron_kiosk.py) ───
+echo "🔄 Restarting face (viron_kiosk.py)..."
 export DISPLAY=:0
 export XAUTHORITY=/home/test/.Xauthority
-FACE_URL="http://localhost:5000"
-
-# Kill existing browser
-pkill -f "chromium" 2>/dev/null
+pkill -f "viron_kiosk.py" 2>/dev/null
 sleep 2
-
-# Reopen with same kiosk flags as setup.sh autostart
-chromium-browser --kiosk --noerrdialogs --disable-translate --no-first-run \
-    --fast --fast-start --disable-features=TranslateUI \
-    --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream \
-    --disable-pinch --overscroll-history-navigation=0 \
-    --disable-session-crashed-bubble --check-for-update-interval=31536000 \
-    "$FACE_URL" &>/dev/null &
-echo "   ✅ Chromium kiosk restarted (PID: $!)"
+python3 /home/test/viron_kiosk.py &>/dev/null &
+echo "   ✅ Face restarted (PID: $!)"
 echo ""
 
 # ─── 6. Tail logs (gateway is the primary log to watch) ───
