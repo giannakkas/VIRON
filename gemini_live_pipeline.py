@@ -340,66 +340,70 @@ async def gemini_live_session(mic: MicStream):
             async def receive_responses():
                 audio_buffer = bytearray()
                 is_speaking = False
-                try:
-                    async for msg in session.receive():
-                        if _stop_session.is_set():
-                            break
+                while not _stop_session.is_set():
+                    try:
+                        async for msg in session.receive():
+                            if _stop_session.is_set():
+                                return
 
-                        sc = msg.server_content
-                        if sc is None:
-                            continue
+                            sc = msg.server_content
+                            if sc is None:
+                                continue
 
-                        # Handle model audio output — buffer chunks
-                        if sc.model_turn and sc.model_turn.parts:
-                            for part in sc.model_turn.parts:
-                                if part.inline_data and part.inline_data.data:
-                                    if not is_speaking:
-                                        is_speaking = True
-                                        state.set_status("speaking")
-                                        push_to_ui(emotion="happy")
-                                    audio_buffer.extend(part.inline_data.data)
+                            # Handle model audio output — buffer chunks
+                            if sc.model_turn and sc.model_turn.parts:
+                                for part in sc.model_turn.parts:
+                                    if part.inline_data and part.inline_data.data:
+                                        if not is_speaking:
+                                            is_speaking = True
+                                            state.set_status("speaking")
+                                            push_to_ui(emotion="happy")
+                                        audio_buffer.extend(part.inline_data.data)
 
-                        # Handle input transcript (what the student said)
-                        if sc.input_transcription and sc.input_transcription.text:
-                            transcript = sc.input_transcription.text.strip()
-                            if transcript:
-                                log.info(f"🎤 Student: \"{transcript}\"")
-                                push_to_ui(subtitle=transcript)
+                            # Handle input transcript (what the student said)
+                            if sc.input_transcription and sc.input_transcription.text:
+                                transcript = sc.input_transcription.text.strip()
+                                if transcript:
+                                    log.info(f"🎤 Student: \"{transcript}\"")
+                                    push_to_ui(subtitle=transcript)
 
-                        # Handle output transcript (what VIRON said)
-                        if sc.output_transcription and sc.output_transcription.text:
-                            transcript = sc.output_transcription.text.strip()
-                            if transcript:
-                                log.info(f"🤖 VIRON: \"{transcript}\"")
-                                push_to_ui(text=transcript)
+                            # Handle output transcript (what VIRON said)
+                            if sc.output_transcription and sc.output_transcription.text:
+                                transcript = sc.output_transcription.text.strip()
+                                if transcript:
+                                    log.info(f"🤖 VIRON: \"{transcript}\"")
+                                    push_to_ui(text=transcript)
 
-                        # Handle interruption
-                        if sc.interrupted:
-                            log.info("⚡ Interrupted by student (barge-in)")
-                            is_speaking = False
-                            audio_buffer.clear()
-                            state.set_status("listening")
-                            push_to_ui(emotion="surprised")
+                            # Handle interruption
+                            if sc.interrupted:
+                                log.info("⚡ Interrupted by student (barge-in)")
+                                is_speaking = False
+                                audio_buffer.clear()
+                                state.set_status("listening")
+                                push_to_ui(emotion="surprised")
 
-                        # Handle turn complete — play accumulated audio
-                        if sc.turn_complete:
-                            if audio_buffer and len(audio_buffer) > 100:
-                                log.info(f"🔊 Playing {len(audio_buffer)} bytes of audio...")
-                                await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
-                                log.info("🔊 Playback done")
-                            audio_buffer.clear()
-                            is_speaking = False
-                            state.set_status("listening")
-                            state.last_activity = time.time()
-                            log.info("✅ Turn complete — listening for next question...")
+                            # Handle turn complete — play accumulated audio
+                            if sc.turn_complete:
+                                if audio_buffer and len(audio_buffer) > 100:
+                                    log.info(f"🔊 Playing {len(audio_buffer)} bytes of audio...")
+                                    await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
+                                    log.info("🔊 Playback done")
+                                audio_buffer.clear()
+                                is_speaking = False
+                                state.set_status("listening")
+                                state.last_activity = time.time()
+                                log.info("✅ Turn complete — listening for next question...")
+                                # DON'T return — keep receiving for next turn
 
-                except Exception as e:
-                    if "closed" not in str(e).lower():
-                        log.error(f"Receive error: {e}")
-                finally:
-                    # Play any remaining audio
-                    if audio_buffer and len(audio_buffer) > 100:
-                        await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
+                        # session.receive() generator ended — loop back
+                        log.info("📡 Receive generator ended, restarting...")
+                        await asyncio.sleep(0.1)
+
+                    except Exception as e:
+                        if "closed" in str(e).lower() or _stop_session.is_set():
+                            return
+                        log.warning(f"Receive error: {e}")
+                        await asyncio.sleep(0.5)
 
             # Task 3: Monitor for idle timeout (only when truly idle)
             async def monitor_idle():
