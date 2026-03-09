@@ -351,71 +351,89 @@ def _handle_whiteboard(call_id, args):
 
 import re as _re
 
-# Keywords that indicate educational content worth showing on whiteboard
+# Keywords that indicate educational content
 _EDUCATION_KEYWORDS = [
     "τετράγωνο", "ρίζα", "φόρμουλα", "εξίσωση", "θεώρημα", "πυθαγόρ",
     "γωνία", "τρίγωνο", "κύκλο", "εμβαδ", "περίμετρ", "ακτίνα",
-    "ίσον", "συν", "πλην", "επί", "δια",
-    "βήμα", "πρώτο", "δεύτερο", "τρίτο", "τέταρτο", "πέμπτο",
+    "ίσον", "συν", "πλην", "επί", "δια", "βήμα", "μαθηματικ",
+    "αριθμ", "κλάσμ", "πολλαπλ", "διαίρε", "αφαίρε", "πρόσθε",
     "formula", "equation", "theorem", "step", "equals", "squared",
-    "calculate", "solve", "answer",
+    "calculate", "solve", "answer", "example", "παράδειγμα",
+    "ορθογώνι", "υποτείνου", "πλευρ", "αποτέλεσμα", "λύση",
 ]
 
-def _try_auto_whiteboard(full_transcript: str):
-    """
-    Analyze VIRON's output transcript. If it looks like an educational
-    explanation with steps/formulas, auto-generate a whiteboard.
-    """
-    if not full_transcript or len(full_transcript) < 80:
-        return  # Too short for whiteboard
-    
-    text_lower = full_transcript.lower()
-    
-    # Count educational keywords
-    keyword_hits = sum(1 for kw in _EDUCATION_KEYWORDS if kw in text_lower)
-    if keyword_hits < 2:
-        return  # Not educational enough
+_last_wb_content = ""  # Track last whiteboard to avoid duplicates
 
-    log.info(f"📋 Auto-whiteboard: {keyword_hits} keywords in transcript ({len(full_transcript)} chars)")
+def _try_auto_whiteboard(full_transcript: str):
+    """Build whiteboard from VIRON's speech. Called progressively during explanation."""
+    global _last_wb_content
     
-    # Split transcript into sentences/steps
-    # Transcripts may lack punctuation, so also split on numbered items
-    sentences = _re.split(r'[.!;]\s*|\*\*\d+\.?\s*', full_transcript)
-    sentences = [s.strip().strip('*').strip() for s in sentences if len(s.strip()) > 5]
-    
-    if len(sentences) < 2:
-        # Try splitting on common step patterns
-        sentences = _re.split(r'(?:Βήμα|βήμα|Πρώτ|Δεύτερ|Τρίτ|Τέταρτ|Πέμπτ|\d+[\.\)]\s)', full_transcript)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
-    
-    if len(sentences) < 2:
+    if not full_transcript or len(full_transcript) < 50:
         return
     
+    text_lower = full_transcript.lower()
+    keyword_hits = sum(1 for kw in _EDUCATION_KEYWORDS if kw in text_lower)
+    
+    # Also detect numbered steps/items
+    has_steps = bool(_re.search(r'(?:\*\*?\d|\bβήμα\b|\bstep\b|\b1\.\s|\b2\.\s)', text_lower))
+    has_math = bool(_re.search(r'[\d]+\s*[\+\-\×\÷\=\^]\s*[\d]|τετράγωνο|squared|ρίζα|sqrt', text_lower))
+    
+    if keyword_hits < 2 and not has_steps and not has_math:
+        return
+
+    # Build clean content lines from transcript
+    # Split on: periods, numbered items (**1. or 1.), "Βήμα", bullet points
+    lines = _re.split(r'(?:\.\s+|\*\*\d+\.?\s*|\b[Ββ]ήμα\s+\w+:?\s*|\d+\.\s+)', full_transcript)
+    lines = [l.strip().strip('*').strip() for l in lines if len(l.strip()) > 8]
+    
+    if not lines:
+        # Fallback: split on roughly every 60 chars at word boundaries
+        words = full_transcript.split()
+        lines = []
+        current = []
+        for w in words:
+            current.append(w)
+            if len(" ".join(current)) > 60:
+                lines.append(" ".join(current))
+                current = []
+        if current:
+            lines.append(" ".join(current))
+    
+    if len(lines) < 1:
+        return
+    
+    # Check if content changed meaningfully
+    new_content = " ".join(lines[:8])
+    if new_content == _last_wb_content:
+        return
+    _last_wb_content = new_content
+    
     # Build whiteboard steps
+    title = lines[0][:55] if lines else "Εξήγηση"
     wb_steps = []
-    title = sentences[0][:60]  # First sentence as title
     
-    for i, sent in enumerate(sentences):
-        # Detect math-like content
-        has_numbers = bool(_re.search(r'\d', sent))
-        has_math = any(w in sent.lower() for w in ["=", "+", "-", "×", "÷", "τετράγωνο", "ρίζα", "ίσον", "squared", "equals"])
+    for i, line in enumerate(lines[1:10]):  # Max 10 steps
+        has_nums = bool(_re.search(r'\d', line))
+        has_eq = bool(_re.search(r'[=+\-×÷^²³]|τετράγωνο|ρίζα|ίσον', line.lower()))
         
-        if has_math and has_numbers:
-            wb_steps.append({"math": sent})
-        elif i == len(sentences) - 1:
-            wb_steps.append({"result": sent})
-        elif has_numbers:
-            wb_steps.append({"label": sent})
+        if has_eq and has_nums:
+            wb_steps.append({"math": line})
+        elif has_nums:
+            wb_steps.append({"label": line})
+        elif i == len(lines) - 2:  # Last meaningful line
+            wb_steps.append({"result": line})
         else:
-            wb_steps.append({"text": sent})
+            wb_steps.append({"text": line})
     
-    if len(wb_steps) >= 2:
-        push_to_ui(
-            text="📋",  # Needs text for UI to process it
-            emotion="thinking",
-            whiteboard={"title": title, "steps": wb_steps[:12]},
-        )
-        log.info(f"📋 Auto-whiteboard displayed: \"{title}\" ({len(wb_steps)} steps)")
+    if not wb_steps:
+        wb_steps.append({"text": lines[0]})
+    
+    log.info(f"📋 Whiteboard: \"{title[:40]}\" ({len(wb_steps)} steps)")
+    push_to_ui(
+        text="📋",
+        emotion="thinking",
+        whiteboard={"title": title, "steps": wb_steps},
+    )
 
 
 async def gemini_live_session(mic: MicStream):
@@ -489,7 +507,10 @@ async def gemini_live_session(mic: MicStream):
             # Task 2: Receive audio + transcripts from Gemini
             async def receive_responses():
                 is_speaking = False
-                turn_transcript = []  # Accumulate VIRON's words per turn
+                turn_transcript = []
+                last_wb_push = 0  # timestamp of last whiteboard push
+                wb_pushed = False  # whether we've pushed any whiteboard this turn
+                
                 while not _stop_session.is_set():
                     try:
                         async for msg in session.receive():
@@ -500,41 +521,48 @@ async def gemini_live_session(mic: MicStream):
                             if sc is None:
                                 continue
 
-                            # Handle model audio output — stream each chunk immediately
+                            # Handle model audio output
                             if sc.model_turn and sc.model_turn.parts:
                                 for part in sc.model_turn.parts:
                                     if part.inline_data and part.inline_data.data:
                                         if not is_speaking:
                                             is_speaking = True
                                             state.set_status("speaking")
-                                            push_to_ui(emotion="happy")  # Only once per turn
+                                            push_to_ui(emotion="happy")
                                             _start_aplay()
                                         _write_audio(part.inline_data.data)
 
-                            # Handle input transcript (what the student said)
-                            if sc.input_transcription and sc.input_transcription.text:
-                                transcript = sc.input_transcription.text.strip()
-                                if transcript:
-                                    log.info(f"🎤 Student: \"{transcript}\"")
-                                    # Don't flood UI queue with partial transcripts
-
-                            # Handle output transcript (what VIRON said)
+                            # Handle output transcript — accumulate + progressive whiteboard
                             if sc.output_transcription and sc.output_transcription.text:
-                                transcript = sc.output_transcription.text.strip()
-                                if transcript:
-                                    log.info(f"🤖 VIRON: \"{transcript}\"")
-                                    # DON'T push each word to UI — floods queue and blocks whiteboard
-                                    # UI gets mouth animation from /pipeline/state (audio_playing=true)
-                                    turn_transcript.append(transcript)
+                                word = sc.output_transcription.text.strip()
+                                if word:
+                                    log.info(f"🤖 VIRON: \"{word}\"")
+                                    turn_transcript.append(word)
+                                    
+                                    # Progressive whiteboard: check every 4 seconds during speech
+                                    now = time.time()
+                                    full_so_far = " ".join(turn_transcript)
+                                    if len(full_so_far) > 60 and (now - last_wb_push) > 4:
+                                        _try_auto_whiteboard(full_so_far)
+                                        last_wb_push = now
+                                        if not wb_pushed:
+                                            wb_pushed = True
 
-                            # Handle interruption
+                            # Handle input transcript
+                            if sc.input_transcription and sc.input_transcription.text:
+                                t = sc.input_transcription.text.strip()
+                                if t:
+                                    log.info(f"🎤 Student: \"{t}\"")
+
+                            # Handle interruption — STOP audio immediately
                             if sc.interrupted:
-                                log.info("⚡ Interrupted (barge-in)")
+                                log.info("⚡ BARGE-IN — stopping audio")
                                 is_speaking = False
                                 turn_transcript.clear()
+                                wb_pushed = False
                                 _stop_aplay()
                                 state.set_status("listening")
-                                push_to_ui(emotion="surprised")
+                                push_to_ui(emotion="surprised", action="close_whiteboard")
 
                             # Handle turn complete
                             if sc.turn_complete:
@@ -543,14 +571,17 @@ async def gemini_live_session(mic: MicStream):
                                 is_speaking = False
                                 state.set_status("listening")
                                 state.last_activity = time.time()
-                                log.info("✅ Turn complete — ready for next question")
                                 
-                                # Auto-whiteboard from accumulated transcript
+                                # Final whiteboard update with full transcript
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
-                                    log.info(f"📝 Turn transcript ({len(full_text)} chars): \"{full_text[:100]}...\"")
-                                    turn_transcript.clear()
+                                    log.info(f"📝 Turn done ({len(full_text)} chars)")
                                     _try_auto_whiteboard(full_text)
+                                    turn_transcript.clear()
+                                
+                                wb_pushed = False
+                                last_wb_push = 0
+                                log.info("✅ Turn complete — ready for next question")
 
                         await asyncio.sleep(0.1)
 
