@@ -87,8 +87,8 @@ CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas 
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
 IMPORTANT: When asked to greet or when session starts, say "Ορίστε;" — just one word. Wait for the student's question.
+IMPORTANT: You have a WHITEBOARD tool called show_whiteboard. Use it whenever explaining math, science, history, or any educational concept. Call show_whiteboard with a title and steps (TEXT/STEP/MATH/RESULT types). While the whiteboard displays, narrate the explanation verbally. For math, use spoken descriptions AND the whiteboard for formulas.
 IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
-IMPORTANT: You are in VOICE-ONLY mode. You do NOT have a whiteboard or visual display. When asked to show something on a board, explain it step by step verbally instead. Use clear, spoken descriptions for math formulas (for example, say "α τετράγωνο συν β τετράγωνο ίσον γ τετράγωνο" instead of writing it).
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
 If the student speaks English, you may switch to English naturally.
@@ -323,6 +323,33 @@ def _init_genai():
     _genai_types = types
     log.info("✅ Gemini client pre-initialized")
 
+def _handle_whiteboard(call_id, args):
+    """Handle show_whiteboard function call — push to browser UI."""
+    title = args.get("title", "")
+    steps_raw = args.get("steps", [])
+    
+    # Convert to the format the UI expects
+    wb_steps = []
+    for s in steps_raw:
+        stype = s.get("type", "TEXT").upper()
+        content = s.get("content", "")
+        if stype == "STEP":
+            wb_steps.append({"label": content})
+        elif stype == "MATH":
+            wb_steps.append({"math": content})
+        elif stype == "RESULT":
+            wb_steps.append({"result": content})
+        else:
+            wb_steps.append({"text": content})
+    
+    log.info(f"📋 Whiteboard: \"{title}\" ({len(wb_steps)} steps)")
+    push_to_ui(
+        text=f"Κοίτα στον πίνακα!",
+        emotion="thinking",
+        whiteboard={"title": title, "steps": wb_steps},
+    )
+
+
 async def gemini_live_session(mic: MicStream):
     """
     Run a single Gemini Live Native Audio session.
@@ -336,6 +363,35 @@ async def gemini_live_session(mic: MicStream):
     client = _genai_client
     types = _genai_types
 
+    # Define whiteboard tool for visual explanations
+    whiteboard_tool = types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="show_whiteboard",
+                description="Display an educational explanation on the whiteboard screen. Use this whenever the student asks to see something visually, on the board, or when explaining math/science/history concepts. The whiteboard shows step-by-step content while you narrate.",
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={
+                        "title": types.Schema(type="STRING", description="Title of the whiteboard (e.g. 'Πυθαγόρειο Θεώρημα')"),
+                        "steps": types.Schema(
+                            type="ARRAY",
+                            items=types.Schema(
+                                type="OBJECT",
+                                properties={
+                                    "type": types.Schema(type="STRING", description="Type: TEXT, STEP, MATH, or RESULT"),
+                                    "content": types.Schema(type="STRING", description="The content for this step"),
+                                },
+                                required=["type", "content"],
+                            ),
+                            description="List of steps. Each has type (TEXT/STEP/MATH/RESULT) and content.",
+                        ),
+                    },
+                    required=["title", "steps"],
+                ),
+            ),
+        ],
+    )
+
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         system_instruction=VIRON_SYSTEM_INSTRUCTION,
@@ -347,6 +403,7 @@ async def gemini_live_session(mic: MicStream):
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
             )
         ),
+        tools=[whiteboard_tool],
     )
 
     log.info(f"🌐 Connecting to Gemini Live: {GEMINI_LIVE_MODEL}")
@@ -386,7 +443,7 @@ async def gemini_live_session(mic: MicStream):
                     else:
                         await asyncio.sleep(0.01)
 
-            # Task 2: Receive audio + transcripts from Gemini
+            # Task 2: Receive audio + transcripts + function calls from Gemini
             async def receive_responses():
                 is_speaking = False
                 while not _stop_session.is_set():
@@ -394,6 +451,32 @@ async def gemini_live_session(mic: MicStream):
                         async for msg in session.receive():
                             if _stop_session.is_set():
                                 return
+
+                            # ── Handle tool/function calls (whiteboard etc) ──
+                            tc = msg.tool_call
+                            if tc and tc.function_calls:
+                                for fc in tc.function_calls:
+                                    log.info(f"🔧 Function call: {fc.name}({json.dumps(fc.args, ensure_ascii=False)[:100]})")
+                                    if fc.name == "show_whiteboard":
+                                        _handle_whiteboard(fc.id, fc.args)
+                                        # Send response back to Gemini so it continues
+                                        await session.send_tool_response(
+                                            function_responses=[types.FunctionResponse(
+                                                id=fc.id,
+                                                name=fc.name,
+                                                response={"status": "displayed", "message": "Whiteboard is now showing on screen"},
+                                            )]
+                                        )
+                                    else:
+                                        log.warning(f"Unknown function: {fc.name}")
+                                        await session.send_tool_response(
+                                            function_responses=[types.FunctionResponse(
+                                                id=fc.id,
+                                                name=fc.name,
+                                                response={"error": f"Unknown function: {fc.name}"},
+                                            )]
+                                        )
+                                continue
 
                             sc = msg.server_content
                             if sc is None:

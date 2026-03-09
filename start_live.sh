@@ -60,10 +60,10 @@ fi
 # ─── Configure microphone ───
 echo ""
 echo "🎤 Configuring microphone..."
-amixer -c 0 sset 'Capture' 60% 2>/dev/null || true
-amixer -c 0 sset 'Mic' 60% 2>/dev/null || true
+amixer -c 0 sset 'Capture' 75% 2>/dev/null || true
+amixer -c 0 sset 'Mic' 75% 2>/dev/null || true
 amixer -c 0 sset 'Auto Gain Control' off 2>/dev/null || true
-echo "   ✅ Mic configured (60% gain — reduces TV pickup)"
+echo "   ✅ Mic configured (75% gain)"
 
 # ─── 1. Start Flask Backend (port 5000) — serves face UI ───
 echo ""
