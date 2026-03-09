@@ -241,7 +241,7 @@ class MicStream:
 # AUDIO PLAYBACK (write PCM to temp file, play with ffplay)
 # ═══════════════════════════════════════════════════════════
 
-_is_playing = threading.Event()  # Set while audio is playing — stops mic streaming
+_is_playing = threading.Event()  # Tracks if audio is currently playing
 
 def _play_pcm_audio(pcm_data: bytes):
     """Write raw 24kHz PCM audio to a temp file and play with ffplay."""
@@ -249,7 +249,7 @@ def _play_pcm_audio(pcm_data: bytes):
         return
     tmp_path = None
     try:
-        _is_playing.set()  # PAUSE mic streaming to Gemini
+        _is_playing.set()
         with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as tmp:
             tmp.write(pcm_data)
             tmp_path = tmp.name
@@ -263,7 +263,7 @@ def _play_pcm_audio(pcm_data: bytes):
     except Exception as e:
         log.warning(f"🔊 Playback error: {e}")
     finally:
-        _is_playing.clear()  # RESUME mic streaming
+        _is_playing.clear()
         if tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -298,9 +298,7 @@ async def gemini_live_session(mic: MicStream):
         output_audio_transcription=types.AudioTranscriptionConfig(),
         enable_affective_dialog=True,
         speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
-            )
+            language_code="el-GR",
         ),
     )
 
@@ -323,18 +321,11 @@ async def gemini_live_session(mic: MicStream):
                 turn_complete=True,
             )
 
-            # Task 1: Stream mic audio to Gemini (pauses while VIRON is speaking)
+            # Task 1: Stream mic audio to Gemini CONTINUOUSLY
+            # (Gemini's built-in VAD + XVF3800 AEC handle echo cancellation)
             async def send_audio():
-                CHUNK_BYTES = 4096  # 2048 samples at 16-bit = ~128ms
+                CHUNK_BYTES = 4096  # ~128ms of audio
                 while not _stop_session.is_set():
-                    # SKIP sending mic audio while VIRON is speaking
-                    # (prevents Gemini from hearing its own voice as barge-in)
-                    if _is_playing.is_set():
-                        # Drain mic buffer so it doesn't accumulate stale audio
-                        await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
-                        await asyncio.sleep(0.05)
-                        continue
-                    
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
                         try:
@@ -413,12 +404,16 @@ async def gemini_live_session(mic: MicStream):
                     if audio_buffer and len(audio_buffer) > 100:
                         await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
 
-            # Task 3: Monitor for idle timeout
+            # Task 3: Monitor for idle timeout (only when truly idle)
             async def monitor_idle():
                 while not _stop_session.is_set():
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
+                    # Don't timeout during playback
+                    if _is_playing.is_set():
+                        state.last_activity = time.time()
+                        continue
                     idle_time = time.time() - state.last_activity
-                    if idle_time > IDLE_TIMEOUT and state.status == "listening":
+                    if idle_time > IDLE_TIMEOUT and state.status in ("listening", "idle"):
                         log.info(f"⏰ Idle timeout ({IDLE_TIMEOUT}s) — ending session")
                         _stop_session.set()
                         break
@@ -428,11 +423,17 @@ async def gemini_live_session(mic: MicStream):
             recv_task = asyncio.create_task(receive_responses())
             idle_task = asyncio.create_task(monitor_idle())
 
-            # Wait for any task to finish (usually idle timeout or stop signal)
+            # Wait for any task to finish
             done, pending = await asyncio.wait(
                 [send_task, recv_task, idle_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
+
+            # Log which task finished
+            for task in done:
+                name = "send" if task == send_task else ("recv" if task == recv_task else "idle")
+                err = task.exception() if not task.cancelled() else None
+                log.info(f"🔌 Task '{name}' finished (error={err})")
 
             # Cancel remaining tasks
             for task in pending:
