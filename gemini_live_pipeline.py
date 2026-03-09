@@ -155,7 +155,12 @@ def push_to_ui(text="", emotion="", subtitle="", action="", **extra):
         msg["action"] = action
     msg.update(extra)
     with _response_lock:
-        _response_queue.append(msg)
+        # Whiteboard items go to FRONT of queue (high priority)
+        if "whiteboard" in extra:
+            _response_queue.insert(0, msg)
+            log.info(f"📋 Whiteboard queued at FRONT (queue size: {len(_response_queue)})")
+        else:
+            _response_queue.append(msg)
 
 # ═══════════════════════════════════════════════════════════
 # PORCUPINE WAKE WORD (kept from old pipeline)
@@ -502,7 +507,7 @@ async def gemini_live_session(mic: MicStream):
                                         if not is_speaking:
                                             is_speaking = True
                                             state.set_status("speaking")
-                                            push_to_ui(emotion="happy")
+                                            push_to_ui(emotion="happy")  # Only once per turn
                                             _start_aplay()
                                         _write_audio(part.inline_data.data)
 
@@ -739,12 +744,34 @@ def ww_poll():
 @app.route("/pipeline/response", methods=["GET"])
 def pipeline_response():
     with _response_lock:
-        if _response_queue:
-            # UI expects a single object with has_response flag
-            msg = _response_queue.pop(0)
-            msg["has_response"] = True
-            return jsonify(msg)
-    return jsonify({"has_response": False})
+        if not _response_queue:
+            return jsonify({"has_response": False})
+        
+        # Find whiteboard item first (highest priority)
+        for i, msg in enumerate(_response_queue):
+            if "whiteboard" in msg:
+                item = _response_queue.pop(i)
+                item["has_response"] = True
+                # Also collect latest emotion
+                for m in reversed(_response_queue):
+                    if m.get("emotion"):
+                        item["emotion"] = m["emotion"]
+                        break
+                return jsonify(item)
+        
+        # Otherwise return next item, merging consecutive emotion-only items
+        msg = _response_queue.pop(0)
+        # If this is emotion-only (no text), grab the LATEST emotion and skip rest
+        if not msg.get("text"):
+            latest_emotion = msg.get("emotion", "")
+            while _response_queue and not _response_queue[0].get("text") and "whiteboard" not in _response_queue[0]:
+                popped = _response_queue.pop(0)
+                if popped.get("emotion"):
+                    latest_emotion = popped["emotion"]
+            msg["emotion"] = latest_emotion
+        
+        msg["has_response"] = True
+        return jsonify(msg)
 
 @app.route("/pipeline/state", methods=["GET"])
 def pipeline_state():
@@ -845,9 +872,9 @@ def main():
     mic.start()
     time.sleep(0.5)
 
-    # Visual-only greeting (no TTS — avoids female voice)
+    # Visual-only greeting (no text push - don't block UI queue)
     log.info("🤖 VIRON ready!")
-    push_to_ui(text="Πες Hey Jarvis!", emotion="happy")
+    push_to_ui(emotion="happy")
 
     try:
         main_loop(mic)

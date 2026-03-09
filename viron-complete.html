@@ -2605,7 +2605,7 @@ let wbO=false,wbT=null,wbPresenting=false;
 
 function openWB(t,steps){
   D('📋 openWB: title="'+t+'", steps='+steps.length);
-  steps.forEach((s,i)=>D('📋   step['+i+']: type='+s.type+' content="'+s.text.substring(0,60)+'..."'));
+  steps.forEach((s,i)=>D('📋   step['+i+']: '+(s.label||s.text||s.math||s.result||'').substring(0,60)));
   wbO=true;
   wbPresenting=true;
   stopAllRecognition();
