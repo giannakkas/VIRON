@@ -86,7 +86,7 @@ VIRON_SYSTEM_INSTRUCTION = """You are VIRON (ΒΙΡΟΝ), a warm, intelligent AI
 CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus.
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
-IMPORTANT: When asked to greet or when session starts, say "Ορίστε;" — just one word. Wait for the student's question.
+IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
 IMPORTANT: You have a WHITEBOARD tool called show_whiteboard. Use it whenever explaining math, science, history, or any educational concept. Call show_whiteboard with a title and steps (TEXT/STEP/MATH/RESULT types). While the whiteboard displays, narrate the explanation verbally. For math, use spoken descriptions AND the whiteboard for formulas.
 IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
 
@@ -416,11 +416,11 @@ async def gemini_live_session(mic: MicStream):
             _session_active.set()
             state.in_session = True
 
-            # Trigger VIRON to say "Ορίστε;" in Orus voice
+            # Send "Hey VIRON" as text so Gemini greets the student naturally
             await session.send_client_content(
                 turns=types.Content(
                     role="user",
-                    parts=[types.Part(text="[The student just called you. Say only: Ορίστε;]")]
+                    parts=[types.Part(text="Hey VIRON")]
                 ),
                 turn_complete=True,
             )
