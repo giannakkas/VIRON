@@ -76,8 +76,8 @@ DEFAULT_LANGUAGE = os.environ.get("VIRON_DEFAULT_LANGUAGE", "el")
 MIC_GAIN = float(os.environ.get("VIRON_MIC_GAIN", "0.4"))
 
 # Early whiteboard: trigger after this many seconds of transcript accumulation
-EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "2.0"))
-EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "10"))
+EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "4.0"))
+EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "15"))
 
 PORT = int(os.environ.get("VIRON_PIPELINE_PORT", "8085"))
 
@@ -501,50 +501,48 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
 
 
 def _generate_whiteboard_local(transcript: str):
-    """Fast LOCAL whiteboard from transcript — no API call. Used for early trigger."""
-    if not transcript or len(transcript) < 30:
+    """Fast LOCAL whiteboard from transcript — no API call. Used for early trigger.
+    Gemini Live transcript words arrive without punctuation, so we chunk by word count."""
+    if not transcript or len(transcript) < 40:
         return
     
     text_lower = transcript.lower()
     edu_words = ["θεώρημα", "φόρμουλα", "εξίσωση", "βήμα", "τετράγωνο", "ρίζα",
                  "τρίγωνο", "κύκλο", "μαθηματικ", "παράδειγμα", "λύση", "υπολογ",
                  "theorem", "formula", "step", "calculate", "solve", "equation",
-                 "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ"]
+                 "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ",
+                 "μοιρ", "ίσο", "αποτέλεσμα", "δηλαδή", "number", "equal"]
     hits = sum(1 for w in edu_words if w in text_lower)
-    has_math = bool(_re.search(r'\d\s*[\+\-\=\×\÷]\s*\d|τετράγωνο|squared|²|³', text_lower))
+    has_math = bool(_re.search(r'\d|²|³|√|α|β|γ|\+|\=', text_lower))
     if hits < 1 and not has_math:
         return
     
     clean = _clean_math_text(transcript)
-    lines = _re.split(r'[.!;·]\s+', clean)
-    lines = [l.strip() for l in lines if len(l.strip()) > 8]
+    words = clean.split()
     
-    if len(lines) < 2:
-        words = clean.split()
-        lines, buf = [], []
-        for w in words:
-            buf.append(w)
-            if len(" ".join(buf)) > 50:
-                lines.append(" ".join(buf))
-                buf = []
-        if buf:
-            lines.append(" ".join(buf))
-    
-    if not lines:
+    if len(words) < 8:
         return
     
-    title = lines[0][:55]
+    # Title: first ~6 words
+    title = " ".join(words[:6])
+    remaining = words[6:]
+    
+    # Chunk remaining into steps of ~8 words each
+    CHUNK = 8
     wb_steps = []
-    for line in lines[1:8]:
-        if _re.search(r'\d.*[=+\-²³√×÷]', line):
-            wb_steps.append({"math": line})
+    for i in range(0, len(remaining), CHUNK):
+        chunk = " ".join(remaining[i:i+CHUNK])
+        if not chunk.strip():
+            continue
+        if _re.search(r'\d.*[=+\-²³√×÷]|α²|β²|γ²', chunk):
+            wb_steps.append({"math": chunk})
         else:
-            wb_steps.append({"text": line})
+            wb_steps.append({"text": chunk})
     
     if wb_steps:
         log.info(f"📋 Whiteboard (local/early): \"{title}\" ({len(wb_steps)} steps)")
         push_to_ui(text="📋", emotion="thinking",
-                   whiteboard={"title": title, "steps": wb_steps})
+                   whiteboard={"title": title, "steps": wb_steps[:10]})
 
 
 async def gemini_live_session(mic: MicStream):
@@ -720,6 +718,14 @@ async def gemini_live_session(mic: MicStream):
                         err_str = str(e).lower()
                         if "closed" in err_str or "1011" in err_str or _stop_session.is_set():
                             log.warning(f"Receive: session closed ({e})")
+                            # Generate whiteboard from whatever we accumulated before crash
+                            if turn_transcript and len(turn_transcript) >= 5:
+                                crash_text = " ".join(turn_transcript)
+                                log.info(f"📋 Generating whiteboard from crash transcript ({len(crash_text)} chars)")
+                                threading.Thread(
+                                    target=_generate_whiteboard_from_transcript,
+                                    args=(crash_text,), daemon=True
+                                ).start()
                             _stop_session.set()
                             return
                         log.warning(f"Receive error: {e}")
