@@ -87,7 +87,8 @@ CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas 
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
 IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
-IMPORTANT: You are in voice-only mode. When explaining concepts, explain step by step verbally. For math formulas, say them clearly (e.g. "α τετράγωνο συν β τετράγωνο ίσον γ τετράγωνο"). Be detailed and educational.
+IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step verbal explanations. For math formulas, say them clearly (e.g. "α τετράγωνο συν β τετράγωνο ίσον γ τετράγωνο"). Use examples with actual numbers. Be thorough and educational.
+IMPORTANT: NEVER say "I don't have a whiteboard" or "I can't show you." Just explain everything verbally in detail as if you were a teacher at a chalkboard. The student will understand.
 IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
@@ -316,10 +317,7 @@ def _init_genai():
     global _genai_client, _genai_types
     from google import genai
     from google.genai import types
-    _genai_client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1alpha"),
-    )
+    _genai_client = genai.Client(api_key=GEMINI_API_KEY)
     _genai_types = types
     log.info("✅ Gemini client pre-initialized")
 
@@ -368,7 +366,6 @@ async def gemini_live_session(mic: MicStream):
         system_instruction=VIRON_SYSTEM_INSTRUCTION,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        enable_affective_dialog=True,
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
