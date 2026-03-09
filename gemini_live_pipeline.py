@@ -236,52 +236,33 @@ class MicStream:
             self.proc = None
 
 # ═══════════════════════════════════════════════════════════
-# AUDIO PLAYBACK (aplay at 24kHz for Gemini output)
+# AUDIO PLAYBACK (write PCM to temp file, play with ffplay)
 # ═══════════════════════════════════════════════════════════
 
-_playback_proc = None
-_playback_lock = threading.Lock()
-
-def start_playback():
-    """Start aplay process for streaming 24kHz PCM output."""
-    global _playback_proc
-    with _playback_lock:
-        if _playback_proc and _playback_proc.poll() is None:
-            return  # Already running
-        _playback_proc = subprocess.Popen(
-            ["aplay", "-D", "plughw:0,0", "-f", "S16_LE", "-r", str(SAMPLE_RATE_OUT), "-c", "1", "-t", "raw"],
-            stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+def _play_pcm_audio(pcm_data: bytes):
+    """Write raw 24kHz PCM audio to a temp file and play with ffplay."""
+    if not pcm_data or len(pcm_data) < 100:
+        return
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as tmp:
+            tmp.write(pcm_data)
+            tmp_path = tmp.name
+        # ffplay can play raw PCM with explicit format
+        subprocess.run(
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+             "-f", "s16le", "-ar", str(SAMPLE_RATE_OUT), "-ac", "1", tmp_path],
+            timeout=30,
         )
-        log.info(f"🔊 Playback started: aplay {SAMPLE_RATE_OUT}Hz")
-
-def play_audio_chunk(data: bytes):
-    """Write raw PCM bytes to the aplay process."""
-    global _playback_proc
-    with _playback_lock:
-        if _playback_proc and _playback_proc.poll() is None:
-            try:
-                _playback_proc.stdin.write(data)
-                _playback_proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                log.warning("🔊 Playback pipe broken, restarting...")
-                stop_playback()
-                start_playback()
-
-def stop_playback():
-    """Stop the aplay process."""
-    global _playback_proc
-    with _playback_lock:
-        if _playback_proc:
-            try:
-                _playback_proc.stdin.close()
-            except:
-                pass
-            _playback_proc.terminate()
-            try:
-                _playback_proc.wait(timeout=2)
-            except:
-                _playback_proc.kill()
-            _playback_proc = None
+        os.unlink(tmp_path)
+    except subprocess.TimeoutExpired:
+        log.warning("🔊 Playback timeout")
+    except Exception as e:
+        log.warning(f"🔊 Playback error: {e}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
 
 # ═══════════════════════════════════════════════════════════
 # GEMINI LIVE SESSION (core of the new architecture)
@@ -327,9 +308,6 @@ async def gemini_live_session(mic: MicStream):
             _session_active.set()
             state.in_session = True
 
-            # Start playback process
-            start_playback()
-
             # Task 1: Stream mic audio to Gemini
             async def send_audio():
                 CHUNK_BYTES = 4096  # 2048 samples at 16-bit = ~128ms
@@ -349,6 +327,7 @@ async def gemini_live_session(mic: MicStream):
 
             # Task 2: Receive audio + transcripts from Gemini
             async def receive_responses():
+                audio_buffer = bytearray()
                 is_speaking = False
                 try:
                     async for msg in session.receive():
@@ -359,7 +338,7 @@ async def gemini_live_session(mic: MicStream):
                         if sc is None:
                             continue
 
-                        # Handle model audio output
+                        # Handle model audio output — buffer chunks
                         if sc.model_turn and sc.model_turn.parts:
                             for part in sc.model_turn.parts:
                                 if part.inline_data and part.inline_data.data:
@@ -367,14 +346,13 @@ async def gemini_live_session(mic: MicStream):
                                         is_speaking = True
                                         state.set_status("speaking")
                                         push_to_ui(emotion="happy")
-                                    play_audio_chunk(part.inline_data.data)
+                                    audio_buffer.extend(part.inline_data.data)
 
                         # Handle input transcript (what the student said)
                         if sc.input_transcription and sc.input_transcription.text:
                             transcript = sc.input_transcription.text.strip()
                             if transcript:
                                 log.info(f"🎤 Student: \"{transcript}\"")
-                                state.set_status("listening")
                                 push_to_ui(subtitle=transcript)
 
                         # Handle output transcript (what VIRON said)
@@ -387,23 +365,30 @@ async def gemini_live_session(mic: MicStream):
                         # Handle interruption
                         if sc.interrupted:
                             log.info("⚡ Interrupted by student (barge-in)")
+                            is_speaking = False
+                            audio_buffer.clear()
                             state.set_status("listening")
                             push_to_ui(emotion="surprised")
-                            is_speaking = False
-                            # Stop current playback, restart for next response
-                            stop_playback()
-                            start_playback()
 
-                        # Handle turn complete
+                        # Handle turn complete — play accumulated audio
                         if sc.turn_complete:
-                            log.info("✅ Turn complete")
+                            if audio_buffer and len(audio_buffer) > 100:
+                                log.info(f"🔊 Playing {len(audio_buffer)} bytes of audio...")
+                                await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
+                                log.info("🔊 Playback done")
+                            audio_buffer.clear()
                             is_speaking = False
                             state.set_status("listening")
                             state.last_activity = time.time()
+                            log.info("✅ Turn complete — listening for next question...")
 
                 except Exception as e:
                     if "closed" not in str(e).lower():
                         log.error(f"Receive error: {e}")
+                finally:
+                    # Play any remaining audio
+                    if audio_buffer and len(audio_buffer) > 100:
+                        await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
 
             # Task 3: Monitor for idle timeout
             async def monitor_idle():
@@ -442,7 +427,6 @@ async def gemini_live_session(mic: MicStream):
         _session_active.clear()
         state.in_session = False
         state.set_status("idle")
-        stop_playback()
         log.info("🔌 Gemini Live session ended")
 
 
@@ -689,7 +673,6 @@ def main():
         mic.stop()
         if porcupine:
             porcupine.delete()
-        stop_playback()
         log.info("Pipeline stopped.")
 
 
