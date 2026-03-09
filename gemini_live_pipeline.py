@@ -400,8 +400,9 @@ def _try_auto_whiteboard(full_transcript: str):
     
     if len(wb_steps) >= 2:
         push_to_ui(
+            text="📋",  # Needs text for UI to process it
             emotion="thinking",
-            whiteboard={"title": title, "steps": wb_steps[:12]},  # Max 12 steps
+            whiteboard={"title": title, "steps": wb_steps[:12]},
         )
         log.info(f"📋 Auto-whiteboard displayed: \"{title}\" ({len(wb_steps)} steps)")
 
@@ -731,19 +732,28 @@ def ww_poll():
 def pipeline_response():
     with _response_lock:
         if _response_queue:
-            responses = list(_response_queue)
-            _response_queue.clear()
-            return jsonify(responses)
-    return jsonify([])
+            # UI expects a single object with has_response flag
+            msg = _response_queue.pop(0)
+            msg["has_response"] = True
+            return jsonify(msg)
+    return jsonify({"has_response": False})
 
 @app.route("/pipeline/state", methods=["GET"])
 def pipeline_state():
+    s = state.status
     return jsonify({
-        "status": state.status,
+        "status": s,
         "in_session": state.in_session,
+        "in_conversation": state.in_session,
         "language": state.language,
         "mode": "gemini_live",
         "model": GEMINI_LIVE_MODEL,
+        # Boolean flags the UI expects for face/mouth animation
+        "listening": s == "listening",
+        "speaking": s == "speaking",
+        "audio_playing": s == "speaking",  # Mouth moves while VIRON speaks
+        "processing": s == "thinking",
+        "music": False,
     })
 
 @app.route("/wakeword/pause", methods=["POST"])
