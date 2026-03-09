@@ -108,10 +108,11 @@ Be creative, spontaneous, and varied in how you respond.
 
 RESPONSE STYLE:
 - Simple greetings/chat: MAX 1-2 sentences. Be quick, warm, natural.
-- Questions needing explanation: Give a FULL, DETAILED explanation in ONE turn. Use numbered steps with actual numbers and formulas. Speak for 30-60 seconds — the student has a display that shows your explanation live. Do NOT cut short or say "let me know if you want more." Give the complete answer.
+- Questions needing explanation: Give a FULL explanation in ONE turn. Use numbered steps with actual numbers and formulas. Keep it under 40 seconds of speech total — be thorough but efficient. The student has a display that shows your explanation live.
 - For homework help, guide the student step by step with worked examples using real numbers.
 - When appropriate, ask a guiding question before giving the solution.
 - Do NOT break explanations into multiple turns. Give the full explanation in one go.
+- IMPORTANT: Keep responses concise to avoid disconnection. Maximum 40 seconds of speech.
 
 EMOTION AWARENESS:
 - If the student sounds frustrated, confused, or discouraged, become calmer, slower, and more supportive.
@@ -467,37 +468,28 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
     except Exception as e:
         log.warning(f"Whiteboard Gemini call failed: {e}")
     
-    # Fallback: simple sentence splitting
-    lines = _re.split(r'[.!;]\s+|\*\*\d+\.?\s*', clean)
-    lines = [l.strip() for l in lines if len(l.strip()) > 8]
-    
-    if len(lines) < 2:
-        words = clean.split()
-        lines = []
-        buf = []
-        for w in words:
-            buf.append(w)
-            if len(" ".join(buf)) > 55:
-                lines.append(" ".join(buf))
-                buf = []
-        if buf:
-            lines.append(" ".join(buf))
-    
-    if not lines:
+    # Fallback: word-chunking (Gemini Live transcripts have no punctuation)
+    words = clean.split()
+    if len(words) < 6:
         return
     
-    title = lines[0][:55]
+    title = " ".join(words[:4])
+    remaining = words[4:]
     wb_steps = []
-    for line in lines[1:8]:
-        if _re.search(r'\d.*[=+\-²³√]', line):
-            wb_steps.append({"math": line})
+    CHUNK = 6
+    for i in range(0, len(remaining), CHUNK):
+        chunk = " ".join(remaining[i:i+CHUNK])
+        if not chunk.strip():
+            continue
+        if _re.search(r'\d.*[=+\-²³√×÷]|α²|β²|γ²|\$', chunk):
+            wb_steps.append({"math": chunk})
         else:
-            wb_steps.append({"text": line})
+            wb_steps.append({"text": chunk})
     
     if wb_steps:
         log.info(f"📋 Whiteboard (fallback): \"{title}\" ({len(wb_steps)} steps)")
         push_to_ui(text="📋", emotion="thinking",
-                   whiteboard={"title": title, "steps": wb_steps})
+                   whiteboard={"title": title, "steps": wb_steps[:10]})
 
 
 def _generate_whiteboard_local(transcript: str):
@@ -520,21 +512,21 @@ def _generate_whiteboard_local(transcript: str):
     clean = _clean_math_text(transcript)
     words = clean.split()
     
-    if len(words) < 8:
+    if len(words) < 6:
         return
     
-    # Title: first ~6 words
-    title = " ".join(words[:6])
-    remaining = words[6:]
+    # Title: first 3 words only (keep more for steps)
+    title = " ".join(words[:3])
+    remaining = words[3:]
     
-    # Chunk remaining into steps of ~8 words each
-    CHUNK = 8
+    # Chunk remaining into steps of ~5 words each (more steps)
+    CHUNK = 5
     wb_steps = []
     for i in range(0, len(remaining), CHUNK):
         chunk = " ".join(remaining[i:i+CHUNK])
         if not chunk.strip():
             continue
-        if _re.search(r'\d.*[=+\-²³√×÷]|α²|β²|γ²', chunk):
+        if _re.search(r'\d.*[=+\-²³√×÷]|α²|β²|γ²|\$', chunk):
             wb_steps.append({"math": chunk})
         else:
             wb_steps.append({"text": chunk})
@@ -612,7 +604,7 @@ async def gemini_live_session(mic: MicStream):
                             errors += 1
                             if errors == 1:
                                 log.warning(f"Send error: {e}")
-                            if errors > 5 or "closed" in str(e).lower():
+                            if errors > 5 or "clos" in str(e).lower() or "1011" in str(e).lower():
                                 log.error("Send: too many errors, stopping")
                                 _stop_session.set()
                                 break
@@ -716,7 +708,7 @@ async def gemini_live_session(mic: MicStream):
 
                     except Exception as e:
                         err_str = str(e).lower()
-                        if "closed" in err_str or "1011" in err_str or _stop_session.is_set():
+                        if "clos" in err_str or "1011" in err_str or "1006" in err_str or _stop_session.is_set():
                             log.warning(f"Receive: session closed ({e})")
                             # Generate whiteboard from whatever we accumulated before crash
                             if turn_transcript and len(turn_transcript) >= 5:
