@@ -297,9 +297,6 @@ async def gemini_live_session(mic: MicStream):
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         enable_affective_dialog=True,
-        speech_config=types.SpeechConfig(
-            language_code="el-GR",
-        ),
     )
 
     log.info(f"🌐 Connecting to Gemini Live: {GEMINI_LIVE_MODEL}")
