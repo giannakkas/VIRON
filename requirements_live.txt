@@ -1,0 +1,19 @@
+# VIRON Gemini Live Pipeline — Dependencies
+# Install: pip3 install -r requirements_live.txt
+
+# === Gemini Live API ===
+google-genai>=1.0.0     # Google Gen AI SDK (Live API, async WebSocket)
+
+# === Wake Word ===
+pvporcupine>=3.0        # Porcupine wake word detection
+
+# === Audio ===
+numpy>=1.24             # Audio processing
+edge-tts>=6.1           # For acknowledgment TTS only (startup greeting)
+
+# === Web Server ===
+flask>=3.0              # HTTP API for browser UI
+flask-cors              # CORS for browser access
+
+# === Utilities ===
+requests                # HTTP calls
