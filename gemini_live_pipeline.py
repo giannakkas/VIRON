@@ -87,7 +87,7 @@ CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas 
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
 IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
-IMPORTANT: You have a WHITEBOARD tool called show_whiteboard. Use it whenever explaining math, science, history, or any educational concept. Call show_whiteboard with a title and steps (TEXT/STEP/MATH/RESULT types). While the whiteboard displays, narrate the explanation verbally. For math, use spoken descriptions AND the whiteboard for formulas.
+IMPORTANT: You are in voice-only mode. When explaining concepts, explain step by step verbally. For math formulas, say them clearly (e.g. "α τετράγωνο συν β τετράγωνο ίσον γ τετράγωνο"). Be detailed and educational.
 IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
@@ -363,35 +363,6 @@ async def gemini_live_session(mic: MicStream):
     client = _genai_client
     types = _genai_types
 
-    # Define whiteboard tool for visual explanations
-    whiteboard_tool = types.Tool(
-        function_declarations=[
-            types.FunctionDeclaration(
-                name="show_whiteboard",
-                description="Display an educational explanation on the whiteboard screen. Use this whenever the student asks to see something visually, on the board, or when explaining math/science/history concepts. The whiteboard shows step-by-step content while you narrate.",
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties={
-                        "title": types.Schema(type="STRING", description="Title of the whiteboard (e.g. 'Πυθαγόρειο Θεώρημα')"),
-                        "steps": types.Schema(
-                            type="ARRAY",
-                            items=types.Schema(
-                                type="OBJECT",
-                                properties={
-                                    "type": types.Schema(type="STRING", description="Type: TEXT, STEP, MATH, or RESULT"),
-                                    "content": types.Schema(type="STRING", description="The content for this step"),
-                                },
-                                required=["type", "content"],
-                            ),
-                            description="List of steps. Each has type (TEXT/STEP/MATH/RESULT) and content.",
-                        ),
-                    },
-                    required=["title", "steps"],
-                ),
-            ),
-        ],
-    )
-
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         system_instruction=VIRON_SYSTEM_INSTRUCTION,
@@ -403,7 +374,6 @@ async def gemini_live_session(mic: MicStream):
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
             )
         ),
-        tools=[whiteboard_tool],
     )
 
     log.info(f"🌐 Connecting to Gemini Live: {GEMINI_LIVE_MODEL}")
@@ -426,9 +396,9 @@ async def gemini_live_session(mic: MicStream):
             )
 
             # Task 1: Stream mic audio to Gemini CONTINUOUSLY
-            # (Gemini's built-in VAD + XVF3800 AEC handle echo cancellation)
             async def send_audio():
-                CHUNK_BYTES = 4096  # ~128ms of audio
+                CHUNK_BYTES = 4096
+                errors = 0
                 while not _stop_session.is_set():
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
@@ -436,14 +406,19 @@ async def gemini_live_session(mic: MicStream):
                             await session.send_realtime_input(
                                 audio=types.Blob(data=raw, mime_type="audio/pcm;rate=16000")
                             )
+                            errors = 0
                         except Exception as e:
-                            if "closed" in str(e).lower():
+                            errors += 1
+                            if errors == 1:
+                                log.warning(f"Send error: {e}")
+                            if errors > 5 or "closed" in str(e).lower():
+                                log.error("Send: too many errors, stopping")
+                                _stop_session.set()
                                 break
-                            log.warning(f"Send error: {e}")
                     else:
                         await asyncio.sleep(0.01)
 
-            # Task 2: Receive audio + transcripts + function calls from Gemini
+            # Task 2: Receive audio + transcripts from Gemini
             async def receive_responses():
                 is_speaking = False
                 while not _stop_session.is_set():
@@ -451,32 +426,6 @@ async def gemini_live_session(mic: MicStream):
                         async for msg in session.receive():
                             if _stop_session.is_set():
                                 return
-
-                            # ── Handle tool/function calls (whiteboard etc) ──
-                            tc = msg.tool_call
-                            if tc and tc.function_calls:
-                                for fc in tc.function_calls:
-                                    log.info(f"🔧 Function call: {fc.name}({json.dumps(fc.args, ensure_ascii=False)[:100]})")
-                                    if fc.name == "show_whiteboard":
-                                        _handle_whiteboard(fc.id, fc.args)
-                                        # Send response back to Gemini so it continues
-                                        await session.send_tool_response(
-                                            function_responses=[types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response={"status": "displayed", "message": "Whiteboard is now showing on screen"},
-                                            )]
-                                        )
-                                    else:
-                                        log.warning(f"Unknown function: {fc.name}")
-                                        await session.send_tool_response(
-                                            function_responses=[types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response={"error": f"Unknown function: {fc.name}"},
-                                            )]
-                                        )
-                                continue
 
                             sc = msg.server_content
                             if sc is None:
@@ -530,7 +479,10 @@ async def gemini_live_session(mic: MicStream):
                         await asyncio.sleep(0.1)
 
                     except Exception as e:
-                        if "closed" in str(e).lower() or _stop_session.is_set():
+                        err_str = str(e).lower()
+                        if "closed" in err_str or "1011" in err_str or _stop_session.is_set():
+                            log.warning(f"Receive: session closed ({e})")
+                            _stop_session.set()
                             return
                         log.warning(f"Receive error: {e}")
                         await asyncio.sleep(0.5)
@@ -659,13 +611,26 @@ def main_loop(mic: MicStream):
                 log.info("🌐 Starting Gemini Live session...")
                 run_gemini_session(mic)
 
-                # Session ended — RESTART mic (arecord may be in bad state)
+                # Session ended — RESTART mic
                 log.info("🔄 Restarting mic after session...")
                 mic.stop()
                 time.sleep(0.5)
                 mic.start()
                 time.sleep(0.5)
                 _mic_start_time = time.time()
+
+                # Check if session crashed (error state) — auto-retry once
+                if state.status == "error":
+                    log.info("🔄 Session crashed — auto-retrying in 2s...")
+                    time.sleep(2)
+                    state.set_status("listening")
+                    push_to_ui(emotion="hopeful")
+                    run_gemini_session(mic)
+                    mic.stop()
+                    time.sleep(0.5)
+                    mic.start()
+                    time.sleep(0.5)
+                    _mic_start_time = time.time()
 
                 state.set_status("idle")
                 push_to_ui(emotion="neutral")
