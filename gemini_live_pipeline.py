@@ -87,8 +87,8 @@ CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas 
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
 IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
-IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step verbal explanations. For math formulas, say them clearly (e.g. "α τετράγωνο συν β τετράγωνο ίσον γ τετράγωνο"). Use examples with actual numbers. Be thorough and educational.
-IMPORTANT: NEVER say "I don't have a whiteboard" or "I can't show you." Just explain everything verbally in detail as if you were a teacher at a chalkboard. The student will understand.
+IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step explanations with numbered steps and worked examples using actual numbers. The student has a display that automatically shows your explanation as you speak. Be thorough — include formulas, calculations, and results.
+IMPORTANT: NEVER say "I don't have a whiteboard" or "I can't show you." Your explanation IS shown visually as you speak.
 IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
@@ -317,7 +317,10 @@ def _init_genai():
     global _genai_client, _genai_types
     from google import genai
     from google.genai import types
-    _genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    _genai_client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(api_version="v1alpha"),
+    )
     _genai_types = types
     log.info("✅ Gemini client pre-initialized")
 
@@ -325,8 +328,6 @@ def _handle_whiteboard(call_id, args):
     """Handle show_whiteboard function call — push to browser UI."""
     title = args.get("title", "")
     steps_raw = args.get("steps", [])
-    
-    # Convert to the format the UI expects
     wb_steps = []
     for s in steps_raw:
         stype = s.get("type", "TEXT").upper()
@@ -339,13 +340,70 @@ def _handle_whiteboard(call_id, args):
             wb_steps.append({"result": content})
         else:
             wb_steps.append({"text": content})
-    
     log.info(f"📋 Whiteboard: \"{title}\" ({len(wb_steps)} steps)")
-    push_to_ui(
-        text=f"Κοίτα στον πίνακα!",
-        emotion="thinking",
-        whiteboard={"title": title, "steps": wb_steps},
-    )
+    push_to_ui(text="Κοίτα στον πίνακα!", emotion="thinking", whiteboard={"title": title, "steps": wb_steps})
+
+
+import re as _re
+
+# Keywords that indicate educational content worth showing on whiteboard
+_EDUCATION_KEYWORDS = [
+    "τετράγωνο", "ρίζα", "φόρμουλα", "εξίσωση", "θεώρημα", "πυθαγόρ",
+    "γωνία", "τρίγωνο", "κύκλο", "εμβαδ", "περίμετρ", "ακτίνα",
+    "ίσον", "συν", "πλην", "επί", "δια",
+    "βήμα", "πρώτο", "δεύτερο", "τρίτο", "τέταρτο", "πέμπτο",
+    "formula", "equation", "theorem", "step", "equals", "squared",
+    "calculate", "solve", "answer",
+]
+
+def _try_auto_whiteboard(full_transcript: str):
+    """
+    Analyze VIRON's output transcript. If it looks like an educational
+    explanation with steps/formulas, auto-generate a whiteboard.
+    """
+    if not full_transcript or len(full_transcript) < 80:
+        return  # Too short for whiteboard
+    
+    text_lower = full_transcript.lower()
+    
+    # Count educational keywords
+    keyword_hits = sum(1 for kw in _EDUCATION_KEYWORDS if kw in text_lower)
+    if keyword_hits < 3:
+        return  # Not educational enough
+
+    log.info(f"📋 Auto-whiteboard: {keyword_hits} keywords in transcript ({len(full_transcript)} chars)")
+    
+    # Split transcript into sentences/steps
+    sentences = _re.split(r'[.!;]\s*', full_transcript)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+    
+    if len(sentences) < 2:
+        return
+    
+    # Build whiteboard steps
+    wb_steps = []
+    title = sentences[0][:60]  # First sentence as title
+    
+    for i, sent in enumerate(sentences):
+        # Detect math-like content
+        has_numbers = bool(_re.search(r'\d', sent))
+        has_math = any(w in sent.lower() for w in ["=", "+", "-", "×", "÷", "τετράγωνο", "ρίζα", "ίσον", "squared", "equals"])
+        
+        if has_math and has_numbers:
+            wb_steps.append({"math": sent})
+        elif i == len(sentences) - 1:
+            wb_steps.append({"result": sent})
+        elif has_numbers:
+            wb_steps.append({"label": sent})
+        else:
+            wb_steps.append({"text": sent})
+    
+    if len(wb_steps) >= 2:
+        push_to_ui(
+            emotion="thinking",
+            whiteboard={"title": title, "steps": wb_steps[:12]},  # Max 12 steps
+        )
+        log.info(f"📋 Auto-whiteboard displayed: \"{title}\" ({len(wb_steps)} steps)")
 
 
 async def gemini_live_session(mic: MicStream):
@@ -366,6 +424,7 @@ async def gemini_live_session(mic: MicStream):
         system_instruction=VIRON_SYSTEM_INSTRUCTION,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
+        enable_affective_dialog=True,
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
@@ -418,6 +477,7 @@ async def gemini_live_session(mic: MicStream):
             # Task 2: Receive audio + transcripts from Gemini
             async def receive_responses():
                 is_speaking = False
+                turn_transcript = []  # Accumulate VIRON's words per turn
                 while not _stop_session.is_set():
                     try:
                         async for msg in session.receive():
@@ -437,7 +497,6 @@ async def gemini_live_session(mic: MicStream):
                                             state.set_status("speaking")
                                             push_to_ui(emotion="happy")
                                             _start_aplay()
-                                        # Write directly to aplay pipe — plays immediately!
                                         _write_audio(part.inline_data.data)
 
                             # Handle input transcript (what the student said)
@@ -453,11 +512,13 @@ async def gemini_live_session(mic: MicStream):
                                 if transcript:
                                     log.info(f"🤖 VIRON: \"{transcript}\"")
                                     push_to_ui(text=transcript)
+                                    turn_transcript.append(transcript)
 
                             # Handle interruption
                             if sc.interrupted:
                                 log.info("⚡ Interrupted (barge-in)")
                                 is_speaking = False
+                                turn_transcript.clear()
                                 _stop_aplay()
                                 state.set_status("listening")
                                 push_to_ui(emotion="surprised")
@@ -465,14 +526,18 @@ async def gemini_live_session(mic: MicStream):
                             # Handle turn complete
                             if sc.turn_complete:
                                 if is_speaking:
-                                    # Let aplay finish playing remaining buffer
                                     await asyncio.to_thread(_finish_aplay)
                                 is_speaking = False
                                 state.set_status("listening")
                                 state.last_activity = time.time()
                                 log.info("✅ Turn complete — ready for next question")
+                                
+                                # Auto-whiteboard from accumulated transcript
+                                if turn_transcript:
+                                    full_text = " ".join(turn_transcript)
+                                    turn_transcript.clear()
+                                    _try_auto_whiteboard(full_text)
 
-                        # session.receive() ended — loop back
                         await asyncio.sleep(0.1)
 
                     except Exception as e:

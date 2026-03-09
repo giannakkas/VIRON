@@ -60,11 +60,10 @@ fi
 # ─── Configure microphone ───
 echo ""
 echo "🎤 Configuring microphone..."
-amixer -c 0 sset 'Capture' 80% 2>/dev/null || true
-amixer -c 0 sset 'Mic' 80% 2>/dev/null || true
-# ENABLE AGC — it helps normalize near vs far audio (fixes picking TV but missing voice)
+amixer -c 0 sset 'Capture' 100% 2>/dev/null || true
+amixer -c 0 sset 'Mic' 100% 2>/dev/null || true
 amixer -c 0 sset 'Auto Gain Control' on 2>/dev/null || true
-echo "   ✅ Mic configured (80% gain, AGC on)"
+echo "   ✅ Mic configured (100% gain, AGC on)"
 
 # ─── 1. Start Flask Backend (port 5000) — serves face UI ───
 echo ""
