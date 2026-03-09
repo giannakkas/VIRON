@@ -362,6 +362,87 @@ import re as _re
 
 _last_wb_content = ""
 _last_wb_time = 0.0   # Rate limit: min 10s between whiteboard API calls
+_api_backoff_until = 0.0  # After 429, skip API calls for 120s
+
+
+def _smart_parse_transcript(transcript: str):
+    """Smart parser for Gemini Live transcripts.
+    Detects numbered steps, math ($...$), bold headers (**...**), bullets.
+    Works on RAW transcript (before bold/LaTeX stripping).
+    Returns (title, steps) or (None, None)."""
+    
+    text = transcript.strip()
+    if len(text) < 30:
+        return None, None
+    
+    # Try splitting on numbered step markers: "1." "2." "3." 
+    # Only match when preceded by sentence end (. ! ;) or start of text
+    numbered = _re.split(r'(?:^|[.!;)°]\s+)(\d+)\.\s+', text)
+    
+    if len(numbered) >= 4:  # "intro", "1", "content1", "2", "content2"...
+        raw_title = _clean_math_text(numbered[0].strip()) if numbered[0].strip() else "Εξήγηση"
+        # Shorten: first sentence or 40 chars
+        tm = _re.match(r'^(.{8,40}?)[.!;]', raw_title)
+        title = (tm.group(1) if tm else raw_title[:40]).strip() or "Εξήγηση"
+        steps = []
+        # numbered = [intro, "1", content, "2", content, "3", content...]
+        i = 1
+        while i < len(numbered) - 1:
+            step_num = numbered[i]
+            step_content = _clean_math_text(numbered[i+1].strip())
+            if step_content:
+                # Detect math
+                has_math = bool(_re.search(r'\d\s*[=+\-×÷]\s*\d|²|³|√|α²|β²|γ²', step_content))
+                is_result = bool(_re.search(r'(?:αποτέλεσμα|result|answer|λύση|άρα|therefore)', step_content.lower()))
+                
+                if is_result:
+                    steps.append({"result": step_content})
+                elif has_math:
+                    steps.append({"label": f"Βήμα {step_num}", "math": step_content})
+                else:
+                    steps.append({"label": f"Βήμα {step_num}", "text": step_content})
+            i += 2
+        if steps:
+            return title, steps[:10]
+    
+    # Try splitting on bold markers: **Title**: content  
+    bold_parts = _re.split(r'\*\*([^*]+)\*\*:?\s*', text)
+    if len(bold_parts) >= 3:
+        title = _clean_math_text(bold_parts[0].strip()) if bold_parts[0].strip() else _clean_math_text(bold_parts[1])
+        title = title[:60] if title else "Εξήγηση"
+        steps = []
+        i = 1
+        while i < len(bold_parts) - 1:
+            label = _clean_math_text(bold_parts[i].strip())
+            content = _clean_math_text(bold_parts[i+1].strip()) if i+1 < len(bold_parts) else ""
+            if content:
+                has_math = bool(_re.search(r'\d\s*[=+\-×÷]\s*\d|²|³|√|α²|β²|γ²', content))
+                if has_math:
+                    steps.append({"label": label, "math": content})
+                else:
+                    steps.append({"label": label, "text": content})
+            elif label:
+                steps.append({"text": label})
+            i += 2
+        if steps:
+            return title, steps[:10]
+    
+    # Last resort: chunk cleaned text by ~7 words
+    clean = _clean_math_text(text)
+    words = clean.split()
+    if len(words) < 6:
+        return None, None
+    
+    title = " ".join(words[:4])
+    remaining = words[4:]
+    steps = []
+    for i in range(0, len(remaining), 7):
+        chunk = " ".join(remaining[i:i+7])
+        if _re.search(r'\d.*[=+\-]|²|³|√|α²|β²|γ²', chunk):
+            steps.append({"math": chunk})
+        else:
+            steps.append({"text": chunk})
+    return title, steps[:10] if steps else (None, None)
 
 def _clean_math_text(text):
     """Strip LaTeX formatting and convert to readable math."""
@@ -385,12 +466,12 @@ def _clean_math_text(text):
 
 def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool = False):
     """Use Gemini text API to generate clean whiteboard content from transcript."""
-    global _last_wb_content, _last_wb_time
+    global _last_wb_content, _last_wb_time, _api_backoff_until
     
-    if not transcript or len(transcript) < 60:
+    if not transcript or len(transcript) < 40:
         return
     
-    # Rate limit: minimum 10s between API calls (avoid 429)
+    # Rate limit: minimum 10s between API calls
     now = time.time()
     if now - _last_wb_time < 10.0:
         log.info(f"📋 Whiteboard skipped (rate limit, {now - _last_wb_time:.0f}s since last)")
@@ -404,9 +485,9 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
                  "theorem", "formula", "step", "calculate", "solve", "equation",
                  "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ"]
     hits = sum(1 for w in edu_words if w in text_lower)
-    has_math = bool(_re.search(r'\d\s*[\+\-\=\×\÷]\s*\d|τετράγωνο|squared|²|³', text_lower))
+    has_math = bool(_re.search(r'\d\s*[\+\-\=\×\÷]\s*\d|τετράγωνο|squared|²|³|\$', text_lower))
     
-    if hits < 2 and not has_math:
+    if hits < 1 and not has_math:
         return
     
     # Avoid duplicate
@@ -418,12 +499,13 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
     # Clean the transcript
     clean = _clean_math_text(transcript)
     
-    # Try to use Gemini text API for structured output
-    try:
-        if _genai_client:
-            response = _genai_client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=f"""Μετέτρεψε αυτή την εξήγηση σε whiteboard steps. 
+    # Try Gemini text API ONLY if not in 429 backoff
+    if now > _api_backoff_until:
+        try:
+            if _genai_client:
+                response = _genai_client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=f"""Μετέτρεψε αυτή την εξήγηση σε whiteboard steps. 
 Απάντησε ΜΟΝΟ σε JSON format χωρίς markdown:
 {{"title": "τίτλος", "steps": [{{"type": "text|math|result", "content": "..."}}]}}
 
@@ -436,65 +518,53 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
 - ΜΗΝ χρησιμοποιείς LaTeX, μόνο Unicode (², ³, √, α, β, γ, π)
 
 Εξήγηση: {clean[:500]}""",
-            )
-            
-            # Parse JSON response
-            resp_text = response.text.strip()
-            resp_text = _re.sub(r'^```json\s*', '', resp_text)
-            resp_text = _re.sub(r'\s*```$', '', resp_text)
-            
-            data = json.loads(resp_text)
-            title = data.get("title", "Εξήγηση")
-            raw_steps = data.get("steps", [])
-            
-            wb_steps = []
-            for s in raw_steps:
-                stype = s.get("type", "text").lower()
-                content = _clean_math_text(s.get("content", ""))
-                if not content:
-                    continue
-                if stype == "math":
-                    wb_steps.append({"math": content})
-                elif stype == "result":
-                    wb_steps.append({"result": content})
-                else:
-                    wb_steps.append({"text": content})
-            
-            if wb_steps:
-                log.info(f"📋 Whiteboard (Gemini): \"{title}\" ({len(wb_steps)} steps)")
-                push_to_ui(text="📋", emotion="thinking",
-                           whiteboard={"title": title, "steps": wb_steps[:10]})
-                return
-    except Exception as e:
-        log.warning(f"Whiteboard Gemini call failed: {e}")
+                )
+                
+                resp_text = response.text.strip()
+                resp_text = _re.sub(r'^```json\s*', '', resp_text)
+                resp_text = _re.sub(r'\s*```$', '', resp_text)
+                
+                data = json.loads(resp_text)
+                title = data.get("title", "Εξήγηση")
+                raw_steps = data.get("steps", [])
+                
+                wb_steps = []
+                for s in raw_steps:
+                    stype = s.get("type", "text").lower()
+                    content = _clean_math_text(s.get("content", ""))
+                    if not content:
+                        continue
+                    if stype == "math":
+                        wb_steps.append({"math": content})
+                    elif stype == "result":
+                        wb_steps.append({"result": content})
+                    else:
+                        wb_steps.append({"text": content})
+                
+                if wb_steps:
+                    log.info(f"📋 Whiteboard (Gemini): \"{title}\" ({len(wb_steps)} steps)")
+                    push_to_ui(text="📋", emotion="thinking",
+                               whiteboard={"title": title, "steps": wb_steps[:10]})
+                    return
+        except Exception as e:
+            err_msg = str(e)
+            log.warning(f"Whiteboard Gemini call failed: {e}")
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                _api_backoff_until = time.time() + 120  # Skip API for 2 min
+                log.info("📋 API 429 — backing off for 120s, using local parser")
+    else:
+        log.info(f"📋 API in backoff ({_api_backoff_until - now:.0f}s left), using local parser")
     
-    # Fallback: word-chunking (Gemini Live transcripts have no punctuation)
-    words = clean.split()
-    if len(words) < 6:
-        return
-    
-    title = " ".join(words[:4])
-    remaining = words[4:]
-    wb_steps = []
-    CHUNK = 6
-    for i in range(0, len(remaining), CHUNK):
-        chunk = " ".join(remaining[i:i+CHUNK])
-        if not chunk.strip():
-            continue
-        if _re.search(r'\d.*[=+\-²³√×÷]|α²|β²|γ²|\$', chunk):
-            wb_steps.append({"math": chunk})
-        else:
-            wb_steps.append({"text": chunk})
-    
-    if wb_steps:
-        log.info(f"📋 Whiteboard (fallback): \"{title}\" ({len(wb_steps)} steps)")
+    # Smart local fallback — parse numbered steps, math, etc
+    title, wb_steps = _smart_parse_transcript(clean)
+    if title and wb_steps:
+        log.info(f"📋 Whiteboard (local): \"{title}\" ({len(wb_steps)} steps)")
         push_to_ui(text="📋", emotion="thinking",
-                   whiteboard={"title": title, "steps": wb_steps[:10]})
+                   whiteboard={"title": title, "steps": wb_steps})
 
 
 def _generate_whiteboard_local(transcript: str):
-    """Fast LOCAL whiteboard from transcript — no API call. Used for early trigger.
-    Gemini Live transcript words arrive without punctuation, so we chunk by word count."""
+    """Fast LOCAL whiteboard from transcript — no API call. Used for early trigger."""
     if not transcript or len(transcript) < 40:
         return
     
@@ -505,36 +575,17 @@ def _generate_whiteboard_local(transcript: str):
                  "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ",
                  "μοιρ", "ίσο", "αποτέλεσμα", "δηλαδή", "number", "equal"]
     hits = sum(1 for w in edu_words if w in text_lower)
-    has_math = bool(_re.search(r'\d|²|³|√|α|β|γ|\+|\=', text_lower))
+    has_math = bool(_re.search(r'\d|²|³|√|α|β|γ|\+|\=|\$', text_lower))
     if hits < 1 and not has_math:
         return
     
     clean = _clean_math_text(transcript)
-    words = clean.split()
+    title, wb_steps = _smart_parse_transcript(clean)
     
-    if len(words) < 6:
-        return
-    
-    # Title: first 3 words only (keep more for steps)
-    title = " ".join(words[:3])
-    remaining = words[3:]
-    
-    # Chunk remaining into steps of ~5 words each (more steps)
-    CHUNK = 5
-    wb_steps = []
-    for i in range(0, len(remaining), CHUNK):
-        chunk = " ".join(remaining[i:i+CHUNK])
-        if not chunk.strip():
-            continue
-        if _re.search(r'\d.*[=+\-²³√×÷]|α²|β²|γ²|\$', chunk):
-            wb_steps.append({"math": chunk})
-        else:
-            wb_steps.append({"text": chunk})
-    
-    if wb_steps:
+    if title and wb_steps:
         log.info(f"📋 Whiteboard (local/early): \"{title}\" ({len(wb_steps)} steps)")
         push_to_ui(text="📋", emotion="thinking",
-                   whiteboard={"title": title, "steps": wb_steps[:10]})
+                   whiteboard={"title": title, "steps": wb_steps})
 
 
 async def gemini_live_session(mic: MicStream):
