@@ -368,14 +368,20 @@ def _try_auto_whiteboard(full_transcript: str):
     
     # Count educational keywords
     keyword_hits = sum(1 for kw in _EDUCATION_KEYWORDS if kw in text_lower)
-    if keyword_hits < 3:
+    if keyword_hits < 2:
         return  # Not educational enough
 
     log.info(f"📋 Auto-whiteboard: {keyword_hits} keywords in transcript ({len(full_transcript)} chars)")
     
     # Split transcript into sentences/steps
-    sentences = _re.split(r'[.!;]\s*', full_transcript)
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+    # Transcripts may lack punctuation, so also split on numbered items
+    sentences = _re.split(r'[.!;]\s*|\*\*\d+\.?\s*', full_transcript)
+    sentences = [s.strip().strip('*').strip() for s in sentences if len(s.strip()) > 5]
+    
+    if len(sentences) < 2:
+        # Try splitting on common step patterns
+        sentences = _re.split(r'(?:Βήμα|βήμα|Πρώτ|Δεύτερ|Τρίτ|Τέταρτ|Πέμπτ|\d+[\.\)]\s)', full_transcript)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
     
     if len(sentences) < 2:
         return
@@ -505,14 +511,15 @@ async def gemini_live_session(mic: MicStream):
                                 transcript = sc.input_transcription.text.strip()
                                 if transcript:
                                     log.info(f"🎤 Student: \"{transcript}\"")
-                                    push_to_ui(subtitle=transcript)
+                                    # Don't flood UI queue with partial transcripts
 
                             # Handle output transcript (what VIRON said)
                             if sc.output_transcription and sc.output_transcription.text:
                                 transcript = sc.output_transcription.text.strip()
                                 if transcript:
                                     log.info(f"🤖 VIRON: \"{transcript}\"")
-                                    push_to_ui(text=transcript)
+                                    # DON'T push each word to UI — floods queue and blocks whiteboard
+                                    # UI gets mouth animation from /pipeline/state (audio_playing=true)
                                     turn_transcript.append(transcript)
 
                             # Handle interruption
@@ -536,6 +543,7 @@ async def gemini_live_session(mic: MicStream):
                                 # Auto-whiteboard from accumulated transcript
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
+                                    log.info(f"📝 Turn transcript ({len(full_text)} chars): \"{full_text[:100]}...\"")
                                     turn_transcript.clear()
                                     _try_auto_whiteboard(full_text)
 
