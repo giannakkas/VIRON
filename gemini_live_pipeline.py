@@ -76,8 +76,8 @@ DEFAULT_LANGUAGE = os.environ.get("VIRON_DEFAULT_LANGUAGE", "el")
 MIC_GAIN = float(os.environ.get("VIRON_MIC_GAIN", "0.4"))
 
 # Early whiteboard: trigger after this many seconds of transcript accumulation
-EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "3.0"))
-EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "20"))
+EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "2.0"))
+EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "10"))
 
 PORT = int(os.environ.get("VIRON_PIPELINE_PORT", "8085"))
 
@@ -108,10 +108,10 @@ Be creative, spontaneous, and varied in how you respond.
 
 RESPONSE STYLE:
 - Simple greetings/chat: MAX 1-2 sentences. Be quick, warm, natural.
-- Questions needing explanation: Keep it under 30 seconds of speech. Be detailed but CONCISE.
-- For homework help, guide the student step by step instead of just giving the final answer.
+- Questions needing explanation: Give a FULL, DETAILED explanation in ONE turn. Use numbered steps with actual numbers and formulas. Speak for 30-60 seconds — the student has a display that shows your explanation live. Do NOT cut short or say "let me know if you want more." Give the complete answer.
+- For homework help, guide the student step by step with worked examples using real numbers.
 - When appropriate, ask a guiding question before giving the solution.
-- Break long explanations into smaller turns. After each concept, pause and ask if the student understood.
+- Do NOT break explanations into multiple turns. Give the full explanation in one go.
 
 EMOTION AWARENESS:
 - If the student sounds frustrated, confused, or discouraged, become calmer, slower, and more supportive.
@@ -502,7 +502,7 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
 
 def _generate_whiteboard_local(transcript: str):
     """Fast LOCAL whiteboard from transcript — no API call. Used for early trigger."""
-    if not transcript or len(transcript) < 60:
+    if not transcript or len(transcript) < 30:
         return
     
     text_lower = transcript.lower()

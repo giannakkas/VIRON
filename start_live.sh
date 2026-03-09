@@ -60,10 +60,10 @@ fi
 # ─── Configure microphone ───
 echo ""
 echo "🎤 Configuring microphone..."
-amixer -c 0 sset 'Capture' 100% 2>/dev/null || true
-amixer -c 0 sset 'Mic' 100% 2>/dev/null || true
+amixer -c 0 sset 'Capture' 60% 2>/dev/null || true
+amixer -c 0 sset 'Mic' 60% 2>/dev/null || true
 amixer -c 0 sset 'Auto Gain Control' on 2>/dev/null || true
-echo "   ✅ Mic configured (100% gain, AGC on)"
+echo "   ✅ Mic configured (60% gain, AGC on, software gain=${VIRON_MIC_GAIN:-0.4})"
 
 # ─── 1. Start Flask Backend (port 5000) — serves face UI ───
 echo ""
@@ -101,14 +101,15 @@ curl -sf http://localhost:5000/api/ping >/dev/null 2>&1 && echo "   ✅ Flask (5
 curl -sf http://localhost:8085/health >/dev/null 2>&1 && echo "   ✅ Pipeline (8085)" || echo "   ❌ Pipeline (8085)"
 echo ""
 
-# ─── Restart face ───
-echo "🔄 Restarting face (viron_kiosk.py)..."
+# ─── Restart face (GPU-accelerated kiosk) ───
+echo "🔄 Restarting face (viron_kiosk.py with GPU)..."
 export DISPLAY=:0
 export XAUTHORITY=/home/test/.Xauthority
 pkill -f "viron_kiosk.py" 2>/dev/null
+pkill -f "chromium" 2>/dev/null
 sleep 2
-python3 /home/test/viron_kiosk.py &>/dev/null &
-echo "   ✅ Face restarted (PID: $!)"
+python3 viron_kiosk.py &>/dev/null &
+echo "   ✅ Face restarted with GPU acceleration (PID: $!)"
 
 # Hide cursor
 pkill -f "unclutter" 2>/dev/null
