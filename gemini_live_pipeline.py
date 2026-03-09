@@ -72,6 +72,13 @@ PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
 IDLE_TIMEOUT = float(os.environ.get("VIRON_IDLE_TIMEOUT", "30.0"))
 DEFAULT_LANGUAGE = os.environ.get("VIRON_DEFAULT_LANGUAGE", "el")
 
+# Mic software gain (0.0–1.0). Default 0.4 = reduce to 40% to avoid clipping/noise.
+MIC_GAIN = float(os.environ.get("VIRON_MIC_GAIN", "0.4"))
+
+# Early whiteboard: trigger after this many seconds of transcript accumulation
+EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "3.0"))
+EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "20"))
+
 PORT = int(os.environ.get("VIRON_PIPELINE_PORT", "8085"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -353,6 +360,7 @@ def _handle_whiteboard(call_id, args):
 import re as _re
 
 _last_wb_content = ""
+_last_wb_time = 0.0   # Rate limit: min 10s between whiteboard API calls
 
 def _clean_math_text(text):
     """Strip LaTeX formatting and convert to readable math."""
@@ -374,12 +382,19 @@ def _clean_math_text(text):
     return t
 
 
-def _generate_whiteboard_from_transcript(transcript: str):
+def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool = False):
     """Use Gemini text API to generate clean whiteboard content from transcript."""
-    global _last_wb_content
+    global _last_wb_content, _last_wb_time
     
     if not transcript or len(transcript) < 60:
         return
+    
+    # Rate limit: minimum 10s between API calls (avoid 429)
+    now = time.time()
+    if now - _last_wb_time < 10.0:
+        log.info(f"📋 Whiteboard skipped (rate limit, {now - _last_wb_time:.0f}s since last)")
+        return
+    _last_wb_time = now
     
     # Quick check for educational content
     text_lower = transcript.lower()
@@ -395,7 +410,7 @@ def _generate_whiteboard_from_transcript(transcript: str):
     
     # Avoid duplicate
     content_hash = transcript[:100]
-    if content_hash == _last_wb_content:
+    if not skip_dup_check and content_hash == _last_wb_content:
         return
     _last_wb_content = content_hash
 
@@ -537,6 +552,12 @@ async def gemini_live_session(mic: MicStream):
                 while not _stop_session.is_set():
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
+                        # Software gain reduction to avoid clipping/noise
+                        if MIC_GAIN < 1.0:
+                            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                            samples *= MIC_GAIN
+                            np.clip(samples, -32768, 32767, out=samples)
+                            raw = samples.astype(np.int16).tobytes()
                         try:
                             await session.send_realtime_input(
                                 audio=types.Blob(data=raw, mime_type="audio/pcm;rate=16000")
@@ -557,6 +578,8 @@ async def gemini_live_session(mic: MicStream):
             async def receive_responses():
                 is_speaking = False
                 turn_transcript = []
+                first_word_time = None      # When first transcript word arrived this turn
+                early_wb_fired = False       # Whether we already triggered early whiteboard
                 
                 while not _stop_session.is_set():
                     try:
@@ -579,12 +602,27 @@ async def gemini_live_session(mic: MicStream):
                                             _start_aplay()
                                         _write_audio(part.inline_data.data)
 
-                            # Handle output transcript — just accumulate
+                            # Handle output transcript — accumulate + early whiteboard
                             if sc.output_transcription and sc.output_transcription.text:
                                 word = sc.output_transcription.text.strip()
                                 if word:
                                     log.info(f"🤖 VIRON: \"{word}\"")
                                     turn_transcript.append(word)
+                                    if first_word_time is None:
+                                        first_word_time = time.time()
+                                    
+                                    # Early whiteboard: fire after EARLY_WB_DELAY seconds + enough words
+                                    if (not early_wb_fired
+                                            and first_word_time is not None
+                                            and time.time() - first_word_time >= EARLY_WB_DELAY
+                                            and len(turn_transcript) >= EARLY_WB_MIN_WORDS):
+                                        early_wb_fired = True
+                                        partial_text = " ".join(turn_transcript)
+                                        log.info(f"📋 Early whiteboard trigger ({len(turn_transcript)} words, {time.time()-first_word_time:.1f}s)")
+                                        threading.Thread(
+                                            target=_generate_whiteboard_from_transcript,
+                                            args=(partial_text,), daemon=True
+                                        ).start()
 
                             # Handle input transcript
                             if sc.input_transcription and sc.input_transcription.text:
@@ -597,6 +635,8 @@ async def gemini_live_session(mic: MicStream):
                                 log.info("⚡ BARGE-IN — stopping audio")
                                 is_speaking = False
                                 turn_transcript.clear()
+                                first_word_time = None
+                                early_wb_fired = False
                                 _stop_aplay()
                                 state.set_status("listening")
                                 push_to_ui(emotion="surprised", action="close_whiteboard")
@@ -609,16 +649,28 @@ async def gemini_live_session(mic: MicStream):
                                 state.set_status("listening")
                                 state.last_activity = time.time()
                                 
-                                # Generate whiteboard from full transcript (Gemini text API)
+                                # Generate final whiteboard only if early WB didn't fire
+                                # (or if we got significantly more content after early fire)
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
                                     log.info(f"📝 Turn done ({len(full_text)} chars)")
-                                    turn_transcript.clear()
-                                    # Run in background thread (text API call)
-                                    threading.Thread(
-                                        target=_generate_whiteboard_from_transcript,
-                                        args=(full_text,), daemon=True
-                                    ).start()
+                                    if not early_wb_fired:
+                                        threading.Thread(
+                                            target=_generate_whiteboard_from_transcript,
+                                            args=(full_text,), daemon=True
+                                        ).start()
+                                    elif len(turn_transcript) > EARLY_WB_MIN_WORDS * 3:
+                                        # Got way more content — update whiteboard
+                                        log.info("📋 Updating whiteboard with full transcript")
+                                        threading.Thread(
+                                            target=_generate_whiteboard_from_transcript,
+                                            args=(full_text, True), daemon=True
+                                        ).start()
+                                
+                                # Reset for next turn
+                                turn_transcript.clear()
+                                first_word_time = None
+                                early_wb_fired = False
                                 
                                 log.info("✅ Turn complete — ready for next question")
 
@@ -709,6 +761,8 @@ def main_loop(mic: MicStream):
     log.info(f"   Model: {GEMINI_LIVE_MODEL}")
     log.info(f"   Language: {DEFAULT_LANGUAGE}")
     log.info(f"   Mic: {ALSA_DEVICE}")
+    log.info(f"   Mic gain: {MIC_GAIN:.0%}")
+    log.info(f"   Early whiteboard: {EARLY_WB_DELAY}s / {EARLY_WB_MIN_WORDS} words")
     log.info(f"   Idle timeout: {IDLE_TIMEOUT}s")
     log.info("=" * 50)
     log.info(f"🎤 Say 'Hey {PORCUPINE_KEYWORD.title()}'...")
