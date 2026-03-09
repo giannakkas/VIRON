@@ -86,6 +86,8 @@ VIRON_SYSTEM_INSTRUCTION = """You are VIRON (ΒΙΡΟΝ), a warm, intelligent AI
 CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus.
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
+IMPORTANT: When the session starts, say a SHORT greeting like "Ορίστε;" or "Ναι;" — just one word to acknowledge you're listening. Do NOT give a long introduction. Wait for the student to speak first.
+
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
 If the student speaks English, you may switch to English naturally.
 ALWAYS respond in the language the student is speaking.
@@ -239,30 +241,34 @@ class MicStream:
 # AUDIO PLAYBACK (write PCM to temp file, play with ffplay)
 # ═══════════════════════════════════════════════════════════
 
+_is_playing = threading.Event()  # Set while audio is playing — stops mic streaming
+
 def _play_pcm_audio(pcm_data: bytes):
     """Write raw 24kHz PCM audio to a temp file and play with ffplay."""
     if not pcm_data or len(pcm_data) < 100:
         return
+    tmp_path = None
     try:
+        _is_playing.set()  # PAUSE mic streaming to Gemini
         with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as tmp:
             tmp.write(pcm_data)
             tmp_path = tmp.name
-        # ffplay can play raw PCM with explicit format
         subprocess.run(
             ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
              "-f", "s16le", "-ar", str(SAMPLE_RATE_OUT), "-ac", "1", tmp_path],
             timeout=30,
         )
-        os.unlink(tmp_path)
     except subprocess.TimeoutExpired:
         log.warning("🔊 Playback timeout")
     except Exception as e:
         log.warning(f"🔊 Playback error: {e}")
     finally:
-        try:
-            os.unlink(tmp_path)
-        except:
-            pass
+        _is_playing.clear()  # RESUME mic streaming
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
 # ═══════════════════════════════════════════════════════════
 # GEMINI LIVE SESSION (core of the new architecture)
@@ -308,10 +314,27 @@ async def gemini_live_session(mic: MicStream):
             _session_active.set()
             state.in_session = True
 
-            # Task 1: Stream mic audio to Gemini
+            # Trigger Gemini to greet the student
+            await session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text="[Session started. Student just said the wake word. Say a very short greeting in Greek like 'Ορίστε;' to acknowledge you're listening. Keep it under 3 words.]")]
+                ),
+                turn_complete=True,
+            )
+
+            # Task 1: Stream mic audio to Gemini (pauses while VIRON is speaking)
             async def send_audio():
                 CHUNK_BYTES = 4096  # 2048 samples at 16-bit = ~128ms
                 while not _stop_session.is_set():
+                    # SKIP sending mic audio while VIRON is speaking
+                    # (prevents Gemini from hearing its own voice as barge-in)
+                    if _is_playing.is_set():
+                        # Drain mic buffer so it doesn't accumulate stale audio
+                        await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
+                        await asyncio.sleep(0.05)
+                        continue
+                    
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
                         try:
@@ -496,12 +519,10 @@ def main_loop(mic: MicStream):
             if check_wake(frame):
                 log.info("🎯 WAKE WORD DETECTED!")
                 state.set_status("listening")
-                push_to_ui(emotion="hopeful", text="Ορίστε;")
-
-                # Play acknowledgment
-                _play_ack()
+                push_to_ui(emotion="hopeful")
 
                 # Start Gemini Live session (blocks until session ends)
+                # Gemini will greet the student naturally via the system instruction
                 log.info("🌐 Starting Gemini Live session...")
                 run_gemini_session(mic)
 
