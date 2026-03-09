@@ -86,7 +86,8 @@ VIRON_SYSTEM_INSTRUCTION = """You are VIRON (ΒΙΡΟΝ), a warm, intelligent AI
 CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus.
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
-IMPORTANT: When the session starts, say a SHORT greeting like "Ορίστε;" or "Ναι;" — just one word to acknowledge you're listening. Do NOT give a long introduction. Wait for the student to speak first.
+IMPORTANT: Do NOT speak until the student speaks to you first. Wait silently for their question. When they speak, respond naturally.
+IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you — questions, greetings, or conversation. If you hear what sounds like a TV broadcast or background chatter, DO NOT respond to it.
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
 If the student speaks English, you may switch to English naturally.
@@ -342,15 +343,7 @@ async def gemini_live_session(mic: MicStream):
             log.info("✅ Gemini Live session connected!")
             _session_active.set()
             state.in_session = True
-
-            # Trigger Gemini to greet the student
-            await session.send_client_content(
-                turns=types.Content(
-                    role="user",
-                    parts=[types.Part(text="[Session started. Student just said the wake word. Say a very short greeting in Greek like 'Ορίστε;' to acknowledge you're listening. Keep it under 3 words.]")]
-                ),
-                turn_complete=True,
-            )
+            # No greeting — student speaks first after wake word
 
             # Task 1: Stream mic audio to Gemini CONTINUOUSLY
             # (Gemini's built-in VAD + XVF3800 AEC handle echo cancellation)
@@ -554,6 +547,7 @@ def main_loop(mic: MicStream):
                 log.info("🎯 WAKE WORD DETECTED!")
                 state.set_status("listening")
                 push_to_ui(emotion="hopeful")
+                # Face shows hopeful animation — student knows to speak
 
                 # Start Gemini Live session (blocks until session ends)
                 # Gemini will greet the student naturally via the system instruction
