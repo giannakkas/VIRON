@@ -86,8 +86,9 @@ VIRON_SYSTEM_INSTRUCTION = """You are VIRON (ΒΙΡΟΝ), a warm, intelligent AI
 CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas from Cyprus.
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
-IMPORTANT: Do NOT speak until the student speaks to you first. Wait silently for their question. When they speak, respond naturally.
-IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you — questions, greetings, or conversation. If you hear what sounds like a TV broadcast or background chatter, DO NOT respond to it.
+IMPORTANT: When asked to greet or when session starts, say "Ορίστε;" — just one word. Wait for the student's question.
+IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
+IMPORTANT: You are in VOICE-ONLY mode. You do NOT have a whiteboard or visual display. When asked to show something on a board, explain it step by step verbally instead. Use clear, spoken descriptions for math formulas (for example, say "α τετράγωνο συν β τετράγωνο ίσον γ τετράγωνο" instead of writing it).
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
 If the student speaks English, you may switch to English naturally.
@@ -357,7 +358,15 @@ async def gemini_live_session(mic: MicStream):
             log.info("✅ Gemini Live session connected!")
             _session_active.set()
             state.in_session = True
-            # No greeting — student speaks first after wake word
+
+            # Trigger VIRON to say "Ορίστε;" in Orus voice
+            await session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text="[The student just called you. Say only: Ορίστε;]")]
+                ),
+                turn_complete=True,
+            )
 
             # Task 1: Stream mic audio to Gemini CONTINUOUSLY
             # (Gemini's built-in VAD + XVF3800 AEC handle echo cancellation)
@@ -564,14 +573,16 @@ def main_loop(mic: MicStream):
                 # Face shows hopeful animation — student knows to speak
 
                 # Start Gemini Live session (blocks until session ends)
-                # Gemini will greet the student naturally via the system instruction
                 log.info("🌐 Starting Gemini Live session...")
                 run_gemini_session(mic)
 
-                # Session ended — flush mic buffer
-                log.info("🔄 Flushing mic buffer...")
-                for _ in range(20):
-                    mic.read_frame()
+                # Session ended — RESTART mic (arecord may be in bad state)
+                log.info("🔄 Restarting mic after session...")
+                mic.stop()
+                time.sleep(0.5)
+                mic.start()
+                time.sleep(0.5)
+                _mic_start_time = time.time()
 
                 state.set_status("idle")
                 push_to_ui(emotion="neutral")
