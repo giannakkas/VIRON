@@ -101,15 +101,14 @@ curl -sf http://localhost:5000/api/ping >/dev/null 2>&1 && echo "   ✅ Flask (5
 curl -sf http://localhost:8085/health >/dev/null 2>&1 && echo "   ✅ Pipeline (8085)" || echo "   ❌ Pipeline (8085)"
 echo ""
 
-# ─── Restart face (GPU-accelerated kiosk) ───
-echo "🔄 Restarting face (viron_kiosk.py with GPU)..."
+# ─── Restart face ───
+echo "🔄 Restarting face (viron_kiosk.py)..."
 export DISPLAY=:0
 export XAUTHORITY=/home/test/.Xauthority
 pkill -f "viron_kiosk.py" 2>/dev/null
-pkill -f "chromium" 2>/dev/null
 sleep 2
-python3 viron_kiosk.py &>/dev/null &
-echo "   ✅ Face restarted with GPU acceleration (PID: $!)"
+python3 /home/test/viron_kiosk.py &>/dev/null &
+echo "   ✅ Face restarted (PID: $!)"
 
 # Hide cursor
 pkill -f "unclutter" 2>/dev/null
