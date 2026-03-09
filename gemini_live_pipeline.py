@@ -500,6 +500,53 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
                    whiteboard={"title": title, "steps": wb_steps})
 
 
+def _generate_whiteboard_local(transcript: str):
+    """Fast LOCAL whiteboard from transcript — no API call. Used for early trigger."""
+    if not transcript or len(transcript) < 60:
+        return
+    
+    text_lower = transcript.lower()
+    edu_words = ["θεώρημα", "φόρμουλα", "εξίσωση", "βήμα", "τετράγωνο", "ρίζα",
+                 "τρίγωνο", "κύκλο", "μαθηματικ", "παράδειγμα", "λύση", "υπολογ",
+                 "theorem", "formula", "step", "calculate", "solve", "equation",
+                 "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ"]
+    hits = sum(1 for w in edu_words if w in text_lower)
+    has_math = bool(_re.search(r'\d\s*[\+\-\=\×\÷]\s*\d|τετράγωνο|squared|²|³', text_lower))
+    if hits < 1 and not has_math:
+        return
+    
+    clean = _clean_math_text(transcript)
+    lines = _re.split(r'[.!;·]\s+', clean)
+    lines = [l.strip() for l in lines if len(l.strip()) > 8]
+    
+    if len(lines) < 2:
+        words = clean.split()
+        lines, buf = [], []
+        for w in words:
+            buf.append(w)
+            if len(" ".join(buf)) > 50:
+                lines.append(" ".join(buf))
+                buf = []
+        if buf:
+            lines.append(" ".join(buf))
+    
+    if not lines:
+        return
+    
+    title = lines[0][:55]
+    wb_steps = []
+    for line in lines[1:8]:
+        if _re.search(r'\d.*[=+\-²³√×÷]', line):
+            wb_steps.append({"math": line})
+        else:
+            wb_steps.append({"text": line})
+    
+    if wb_steps:
+        log.info(f"📋 Whiteboard (local/early): \"{title}\" ({len(wb_steps)} steps)")
+        push_to_ui(text="📋", emotion="thinking",
+                   whiteboard={"title": title, "steps": wb_steps})
+
+
 async def gemini_live_session(mic: MicStream):
     """
     Run a single Gemini Live Native Audio session.
@@ -612,6 +659,7 @@ async def gemini_live_session(mic: MicStream):
                                         first_word_time = time.time()
                                     
                                     # Early whiteboard: fire after EARLY_WB_DELAY seconds + enough words
+                                    # Uses LOCAL parser only (instant, no API call)
                                     if (not early_wb_fired
                                             and first_word_time is not None
                                             and time.time() - first_word_time >= EARLY_WB_DELAY
@@ -620,7 +668,7 @@ async def gemini_live_session(mic: MicStream):
                                         partial_text = " ".join(turn_transcript)
                                         log.info(f"📋 Early whiteboard trigger ({len(turn_transcript)} words, {time.time()-first_word_time:.1f}s)")
                                         threading.Thread(
-                                            target=_generate_whiteboard_from_transcript,
+                                            target=_generate_whiteboard_local,
                                             args=(partial_text,), daemon=True
                                         ).start()
 
@@ -649,23 +697,15 @@ async def gemini_live_session(mic: MicStream):
                                 state.set_status("listening")
                                 state.last_activity = time.time()
                                 
-                                # Generate final whiteboard only if early WB didn't fire
-                                # (or if we got significantly more content after early fire)
+                                # Generate polished whiteboard via Gemini text API
+                                # Always runs — replaces early local WB with better version
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
                                     log.info(f"📝 Turn done ({len(full_text)} chars)")
-                                    if not early_wb_fired:
-                                        threading.Thread(
-                                            target=_generate_whiteboard_from_transcript,
-                                            args=(full_text,), daemon=True
-                                        ).start()
-                                    elif len(turn_transcript) > EARLY_WB_MIN_WORDS * 3:
-                                        # Got way more content — update whiteboard
-                                        log.info("📋 Updating whiteboard with full transcript")
-                                        threading.Thread(
-                                            target=_generate_whiteboard_from_transcript,
-                                            args=(full_text, True), daemon=True
-                                        ).start()
+                                    threading.Thread(
+                                        target=_generate_whiteboard_from_transcript,
+                                        args=(full_text,), daemon=True
+                                    ).start()
                                 
                                 # Reset for next turn
                                 turn_transcript.clear()

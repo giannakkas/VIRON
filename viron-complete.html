@@ -895,7 +895,7 @@ let pipelineQueue=[];        // local sentence queue
 
 // Poll for responses, add to local queue
 setInterval(()=>{
-  if(pipelineSpeaking)return;  // don't poll while speaking
+  if(pipelineSpeaking&&!wbO)return;  // don't block poll while WB open (audio via speaker)
   fetch('/pipeline/response',{signal:AbortSignal.timeout(2000)})
   .then(r=>r.json())
   .then(d=>{
@@ -953,6 +953,13 @@ setInterval(()=>{
           setTimeout(()=>showNews(d.news),500);
         }
       }
+      // Handle whiteboard immediately (don't queue — opens alongside audio)
+      if(d.whiteboard&&d.whiteboard.title&&d.whiteboard.steps){
+        D('📋 Pipeline whiteboard: "'+d.whiteboard.title+'" ('+d.whiteboard.steps.length+' steps)');
+        cE("thinking");
+        openWB(d.whiteboard.title,d.whiteboard.steps);
+        return; // Don't queue the "📋" text
+      }
       if(d.text){
         pipelineQueue.push(d);
         D('📢 Queued: "'+d.text.substring(0,40)+'..." (queue='+pipelineQueue.length+')');
@@ -967,23 +974,6 @@ function _playNextPipelineSentence(){
   if(pipelineSpeaking||pipelineQueue.length===0)return;
   const d=pipelineQueue.shift();
   pipelineSpeaking=true;
-  
-  // Check for whiteboard data from pipeline
-  if(d.whiteboard&&d.whiteboard.title&&d.whiteboard.steps){
-    D('📋 Pipeline whiteboard: "'+d.whiteboard.title+'" ('+d.whiteboard.steps.length+' steps)');
-    cE("thinking");
-    setTimeout(()=>openWB(d.whiteboard.title,d.whiteboard.steps),600);
-    // Face animation runs alongside whiteboard
-    const duration = Math.min(d.text.length * 60, 30000);
-    isSpeaking=true;
-    setTimeout(()=>{
-      isSpeaking=false;
-      pipelineSpeaking=false;
-      D('📢 Whiteboard presentation done');
-      _playNextPipelineSentence();
-    },duration);
-    return;
-  }
   
   cE("happy");
   D('📢 Face animation: "'+d.text.substring(0,50)+'"');
@@ -2604,11 +2594,11 @@ if(em)cE(em);stopAllRecognition();msgs.push({role:"assistant",content:m});say(m)
 let wbO=false,wbT=null,wbPresenting=false;
 
 function openWB(t,steps){
-  D('📋 openWB: title="'+t+'", steps='+steps.length);
+  const isUpdate = wbO; // Already open = content update (API version replacing local)
+  D('📋 openWB: title="'+t+'", steps='+steps.length+(isUpdate?' (UPDATE)':' (NEW)'));
   steps.forEach((s,i)=>D('📋   step['+i+']: '+(s.label||s.text||s.math||s.result||'').substring(0,60)));
   wbO=true;
   wbPresenting=true;
-  stopAllRecognition();
   
   document.getElementById("wbt").textContent=t;
   document.getElementById("wbCloseHint").textContent=isGreekMode()?'Πες "OK" ή πάτα οπουδήποτε για να κλείσεις':'Say "OK" or tap anywhere to close';
@@ -2628,39 +2618,37 @@ function openWB(t,steps){
     stepEls.push({el:d,data:x});
   });
   
-  // Futuristic face-to-board transition
+  // Face: shrink to top-right corner (still visible for mouth animation in Gemini Live)
   const _face=document.getElementById("face");
   const wfEl=document.getElementById("audioWaveform");
   _face.style.transition="opacity 0.4s ease, transform 0.5s cubic-bezier(0.22,1,0.36,1), filter 0.4s ease";
-  _face.style.opacity="0";_face.style.transform="scale(0.85) translateY(-20px)";_face.style.filter="blur(8px)";
+  _face.style.opacity="0.5";_face.style.transform="scale(0.35) translate(80%, -60%)";_face.style.filter="blur(1px)";
   if(wfEl){wfEl.style.transition="opacity 0.3s";wfEl.style.opacity="0";}
   
-  setTimeout(()=>{
-    document.getElementById("wb").classList.add("active");
-    // Auto-scroll: follow each new step as it appears
-    let _wbScrollAnim=null;
-    function smoothScroll(){
-      const el=document.getElementById("wbc");
-      if(!el||!wbO){cancelAnimationFrame(_wbScrollAnim);return;}
-      const target=el.scrollHeight-el.clientHeight;
-      if(el.scrollTop<target){
-        el.scrollTop+=(target-el.scrollTop)*0.04+0.5;
-        _wbScrollAnim=requestAnimationFrame(smoothScroll);
-      }else{
+  if(!isUpdate){
+    setTimeout(()=>{
+      document.getElementById("wb").classList.add("active");
+      let _wbScrollAnim=null;
+      function smoothScroll(){
+        const el=document.getElementById("wbc");
+        if(!el||!wbO){cancelAnimationFrame(_wbScrollAnim);return;}
+        const target=el.scrollHeight-el.clientHeight;
+        if(el.scrollTop<target){el.scrollTop+=(target-el.scrollTop)*0.06+1;}
         _wbScrollAnim=requestAnimationFrame(smoothScroll);
       }
-    }
-    _wbScrollAnim=requestAnimationFrame(smoothScroll);
-  },500);
+      _wbScrollAnim=requestAnimationFrame(smoothScroll);
+    },300);
+  }
   
-  // Animate steps one by one with stagger
-  const stepDelay=2000;
+  // Fast stagger: 800ms for new, 300ms for update (content refresh)
+  const stepDelay = isUpdate ? 300 : 800;
+  const startDelay = isUpdate ? 100 : 500;
   stepEls.forEach((s,i)=>{
-    setTimeout(()=>{s.el.classList.add("visible")},1000+i*stepDelay);
+    setTimeout(()=>{s.el.classList.add("visible")},startDelay+i*stepDelay);
   });
   
   // After all steps shown, mark presenting done
-  const totalTime=1000+stepEls.length*stepDelay+2000;
+  const totalTime=startDelay+stepEls.length*stepDelay+1000;
   setTimeout(()=>{
     wbPresenting=false;
     cmdRetryCount=0;
@@ -2671,6 +2659,7 @@ function openWB(t,steps){
     }
   },totalTime);
   
+  clearTimeout(wbT);
   wbT=setTimeout(()=>{if(wbO)closeWB()},120000);
 }
 
