@@ -307,19 +307,33 @@ def _finish_aplay():
 _session_active = threading.Event()
 _stop_session = threading.Event()
 
+# Pre-initialize Gemini client at module load (saves 2s on first wake)
+_genai_client = None
+_genai_types = None
+
+def _init_genai():
+    global _genai_client, _genai_types
+    from google import genai
+    from google.genai import types
+    _genai_client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(api_version="v1alpha"),
+    )
+    _genai_types = types
+    log.info("✅ Gemini client pre-initialized")
+
 async def gemini_live_session(mic: MicStream):
     """
     Run a single Gemini Live Native Audio session.
     Streams mic audio to Gemini, plays back audio response,
     extracts transcripts for UI subtitles.
     """
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1alpha"),
-    )
+    global _genai_client, _genai_types
+    if _genai_client is None:
+        _init_genai()
+    
+    client = _genai_client
+    types = _genai_types
 
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
@@ -572,27 +586,6 @@ def main_loop(mic: MicStream):
             time.sleep(1)
 
 
-def _play_ack():
-    """Play a short acknowledgment sound/TTS when wake word is detected."""
-    try:
-        # Use edge-tts for a quick "Ορίστε;" acknowledgment
-        import tempfile
-        ack_text = "Ορίστε;" if state.language == "el" else "Yes?"
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp_path = tmp.name
-        subprocess.run(
-            ["edge-tts", "--voice", "el-GR-AthinaNeural" if state.language == "el" else "en-US-AriaNeural",
-             "--text", ack_text, "--write-media", tmp_path],
-            capture_output=True, timeout=5,
-        )
-        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 500:
-            subprocess.run(
-                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
-                timeout=5,
-            )
-        os.unlink(tmp_path)
-    except Exception as e:
-        log.warning(f"Ack playback failed: {e}")
 
 # ═══════════════════════════════════════════════════════════
 # FLASK HTTP API (for browser UI — same endpoints as old pipeline)
@@ -700,6 +693,9 @@ def main():
         print("❌ Cannot start without wake word!")
         sys.exit(1)
 
+    # Pre-initialize Gemini client (saves 2s on first wake word)
+    _init_genai()
+
     # Start HTTP API for browser UI
     http_thread = threading.Thread(target=run_http_server, daemon=True)
     http_thread.start()
@@ -710,11 +706,9 @@ def main():
     mic.start()
     time.sleep(0.5)
 
-    # Startup greeting
-    log.info("🗣️ Playing startup greeting...")
-    time.sleep(3)  # Wait for face to load
-    push_to_ui(text="Γεια σου! Είμαι ο ΒΙΡΟΝ!", emotion="excited")
-    _play_ack_text("Γεια σου! Είμαι ο ΒΙΡΟΝ, ο φίλος σου! Πες Hey Jarvis για να μου μιλήσεις.")
+    # Visual-only greeting (no TTS — avoids female voice)
+    log.info("🤖 VIRON ready!")
+    push_to_ui(text="Πες Hey Jarvis!", emotion="happy")
 
     try:
         main_loop(mic)
@@ -723,25 +717,6 @@ def main():
         if porcupine:
             porcupine.delete()
         log.info("Pipeline stopped.")
-
-
-def _play_ack_text(text):
-    """Play TTS for startup greeting."""
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp_path = tmp.name
-        subprocess.run(
-            ["edge-tts", "--voice", "el-GR-AthinaNeural", "--text", text, "--write-media", tmp_path],
-            capture_output=True, timeout=10,
-        )
-        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 500:
-            subprocess.run(
-                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
-                timeout=15,
-            )
-        os.unlink(tmp_path)
-    except Exception as e:
-        log.warning(f"Greeting TTS failed: {e}")
 
 
 if __name__ == "__main__":
