@@ -238,37 +238,66 @@ class MicStream:
             self.proc = None
 
 # ═══════════════════════════════════════════════════════════
-# AUDIO PLAYBACK (write PCM to temp file, play with ffplay)
+# AUDIO PLAYBACK (streaming via aplay pipe — low latency)
 # ═══════════════════════════════════════════════════════════
 
-_is_playing = threading.Event()  # Tracks if audio is currently playing
+_is_playing = threading.Event()
+_aplay_proc = None
+_aplay_lock = threading.Lock()
 
-def _play_pcm_audio(pcm_data: bytes):
-    """Write raw 24kHz PCM audio to a temp file and play with ffplay."""
-    if not pcm_data or len(pcm_data) < 100:
-        return
-    tmp_path = None
-    try:
-        _is_playing.set()
-        with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as tmp:
-            tmp.write(pcm_data)
-            tmp_path = tmp.name
-        subprocess.run(
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
-             "-f", "s16le", "-ar", str(SAMPLE_RATE_OUT), "-ac", "1", tmp_path],
-            timeout=30,
+def _start_aplay():
+    """Start an aplay process that accepts streaming PCM input."""
+    global _aplay_proc
+    with _aplay_lock:
+        _stop_aplay()
+        _aplay_proc = subprocess.Popen(
+            ["aplay", "-f", "S16_LE", "-r", str(SAMPLE_RATE_OUT), "-c", "1", "-t", "raw", "-q"],
+            stdin=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-    except subprocess.TimeoutExpired:
-        log.warning("🔊 Playback timeout")
-    except Exception as e:
-        log.warning(f"🔊 Playback error: {e}")
-    finally:
-        _is_playing.clear()
-        if tmp_path:
+
+def _write_audio(data: bytes):
+    """Write audio chunk to aplay pipe for immediate playback."""
+    global _aplay_proc
+    with _aplay_lock:
+        if _aplay_proc and _aplay_proc.poll() is None:
             try:
-                os.unlink(tmp_path)
+                _aplay_proc.stdin.write(data)
+                _aplay_proc.stdin.flush()
+                _is_playing.set()
+            except (BrokenPipeError, OSError):
+                pass
+
+def _stop_aplay():
+    """Stop the aplay process."""
+    global _aplay_proc
+    if _aplay_proc:
+        try:
+            _aplay_proc.stdin.close()
+        except:
+            pass
+        _aplay_proc.terminate()
+        try:
+            _aplay_proc.wait(timeout=1)
+        except:
+            _aplay_proc.kill()
+        _aplay_proc = None
+    _is_playing.clear()
+
+def _finish_aplay():
+    """Close stdin to let aplay finish playing remaining buffer, then restart."""
+    global _aplay_proc
+    with _aplay_lock:
+        if _aplay_proc and _aplay_proc.poll() is None:
+            try:
+                _aplay_proc.stdin.close()
             except:
                 pass
+            try:
+                _aplay_proc.wait(timeout=10)
+            except:
+                _aplay_proc.kill()
+            _aplay_proc = None
+    _is_playing.clear()
 
 # ═══════════════════════════════════════════════════════════
 # GEMINI LIVE SESSION (core of the new architecture)
@@ -297,6 +326,11 @@ async def gemini_live_session(mic: MicStream):
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         enable_affective_dialog=True,
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
+            )
+        ),
     )
 
     log.info(f"🌐 Connecting to Gemini Live: {GEMINI_LIVE_MODEL}")
@@ -338,7 +372,6 @@ async def gemini_live_session(mic: MicStream):
 
             # Task 2: Receive audio + transcripts from Gemini
             async def receive_responses():
-                audio_buffer = bytearray()
                 is_speaking = False
                 while not _stop_session.is_set():
                     try:
@@ -350,7 +383,7 @@ async def gemini_live_session(mic: MicStream):
                             if sc is None:
                                 continue
 
-                            # Handle model audio output — buffer chunks
+                            # Handle model audio output — stream each chunk immediately
                             if sc.model_turn and sc.model_turn.parts:
                                 for part in sc.model_turn.parts:
                                     if part.inline_data and part.inline_data.data:
@@ -358,7 +391,9 @@ async def gemini_live_session(mic: MicStream):
                                             is_speaking = True
                                             state.set_status("speaking")
                                             push_to_ui(emotion="happy")
-                                        audio_buffer.extend(part.inline_data.data)
+                                            _start_aplay()
+                                        # Write directly to aplay pipe — plays immediately!
+                                        _write_audio(part.inline_data.data)
 
                             # Handle input transcript (what the student said)
                             if sc.input_transcription and sc.input_transcription.text:
@@ -376,27 +411,23 @@ async def gemini_live_session(mic: MicStream):
 
                             # Handle interruption
                             if sc.interrupted:
-                                log.info("⚡ Interrupted by student (barge-in)")
+                                log.info("⚡ Interrupted (barge-in)")
                                 is_speaking = False
-                                audio_buffer.clear()
+                                _stop_aplay()
                                 state.set_status("listening")
                                 push_to_ui(emotion="surprised")
 
-                            # Handle turn complete — play accumulated audio
+                            # Handle turn complete
                             if sc.turn_complete:
-                                if audio_buffer and len(audio_buffer) > 100:
-                                    log.info(f"🔊 Playing {len(audio_buffer)} bytes of audio...")
-                                    await asyncio.to_thread(_play_pcm_audio, bytes(audio_buffer))
-                                    log.info("🔊 Playback done")
-                                audio_buffer.clear()
+                                if is_speaking:
+                                    # Let aplay finish playing remaining buffer
+                                    await asyncio.to_thread(_finish_aplay)
                                 is_speaking = False
                                 state.set_status("listening")
                                 state.last_activity = time.time()
-                                log.info("✅ Turn complete — listening for next question...")
-                                # DON'T return — keep receiving for next turn
+                                log.info("✅ Turn complete — ready for next question")
 
-                        # session.receive() generator ended — loop back
-                        log.info("📡 Receive generator ended, restarting...")
+                        # session.receive() ended — loop back
                         await asyncio.sleep(0.1)
 
                     except Exception as e:
@@ -452,6 +483,7 @@ async def gemini_live_session(mic: MicStream):
         _session_active.clear()
         state.in_session = False
         state.set_status("idle")
+        _stop_aplay()
         log.info("🔌 Gemini Live session ended")
 
 
