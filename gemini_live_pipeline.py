@@ -101,9 +101,10 @@ Be creative, spontaneous, and varied in how you respond.
 
 RESPONSE STYLE:
 - Simple greetings/chat: MAX 1-2 sentences. Be quick, warm, natural.
-- Questions needing explanation: Be detailed but concise. Guide step by step.
+- Questions needing explanation: Keep it under 30 seconds of speech. Be detailed but CONCISE.
 - For homework help, guide the student step by step instead of just giving the final answer.
 - When appropriate, ask a guiding question before giving the solution.
+- Break long explanations into smaller turns. After each concept, pause and ask if the student understood.
 
 EMOTION AWARENESS:
 - If the student sounds frustrated, confused, or discouraged, become calmer, slower, and more supportive.
@@ -351,89 +352,137 @@ def _handle_whiteboard(call_id, args):
 
 import re as _re
 
-# Keywords that indicate educational content
-_EDUCATION_KEYWORDS = [
-    "τετράγωνο", "ρίζα", "φόρμουλα", "εξίσωση", "θεώρημα", "πυθαγόρ",
-    "γωνία", "τρίγωνο", "κύκλο", "εμβαδ", "περίμετρ", "ακτίνα",
-    "ίσον", "συν", "πλην", "επί", "δια", "βήμα", "μαθηματικ",
-    "αριθμ", "κλάσμ", "πολλαπλ", "διαίρε", "αφαίρε", "πρόσθε",
-    "formula", "equation", "theorem", "step", "equals", "squared",
-    "calculate", "solve", "answer", "example", "παράδειγμα",
-    "ορθογώνι", "υποτείνου", "πλευρ", "αποτέλεσμα", "λύση",
-]
+_last_wb_content = ""
 
-_last_wb_content = ""  # Track last whiteboard to avoid duplicates
+def _clean_math_text(text):
+    """Strip LaTeX formatting and convert to readable math."""
+    t = text
+    t = _re.sub(r'\$([^$]+)\$', r'\1', t)  # Strip $...$
+    t = _re.sub(r'\\alpha', 'α', t)
+    t = _re.sub(r'\\beta', 'β', t)
+    t = _re.sub(r'\\gamma', 'γ', t)
+    t = _re.sub(r'\\delta', 'δ', t)
+    t = _re.sub(r'\\pi', 'π', t)
+    t = _re.sub(r'\\sqrt\{([^}]+)\}', r'√(\1)', t)
+    t = _re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', t)
+    t = _re.sub(r'\^2', '²', t)
+    t = _re.sub(r'\^3', '³', t)
+    t = _re.sub(r'\^(\d)', r'^\1', t)
+    t = _re.sub(r'\\[a-zA-Z]+', '', t)  # Strip remaining \commands
+    t = _re.sub(r'\*\*', '', t)  # Strip markdown bold
+    t = _re.sub(r'\s+', ' ', t).strip()
+    return t
 
-def _try_auto_whiteboard(full_transcript: str):
-    """Build whiteboard from VIRON's speech. Called progressively during explanation."""
+
+def _generate_whiteboard_from_transcript(transcript: str):
+    """Use Gemini text API to generate clean whiteboard content from transcript."""
     global _last_wb_content
     
-    if not full_transcript or len(full_transcript) < 50:
+    if not transcript or len(transcript) < 60:
         return
     
-    text_lower = full_transcript.lower()
-    keyword_hits = sum(1 for kw in _EDUCATION_KEYWORDS if kw in text_lower)
+    # Quick check for educational content
+    text_lower = transcript.lower()
+    edu_words = ["θεώρημα", "φόρμουλα", "εξίσωση", "βήμα", "τετράγωνο", "ρίζα",
+                 "τρίγωνο", "κύκλο", "μαθηματικ", "παράδειγμα", "λύση", "υπολογ",
+                 "theorem", "formula", "step", "calculate", "solve", "equation",
+                 "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ"]
+    hits = sum(1 for w in edu_words if w in text_lower)
+    has_math = bool(_re.search(r'\d\s*[\+\-\=\×\÷]\s*\d|τετράγωνο|squared|²|³', text_lower))
     
-    # Also detect numbered steps/items
-    has_steps = bool(_re.search(r'(?:\*\*?\d|\bβήμα\b|\bstep\b|\b1\.\s|\b2\.\s)', text_lower))
-    has_math = bool(_re.search(r'[\d]+\s*[\+\-\×\÷\=\^]\s*[\d]|τετράγωνο|squared|ρίζα|sqrt', text_lower))
-    
-    if keyword_hits < 2 and not has_steps and not has_math:
+    if hits < 2 and not has_math:
         return
+    
+    # Avoid duplicate
+    content_hash = transcript[:100]
+    if content_hash == _last_wb_content:
+        return
+    _last_wb_content = content_hash
 
-    # Build clean content lines from transcript
-    # Split on: periods, numbered items (**1. or 1.), "Βήμα", bullet points
-    lines = _re.split(r'(?:\.\s+|\*\*\d+\.?\s*|\b[Ββ]ήμα\s+\w+:?\s*|\d+\.\s+)', full_transcript)
-    lines = [l.strip().strip('*').strip() for l in lines if len(l.strip()) > 8]
+    # Clean the transcript
+    clean = _clean_math_text(transcript)
+    
+    # Try to use Gemini text API for structured output
+    try:
+        if _genai_client:
+            response = _genai_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=f"""Μετέτρεψε αυτή την εξήγηση σε whiteboard steps. 
+Απάντησε ΜΟΝΟ σε JSON format χωρίς markdown:
+{{"title": "τίτλος", "steps": [{{"type": "text|math|result", "content": "..."}}]}}
+
+Κανόνες:
+- type "math" για εξισώσεις/αριθμούς (γράψε τα ωραία: α² + β² = γ²)  
+- type "text" για κείμενο
+- type "result" για τελικό αποτέλεσμα
+- Μέγιστο 8 steps
+- Σύντομα, καθαρά, εκπαιδευτικά
+- ΜΗΝ χρησιμοποιείς LaTeX, μόνο Unicode (², ³, √, α, β, γ, π)
+
+Εξήγηση: {clean[:500]}""",
+            )
+            
+            # Parse JSON response
+            resp_text = response.text.strip()
+            resp_text = _re.sub(r'^```json\s*', '', resp_text)
+            resp_text = _re.sub(r'\s*```$', '', resp_text)
+            
+            data = json.loads(resp_text)
+            title = data.get("title", "Εξήγηση")
+            raw_steps = data.get("steps", [])
+            
+            wb_steps = []
+            for s in raw_steps:
+                stype = s.get("type", "text").lower()
+                content = _clean_math_text(s.get("content", ""))
+                if not content:
+                    continue
+                if stype == "math":
+                    wb_steps.append({"math": content})
+                elif stype == "result":
+                    wb_steps.append({"result": content})
+                else:
+                    wb_steps.append({"text": content})
+            
+            if wb_steps:
+                log.info(f"📋 Whiteboard (Gemini): \"{title}\" ({len(wb_steps)} steps)")
+                push_to_ui(text="📋", emotion="thinking",
+                           whiteboard={"title": title, "steps": wb_steps[:10]})
+                return
+    except Exception as e:
+        log.warning(f"Whiteboard Gemini call failed: {e}")
+    
+    # Fallback: simple sentence splitting
+    lines = _re.split(r'[.!;]\s+|\*\*\d+\.?\s*', clean)
+    lines = [l.strip() for l in lines if len(l.strip()) > 8]
+    
+    if len(lines) < 2:
+        words = clean.split()
+        lines = []
+        buf = []
+        for w in words:
+            buf.append(w)
+            if len(" ".join(buf)) > 55:
+                lines.append(" ".join(buf))
+                buf = []
+        if buf:
+            lines.append(" ".join(buf))
     
     if not lines:
-        # Fallback: split on roughly every 60 chars at word boundaries
-        words = full_transcript.split()
-        lines = []
-        current = []
-        for w in words:
-            current.append(w)
-            if len(" ".join(current)) > 60:
-                lines.append(" ".join(current))
-                current = []
-        if current:
-            lines.append(" ".join(current))
-    
-    if len(lines) < 1:
         return
     
-    # Check if content changed meaningfully
-    new_content = " ".join(lines[:8])
-    if new_content == _last_wb_content:
-        return
-    _last_wb_content = new_content
-    
-    # Build whiteboard steps
-    title = lines[0][:55] if lines else "Εξήγηση"
+    title = lines[0][:55]
     wb_steps = []
-    
-    for i, line in enumerate(lines[1:10]):  # Max 10 steps
-        has_nums = bool(_re.search(r'\d', line))
-        has_eq = bool(_re.search(r'[=+\-×÷^²³]|τετράγωνο|ρίζα|ίσον', line.lower()))
-        
-        if has_eq and has_nums:
+    for line in lines[1:8]:
+        if _re.search(r'\d.*[=+\-²³√]', line):
             wb_steps.append({"math": line})
-        elif has_nums:
-            wb_steps.append({"label": line})
-        elif i == len(lines) - 2:  # Last meaningful line
-            wb_steps.append({"result": line})
         else:
             wb_steps.append({"text": line})
     
-    if not wb_steps:
-        wb_steps.append({"text": lines[0]})
-    
-    log.info(f"📋 Whiteboard: \"{title[:40]}\" ({len(wb_steps)} steps)")
-    push_to_ui(
-        text="📋",
-        emotion="thinking",
-        whiteboard={"title": title, "steps": wb_steps},
-    )
+    if wb_steps:
+        log.info(f"📋 Whiteboard (fallback): \"{title}\" ({len(wb_steps)} steps)")
+        push_to_ui(text="📋", emotion="thinking",
+                   whiteboard={"title": title, "steps": wb_steps})
 
 
 async def gemini_live_session(mic: MicStream):
@@ -508,8 +557,6 @@ async def gemini_live_session(mic: MicStream):
             async def receive_responses():
                 is_speaking = False
                 turn_transcript = []
-                last_wb_push = 0  # timestamp of last whiteboard push
-                wb_pushed = False  # whether we've pushed any whiteboard this turn
                 
                 while not _stop_session.is_set():
                     try:
@@ -532,21 +579,12 @@ async def gemini_live_session(mic: MicStream):
                                             _start_aplay()
                                         _write_audio(part.inline_data.data)
 
-                            # Handle output transcript — accumulate + progressive whiteboard
+                            # Handle output transcript — just accumulate
                             if sc.output_transcription and sc.output_transcription.text:
                                 word = sc.output_transcription.text.strip()
                                 if word:
                                     log.info(f"🤖 VIRON: \"{word}\"")
                                     turn_transcript.append(word)
-                                    
-                                    # Progressive whiteboard: check every 4 seconds during speech
-                                    now = time.time()
-                                    full_so_far = " ".join(turn_transcript)
-                                    if len(full_so_far) > 60 and (now - last_wb_push) > 4:
-                                        _try_auto_whiteboard(full_so_far)
-                                        last_wb_push = now
-                                        if not wb_pushed:
-                                            wb_pushed = True
 
                             # Handle input transcript
                             if sc.input_transcription and sc.input_transcription.text:
@@ -559,7 +597,6 @@ async def gemini_live_session(mic: MicStream):
                                 log.info("⚡ BARGE-IN — stopping audio")
                                 is_speaking = False
                                 turn_transcript.clear()
-                                wb_pushed = False
                                 _stop_aplay()
                                 state.set_status("listening")
                                 push_to_ui(emotion="surprised", action="close_whiteboard")
@@ -572,15 +609,17 @@ async def gemini_live_session(mic: MicStream):
                                 state.set_status("listening")
                                 state.last_activity = time.time()
                                 
-                                # Final whiteboard update with full transcript
+                                # Generate whiteboard from full transcript (Gemini text API)
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
                                     log.info(f"📝 Turn done ({len(full_text)} chars)")
-                                    _try_auto_whiteboard(full_text)
                                     turn_transcript.clear()
+                                    # Run in background thread (text API call)
+                                    threading.Thread(
+                                        target=_generate_whiteboard_from_transcript,
+                                        args=(full_text,), daemon=True
+                                    ).start()
                                 
-                                wb_pushed = False
-                                last_wb_push = 0
                                 log.info("✅ Turn complete — ready for next question")
 
                         await asyncio.sleep(0.1)
