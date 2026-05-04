@@ -29,3 +29,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 gateway/data/*.db
+
+
+# Family face encoding database — DO NOT commit, contains personal biometric data
+faces.db
+faces.db-journal
+faces.db-shm
+faces.db-wal
+

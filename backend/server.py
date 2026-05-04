@@ -2311,6 +2311,65 @@ def camera_toggle_proxy():
     except Exception:
         return jsonify({"ok": False})
 
+# ─── Face recognition passthrough ───────────────────────────
+@app.route('/faces/list', methods=['GET'])
+def faces_list_proxy():
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(
+            f'http://127.0.0.1:{OWW_PORT}/faces/list', timeout=3)
+        return jsonify(json.loads(resp.read()))
+    except Exception:
+        return jsonify({"available": False, "faces": []})
+
+@app.route('/faces/enroll', methods=['POST'])
+def faces_enroll_proxy():
+    import urllib.request
+    try:
+        data = json.dumps(request.get_json() or {}).encode()
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{OWW_PORT}/faces/enroll',
+            data=data, headers={'Content-Type': 'application/json'})
+        # Enrollment may take 1-2s on Jetson CPU
+        resp = urllib.request.urlopen(req, timeout=15)
+        return jsonify(json.loads(resp.read()))
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/faces/<int:face_id>', methods=['DELETE'])
+def faces_delete_proxy(face_id: int):
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{OWW_PORT}/faces/{face_id}', method='DELETE')
+        resp = urllib.request.urlopen(req, timeout=5)
+        return jsonify(json.loads(resp.read()))
+    except Exception:
+        return jsonify({"ok": False})
+
+@app.route('/faces/<int:face_id>/thumbnail', methods=['GET'])
+def faces_thumb_proxy(face_id: int):
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(
+            f'http://127.0.0.1:{OWW_PORT}/faces/{face_id}/thumbnail', timeout=3)
+        from flask import Response
+        return Response(resp.read(), mimetype='image/jpeg',
+                        headers={'Cache-Control': 'private, max-age=86400'})
+    except Exception:
+        from flask import Response
+        return Response(b'', status=404)
+
+@app.route('/faces/preview', methods=['GET'])
+def faces_preview_proxy():
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(
+            f'http://127.0.0.1:{OWW_PORT}/faces/preview', timeout=10)
+        return jsonify(json.loads(resp.read()))
+    except Exception:
+        return jsonify({"available": False, "results": []})
+
 @app.route('/pipeline/language', methods=['POST', 'GET'])
 def pipeline_language_proxy():
     """Proxy to voice pipeline's language endpoint."""

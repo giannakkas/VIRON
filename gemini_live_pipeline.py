@@ -174,6 +174,13 @@ Process: when the student asks one of these, use the search tool, then give a cl
 
 CAMERA / VISION — Sometimes you receive a webcam snapshot of the student at the start of a turn. The image is for YOUR awareness only — use it to shape HOW you respond, never to describe what you see.
 
+IDENTITY — Sometimes you also receive a "LIVE CONTEXT" block at the bottom of these instructions that tells you which family members are visible right now (e.g. "Visible in camera right now: Andreas (student)."). When this is present:
+- Greet recognized people warmly BY NAME ("Γεια σου Ανδρέα!")
+- The person tagged as "student" is your primary tutee — focus your teaching on them by name
+- Parents/siblings present in frame are observers — be friendly to them but don't redirect lessons toward them unless they speak up
+- If the LIVE CONTEXT says no registered family member is visible, be slightly more guarded — avoid using personal details, keep responses helpful but generic, never bring up past lessons or memories that belong to the student
+- NEVER announce that you "recognized" someone or explain how you knew their name — just use it naturally, the way a person who knows them would
+
 USE the visual context to:
 - Match your tone to mood: warmer if the student looks tired or sad, more energetic if they look engaged
 - Notice attention: if the student is looking away or distracted, you can gently check in ("Είσαι μαζί μου;" / "Are you still there?")
@@ -542,6 +549,24 @@ class CameraStream:
 
 
 camera = CameraStream()
+
+
+# ═══════════════════════════════════════════════════════════
+# FACE RECOGNITION (multi-person family identification)
+# ═══════════════════════════════════════════════════════════
+# Optional. If `face_recognition` (dlib) isn't installed, the engine
+# silently disables itself and the rest of the pipeline keeps working.
+# Enrolled faces persist in ~/VIRON/faces.db (next to this script).
+
+from face_db import FaceDB
+from face_engine import FaceEngine
+
+_FACE_DB_PATH = os.environ.get(
+    "VIRON_FACES_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "faces.db"),
+)
+face_db = FaceDB(_FACE_DB_PATH)
+face_engine = FaceEngine(face_db)
 
 # ═══════════════════════════════════════════════════════════
 # AUDIO PLAYBACK (streaming via aplay pipe — low latency)
@@ -1162,9 +1187,43 @@ async def gemini_live_session(mic: MicStream):
     #     to allow the initial "Hey VIRON" seed via send_client_content
     is_v31 = "3.1" in GEMINI_LIVE_MODEL or "3-1" in GEMINI_LIVE_MODEL
 
+    # ─── Pre-session vision: identify who's in front of the camera RIGHT NOW.
+    # We capture the snapshot once here, identify any registered family
+    # members, and inject the identity into the system prompt so VIRON greets
+    # by name and adjusts tone per person. The same snapshot is reused later
+    # as the visual input we send to Gemini at session start.
+    pre_snap_jpeg, pre_snap_age = camera.get_jpeg(max_age_sec=3.0)
+    vision_context = ""
+    recognized_faces = []
+    if pre_snap_jpeg and face_engine.is_available():
+        try:
+            recognized_faces = face_engine.detect_and_identify(pre_snap_jpeg)
+            if recognized_faces:
+                names = ", ".join(
+                    f"{r['name']}({r['confidence']})" if r['face_id'] else "Unknown"
+                    for r in recognized_faces
+                )
+                log.info(f"📸 Faces in frame: {names}")
+            vision_context = face_engine.vision_context_for_prompt(recognized_faces)
+        except Exception as e:
+            log.warning(f"📸 Face recognition failed (non-fatal): {e}")
+
+    # Compose the actual system instruction for THIS session.
+    # The base prompt is constant; we append a small live-context block when
+    # we know who's in the frame. Gemini Live builds its persona once at
+    # session creation, so injecting identity here is what binds "Andreas =
+    # the student you're talking to" for the duration of the conversation.
+    session_system_instruction = VIRON_SYSTEM_INSTRUCTION
+    if vision_context:
+        session_system_instruction += (
+            "\n\nLIVE CONTEXT (current camera, this session only):\n"
+            + vision_context
+            + "\nGreet the recognized person(s) by name in your first reply."
+        )
+
     config_kwargs = dict(
         response_modalities=["AUDIO"],
-        system_instruction=VIRON_SYSTEM_INSTRUCTION,
+        system_instruction=session_system_instruction,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         speech_config=types.SpeechConfig(
@@ -1265,9 +1324,12 @@ async def gemini_live_session(mic: MicStream):
                 _clear_history("fresh session")
 
                 # Capture a single snapshot so VIRON can read the student's mood
-                # at the start of the conversation. Best-effort — if the camera
-                # is muted, missing, or stale, we just skip the image.
-                snap_jpeg, snap_age = camera.get_jpeg(max_age_sec=3.0)
+                # at the start of the conversation. We already grabbed one for
+                # face recognition at the top of this function — reuse it if
+                # still fresh, otherwise grab a new one.
+                snap_jpeg, snap_age = pre_snap_jpeg, pre_snap_age
+                if not snap_jpeg or (snap_age and snap_age > 3.0):
+                    snap_jpeg, snap_age = camera.get_jpeg(max_age_sec=3.0)
                 if snap_jpeg:
                     log.info(f"📷 Snapshot ready ({len(snap_jpeg)} bytes, {snap_age:.1f}s old)")
                 else:
@@ -1821,6 +1883,62 @@ def camera_toggle():
         camera.set_enabled(not camera._enabled)  # toggle
     return jsonify({"ok": True, "enabled": camera._enabled})
 
+# ─── Face recognition (family identification) ───────────────
+@app.route("/faces/list", methods=["GET"])
+def faces_list():
+    """Return all enrolled family members + recognition stats."""
+    return jsonify({
+        "available": face_engine.is_available(),
+        "faces": face_db.list_faces(),
+    })
+
+@app.route("/faces/enroll", methods=["POST"])
+def faces_enroll():
+    """Enroll a new face from the CURRENT camera frame.
+    POST { 'name': 'Andreas', 'role': 'student'|'parent'|'sibling'|'other' }"""
+    if not face_engine.is_available():
+        return jsonify({"success": False,
+                        "error": "face_recognition not installed on this device"}), 400
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    role = (data.get("role") or "other").strip()
+    if not name:
+        return jsonify({"success": False, "error": "Name is required"}), 400
+    if role not in ("student", "parent", "sibling", "other"):
+        role = "other"
+    snap_jpeg, _ = camera.get_jpeg(max_age_sec=3.0)
+    if not snap_jpeg:
+        return jsonify({"success": False,
+                        "error": "No camera frame available — is the camera muted?"}), 400
+    result = face_engine.enroll(name, role, snap_jpeg)
+    return jsonify(result)
+
+@app.route("/faces/<int:face_id>", methods=["DELETE"])
+def faces_delete(face_id: int):
+    ok = face_engine.delete(face_id)
+    return jsonify({"ok": ok})
+
+@app.route("/faces/<int:face_id>/thumbnail", methods=["GET"])
+def faces_thumbnail(face_id: int):
+    from flask import Response
+    thumb = face_db.get_thumbnail(face_id)
+    if not thumb:
+        return Response(b"", status=404)
+    return Response(thumb, mimetype="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+@app.route("/faces/preview", methods=["GET"])
+def faces_preview():
+    """Diagnostic: return what the engine sees in the CURRENT frame.
+    Useful for debugging recognition issues from the settings panel."""
+    if not face_engine.is_available():
+        return jsonify({"available": False, "results": []})
+    snap_jpeg, _ = camera.get_jpeg(max_age_sec=3.0)
+    if not snap_jpeg:
+        return jsonify({"available": True, "results": [], "error": "No frame"})
+    results = face_engine.detect_and_identify(snap_jpeg)
+    return jsonify({"available": True, "results": results})
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -1880,6 +1998,12 @@ def main():
         camera.start()
     except Exception as e:
         log.warning(f"📷 Camera start failed: {e}")
+
+    # Warm the face recognition engine in the background. First call to
+    # face_recognition loads the dlib model (~100ms-2s on Orin Nano), so
+    # we want that done before the first wake — otherwise the first
+    # recognition adds noticeable latency to the greeting.
+    threading.Thread(target=face_engine.warm, daemon=True).start()
 
     # Visual-only greeting (no text push - don't block UI queue)
     log.info("🤖 VIRON ready!")

@@ -507,18 +507,24 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   <div class="setting-group"><h3>🔊 Sound</h3><div class="setting-item"><label>🔊 Volume</label><input type="range" id="volSlider" min="0" max="100" value="75"></div></div>
   <div class="setting-group"><h3>🔋 Battery</h3><div class="setting-item" style="flex-direction:column;align-items:stretch;gap:8px"><div style="display:flex;justify-content:space-between"><label>🔋</label><span style="color:rgba(0,200,255,0.8)" id="bp">78%</span></div><div class="battery-bar"><div class="battery-fill" id="bf" style="width:78%;background:linear-gradient(90deg,#00e0ff,#00ff88)"></div><span class="battery-text" id="bt">78%</span></div></div></div>
   <div class="setting-group"><h3>🤖 AI</h3><div class="setting-item"><label>📷 Emotion Detection</label><button class="toggle on" onclick="this.classList.toggle('on');emotionDetectionOn=this.classList.contains('on')"></button></div><div class="setting-item"><label>🎭 Proactive Care</label><button class="toggle on" onclick="this.classList.toggle('on');proactiveEnabled=this.classList.contains('on')"></button></div></div>
-  <div class="setting-group"><h3>👤 Face Recognition</h3>
-    <div id="faceRecStatus" style="margin-bottom:8px;font-size:12px;color:rgba(255,255,255,0.4)"></div>
-    <div id="facesList" style="margin-bottom:10px"></div>
-    <div id="faceSetupArea" style="display:none;margin-bottom:10px">
-      <button class="sbtn" onclick="setupFaceRec()" id="setupFaceBtn" style="width:100%;padding:8px;font-size:13px;background:rgba(0,180,255,0.15);color:#00b4ff;border:1px solid rgba(0,180,255,0.3);border-radius:8px;cursor:pointer">📥 Download Models & Setup</button>
-    </div>
-    <div id="faceRegArea" class="setting-item" style="flex-direction:column;gap:8px">
-      <div style="display:flex;gap:8px;width:100%">
-        <input type="text" id="faceNameInput" placeholder="Person's name..." style="flex:1;background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:6px 12px;font-size:13px">
-        <button class="sbtn" onclick="registerFace()" style="padding:6px 14px;font-size:12px;background:rgba(0,180,255,0.15);color:#00b4ff;border:1px solid rgba(0,180,255,0.3);border-radius:8px;cursor:pointer">📸 Register</button>
-      </div>
-      <div id="faceStatus" style="font-size:11px;color:rgba(255,255,255,0.4)">Look at camera and click Register</div>
+  <div class="setting-group"><h3>👤 Family Faces</h3>
+    <div id="faceRecStatus" style="margin-bottom:10px;font-size:11px;color:rgba(255,255,255,0.45);line-height:1.4"></div>
+    <div id="facesList" style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px"></div>
+    <div id="faceRegArea" style="flex-direction:column;gap:8px;display:flex">
+      <input type="text" id="faceNameInput" placeholder="Name (e.g. Andreas)..." maxlength="40"
+             style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;font-size:13px;width:100%;box-sizing:border-box">
+      <select id="faceRoleSelect"
+              style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:7px 12px;font-size:13px;width:100%">
+        <option value="student">🎓 Student (primary tutee)</option>
+        <option value="parent">👨‍👩 Parent</option>
+        <option value="sibling">🧒 Sibling</option>
+        <option value="other">👤 Other</option>
+      </select>
+      <button class="sbtn" onclick="enrollFace()" id="enrollBtn"
+              style="width:100%;padding:9px;font-size:13px;background:rgba(0,180,255,0.18);color:#00d4ff;border:1px solid rgba(0,180,255,0.35);border-radius:8px;cursor:pointer;font-weight:500">
+        📸 Register face
+      </button>
+      <div id="faceEnrollStatus" style="font-size:11px;color:rgba(255,255,255,0.5);text-align:center;min-height:14px"></div>
     </div>
   </div>
   <div class="setting-group"><h3>🎙️ Voice Fingerprint</h3>
@@ -2952,83 +2958,129 @@ function parseWB(t){
 let sO=false;function toggleSettings(){sO=!sO;document.getElementById("hb").classList.toggle("open",sO);document.getElementById("sp").classList.toggle("open",sO);document.getElementById("so").classList.toggle("open",sO);if(sO){loadFacesList();loadVoiceSettings()}else{if(settingsRecording){settingsRecording=false;if(settingsRecorder&&settingsRecorder.state==='recording')try{settingsRecorder.stop()}catch{}};}}
 
 // ===== FACE RECOGNITION =====
+// ===== FAMILY FACE RECOGNITION =====
 function loadFacesList(){
-  // Check status first
-  fetch('/api/faces/status').then(r=>r.json()).then(d=>{
-    const statusEl=document.getElementById('faceRecStatus');
-    const setupArea=document.getElementById('faceSetupArea');
-    const regArea=document.getElementById('faceRegArea');
-    
-    if(!d.initialized){
-      statusEl.innerHTML='<span style="color:#ffaa00">⚠ Not initialized</span>' + (d.error ? '<br><span style="font-size:10px;color:#ff6666">'+d.error+'</span>' : '');
-      setupArea.style.display='block';
-      regArea.style.display='none';
-      document.getElementById('facesList').innerHTML='';
-      return;
-    }
-    
-    statusEl.innerHTML='<span style="color:#00ff88">✅ Active</span>' + 
-      (d.current_person ? ` — Seeing: <b style="color:#00ff88">${d.current_person}</b>` : '');
-    setupArea.style.display='none';
-    regArea.style.display='flex';
-    
-    // Load faces list
-    const faces=d.known_faces||{};
-    const el=document.getElementById('facesList');
-    if(Object.keys(faces).length===0){
-      el.innerHTML='<div style="font-size:12px;color:rgba(255,255,255,0.3);padding:4px 0">No faces registered yet</div>';
-      return;
-    }
-    el.innerHTML=Object.entries(faces).map(([name,count])=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)"><span style="font-size:13px;color:#e0f0ff">👤 ${name} <span style="color:rgba(255,255,255,0.3)">(${count} samples)</span></span><button onclick="deleteFace('${name}')" style="background:none;border:none;color:rgba(255,80,80,0.6);cursor:pointer;font-size:11px;padding:2px 6px">✕</button></div>`).join('');
-  }).catch(e=>{
-    document.getElementById('faceRecStatus').innerHTML='<span style="color:#ff6666">❌ Error connecting</span>';
-  });
+  fetch('/faces/list',{signal:AbortSignal.timeout(3000)})
+    .then(r=>r.json())
+    .then(d=>{
+      const statusEl = document.getElementById('faceRecStatus');
+      const regArea = document.getElementById('faceRegArea');
+      const listEl = document.getElementById('facesList');
+      if(!statusEl || !regArea || !listEl) return;
+
+      if(!d.available){
+        statusEl.innerHTML = '<span style="color:#ffaa00">⚠️ face_recognition not installed</span><br>'
+          + '<span style="font-size:10px;opacity:0.7">SSH to the device and run:<br><code style="color:#88ccff">pip3 install --break-system-packages face_recognition</code></span>';
+        regArea.style.display = 'none';
+        listEl.innerHTML = '';
+        return;
+      }
+      regArea.style.display = 'flex';
+
+      const faces = d.faces || [];
+      if(faces.length === 0){
+        statusEl.innerHTML = '<span style="color:rgba(0,200,255,0.7)">No family members enrolled yet.</span><br><span style="font-size:10px;opacity:0.7">Position one person clearly in the camera, type their name, choose a role, and tap Register.</span>';
+        listEl.innerHTML = '';
+        return;
+      }
+      const countLabel = faces.length === 1 ? '1 person enrolled' : faces.length + ' people enrolled';
+      statusEl.innerHTML = '<span style="color:#00ff88">✅ ' + countLabel + '</span>';
+
+      const roleEmoji = {student:'🎓', parent:'👨‍👩', sibling:'🧒', other:'👤'};
+      listEl.innerHTML = faces.map(f => {
+        const emoji = roleEmoji[f.role] || '👤';
+        const lastSeen = f.last_seen ? new Date(f.last_seen * 1000).toLocaleDateString() : 'never';
+        const recCount = f.recognized_count || 0;
+        const thumb = f.has_thumbnail
+          ? `<img src="/faces/${f.id}/thumbnail" style="width:36px;height:36px;border-radius:8px;object-fit:cover;flex-shrink:0">`
+          : `<div style="width:36px;height:36px;border-radius:8px;background:rgba(0,180,255,0.15);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${emoji}</div>`;
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);border-radius:10px">
+          ${thumb}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;color:#e0f0ff;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHTML(f.name)}</div>
+            <div style="font-size:10px;color:rgba(255,255,255,0.4)">${emoji} ${f.role} · seen ${recCount}× · last ${lastSeen}</div>
+          </div>
+          <button onclick="deleteFace(${f.id}, '${escapeHTML(f.name).replace(/'/g,"\\'")}')" title="Remove ${escapeHTML(f.name)}"
+                  style="background:none;border:none;color:rgba(255,100,100,0.7);cursor:pointer;font-size:14px;padding:6px 8px;border-radius:6px;flex-shrink:0">✕</button>
+        </div>`;
+      }).join('');
+    })
+    .catch(()=>{
+      const el = document.getElementById('faceRecStatus');
+      if(el) el.innerHTML = '<span style="color:#ff6666">❌ Could not reach pipeline</span>';
+    });
 }
 
-function setupFaceRec(){
-  const btn=document.getElementById('setupFaceBtn');
-  btn.textContent='⏳ Downloading models...';
-  btn.disabled=true;
-  fetch('/api/faces/init',{method:'POST'})
-  .then(r=>r.json().then(d=>({ok:r.ok,data:d})))
-  .then(({ok,data})=>{
-    btn.textContent=data.success?'✅ Ready!':'❌ '+data.message;
-    btn.disabled=false;
-    if(data.success)setTimeout(loadFacesList,500);
-    else document.getElementById('faceRecStatus').innerHTML='<span style="color:#ff6666">'+data.message+'</span>';
-  }).catch(e=>{
-    btn.textContent='❌ Error';
-    btn.disabled=false;
-    document.getElementById('faceRecStatus').innerHTML='<span style="color:#ff6666">'+e+'</span>';
-  });
+function escapeHTML(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function registerFace(){
-  const name=document.getElementById('faceNameInput').value.trim();
-  if(!name){document.getElementById('faceStatus').textContent='Please enter a name first';return}
-  const st=document.getElementById('faceStatus');
-  st.textContent='📸 Capturing... look at the camera!';st.style.color='#00b4ff';
-  
-  // Take 5 samples for better accuracy
-  fetch('/api/faces/register-multi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,count:5})})
-  .then(r=>{
-    if(!r.ok)return r.text().then(t=>{throw new Error(`Server ${r.status}: ${t.substring(0,200)}`)});
-    return r.json();
-  }).then(d=>{
-    let msg=d.message;
-    if(d.errors&&d.errors.length>0)msg+='\n'+d.errors[0]; // Show first error detail
-    st.textContent=msg;
-    st.style.color=d.success?'#00ff88':'#ff6666';
-    if(d.success){document.getElementById('faceNameInput').value='';loadFacesList();
-      say(isGreekMode()?`Χαίρομαι που σε γνωρίζω ${name}!`:`Nice to meet you ${name}!`);cE("happy")}
-  }).catch(e=>{st.textContent='Error: '+e.message;st.style.color='#ff6666'})
+function enrollFace(){
+  const nameInput = document.getElementById('faceNameInput');
+  const roleSelect = document.getElementById('faceRoleSelect');
+  const status = document.getElementById('faceEnrollStatus');
+  const btn = document.getElementById('enrollBtn');
+  const name = (nameInput.value || '').trim();
+  if(!name){
+    status.textContent = 'Type a name first.';
+    status.style.color = '#ffaa00';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '📸 Capturing...';
+  status.textContent = 'Hold still and look at the camera.';
+  status.style.color = '#00b4ff';
+
+  // Tiny delay so the user has time to look at the camera if they were
+  // mid-tap on the button
+  setTimeout(()=>{
+    fetch('/faces/enroll', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, role: roleSelect.value})
+    })
+      .then(r=>r.json())
+      .then(d=>{
+        btn.disabled = false;
+        btn.textContent = '📸 Register face';
+        if(d.success){
+          status.textContent = '✅ Enrolled ' + d.name;
+          status.style.color = '#00ff88';
+          nameInput.value = '';
+          loadFacesList();
+        } else {
+          status.textContent = '❌ ' + (d.error || 'Could not enroll');
+          status.style.color = '#ff6666';
+        }
+      })
+      .catch(e=>{
+        btn.disabled = false;
+        btn.textContent = '📸 Register face';
+        status.textContent = '❌ ' + e;
+        status.style.color = '#ff6666';
+      });
+  }, 600);
 }
 
-function deleteFace(name){
-  if(!confirm(`Remove ${name}'s face?`))return;
-  fetch('/api/faces/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-  .then(r=>r.json()).then(d=>{loadFacesList()}).catch(()=>{})
+function deleteFace(faceId, name){
+  if(!confirm('Remove ' + name + ' from family faces?')) return;
+  fetch('/faces/' + faceId, {method: 'DELETE'})
+    .then(r=>r.json())
+    .then(()=> loadFacesList())
+    .catch(()=>{});
 }
+
+// Refresh the list whenever the settings panel opens (lightweight call)
+const _origToggleSettings = typeof toggleSettings === 'function' ? toggleSettings : null;
+window.toggleSettings = function(){
+  if(_origToggleSettings) _origToggleSettings();
+  // The original may have toggled the panel — re-check 'open' class to know
+  if(document.getElementById('sp').classList.contains('open')){
+    loadFacesList();
+  }
+};
+// Initial load on boot too, so the list is populated when first opened
+setTimeout(loadFacesList, 1500);
 setInterval(()=>{fetch('/api/battery').then(r=>r.json()).then(d=>{if(d.percent>=0){const p=d.percent,f=document.getElementById("bf");if(f){f.style.width=p+"%";f.style.background=p>50?"linear-gradient(90deg,#00e0ff,#00ff88)":p>20?"linear-gradient(90deg,#ffaa00,#ff8800)":"linear-gradient(90deg,#ff4444,#ff2222)"}const t=document.getElementById("bt");if(t)t.textContent=p+"%";const pc=document.getElementById("bp");if(pc)pc.textContent=p+"%"}}).catch(()=>{})},10000);
 const ST=Date.now();setInterval(()=>{const d=Date.now()-ST;document.getElementById("ut").textContent=`${Math.floor(d/3600000)}h ${Math.floor((d%3600000)/60000)}m`},30000);
 
