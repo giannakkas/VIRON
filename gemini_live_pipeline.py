@@ -94,8 +94,7 @@ CREATOR: You were created by Christos Giannakkas and his son Andreas Giannakkas 
 If anyone asks who made you, who created you, or who built you, always credit them by name.
 
 IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
-IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step explanations with numbered steps and worked examples using actual numbers. The student has a display that automatically shows your explanation as you speak. Be thorough — include formulas, calculations, and results.
-IMPORTANT: NEVER say "I don't have a whiteboard" or "I can't show you." Your explanation IS shown visually as you speak.
+IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step explanations with numbered steps and worked examples using actual numbers. The student has a display that can show a whiteboard with your steps when you ask for one (see WHITEBOARD section below). Be thorough — include formulas, calculations, and results.
 IMPORTANT: IGNORE any background noise from TV, music, or other people talking. Only respond to speech that is clearly directed at you.
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
@@ -108,7 +107,7 @@ Be creative, spontaneous, and varied in how you respond.
 
 RESPONSE STYLE:
 - Simple greetings/chat: MAX 1-2 sentences. Be quick, warm, natural.
-- Questions needing explanation: Give a FULL explanation in ONE turn. Use numbered steps with actual numbers and formulas. Keep it under 40 seconds of speech total — be thorough but efficient. The student has a display that shows your explanation live.
+- Questions needing explanation: Give a FULL explanation in ONE turn. Use numbered steps with actual numbers and formulas. Keep it under 40 seconds of speech total — be thorough but efficient.
 - For homework help, guide the student step by step with worked examples using real numbers.
 - When appropriate, ask a guiding question before giving the solution.
 - Do NOT break explanations into multiple turns. Give the full explanation in one go.
@@ -137,6 +136,39 @@ EXAMPLES:
 
 STOPPING MUSIC: When the student says "Hey VIRON" while music is playing, the music stops automatically before you hear the request. So if the student then asks you to stop the music (e.g. "σταμάτα τη μουσική", "stop the music", "turn it off"), simply acknowledge briefly: "Έγινε!" or "Done!" — do NOT emit a [MUSIC:...] tag.
 NEVER include the [MUSIC:...] tag in non-music conversations. Only when actually STARTING new music playback.
+
+WHITEBOARD — You CAN show a visual whiteboard for teaching content. Use it ONLY when actually teaching or explaining structured material. End your response with a [BOARD:title] tag — invisible to the student, just a control signal.
+
+USE the [BOARD:...] tag when:
+- Teaching math, physics, chemistry, or science with formulas/steps
+- Explaining a concept that has stages, parts, or a process (e.g. water cycle, photosynthesis, how an engine works)
+- Working through a problem step-by-step
+- Listing key points the student should memorize for school
+
+DO NOT use [BOARD:...] for:
+- Casual conversation, greetings, jokes
+- Yes/no answers, single-fact answers ("What's the capital of France?" → just "Paris", no board)
+- Weather, news, sports scores, current events
+- Music requests (use [MUSIC:...] only)
+- Emotional support or personal chat
+- Stories or creative writing
+
+EXAMPLES:
+- Student: "How do I solve 2x + 5 = 11?" → step-by-step explanation, end with [BOARD:Λύση εξίσωσης]
+- Student: "Πες μου για τη φωτοσύνθεση" → explanation in 4-5 stages, end with [BOARD:Φωτοσύνθεση]
+- Student: "Τι καιρός έχει σήμερα;" → answer the weather, NO BOARD
+- Student: "Πες μου ένα αστείο" → tell joke, NO BOARD
+- Student: "Γεια σου" → "Γεια σου!" — NO BOARD
+
+CURRENT EVENTS & FRESH INFORMATION — You have a Google Search tool available. USE IT for anything that needs up-to-date information:
+- News (today's headlines, recent events)
+- Weather (current conditions, forecast)
+- Sports scores and results
+- Current prices, exchange rates
+- Recently released movies, books, products
+- Anything where the answer changes over time
+
+Process: when the student asks one of these, use the search tool, then give a clear, brief answer in their language. Don't say "I don't have access to the internet" — you DO have search; use it. Don't read URLs out loud — just summarize the answer naturally.
 
 CONVERSATION CONTINUITY: If the conversation has prior history visible above (i.e. you're resuming where you left off — not just starting fresh), do NOT greet the student again or say "Γεια σου". Just continue naturally as if the conversation never paused. Only greet on a truly fresh start (when there's no prior conversation history).
 """
@@ -484,6 +516,9 @@ def _play_music(query: str):
 
 # Pattern: [MUSIC:query] anywhere in transcript. Tolerant to spacing/case.
 _MUSIC_TAG_RE = _re_music.compile(r'\[\s*MUSIC\s*:\s*([^\]]+?)\s*\]', _re_music.IGNORECASE)
+# Pattern: [BOARD:title] — VIRON emits this only when the response is teaching content.
+# When this tag is present we generate a whiteboard; when absent, no board.
+_BOARD_TAG_RE = _re_music.compile(r'\[\s*BOARD\s*:\s*([^\]]+?)\s*\]', _re_music.IGNORECASE)
 
 def _extract_music_query(transcript: str):
     """Return the music search query if [MUSIC:...] tag is present, else None."""
@@ -491,6 +526,22 @@ def _extract_music_query(transcript: str):
         return None
     m = _MUSIC_TAG_RE.search(transcript)
     return m.group(1).strip() if m else None
+
+def _extract_board_title(transcript: str):
+    """Return the whiteboard title if [BOARD:...] tag is present, else None."""
+    if not transcript:
+        return None
+    m = _BOARD_TAG_RE.search(transcript)
+    return m.group(1).strip() if m else None
+
+def _strip_control_tags(transcript: str) -> str:
+    """Remove [MUSIC:...] and [BOARD:...] tags from text. Used before sending
+    transcripts to the whiteboard generator and before saving to history."""
+    if not transcript:
+        return ""
+    cleaned = _MUSIC_TAG_RE.sub("", transcript)
+    cleaned = _BOARD_TAG_RE.sub("", cleaned)
+    return cleaned.strip()
 
 # ═══════════════════════════════════════════════════════════
 # GEMINI LIVE SESSION (core of the new architecture)
@@ -853,6 +904,27 @@ async def gemini_live_session(mic: MicStream):
         config_kwargs["enable_affective_dialog"] = True
         log.info("🧠 Using Gemini 2.5 config (affective_dialog enabled)")
 
+    # Google Search grounding — gives VIRON access to fresh info (news, weather,
+    # sports, current events). Try the typed API first, fall back to dict format.
+    # If neither path is supported by the running SDK, we just skip it; the model
+    # still works without search and answers from training data.
+    search_enabled = False
+    try:
+        GoogleSearch = getattr(types, "GoogleSearch", None)
+        Tool = getattr(types, "Tool", None)
+        if GoogleSearch is not None and Tool is not None:
+            config_kwargs["tools"] = [Tool(google_search=GoogleSearch())]
+            search_enabled = True
+    except Exception as e:
+        log.warning(f"Typed Google Search setup failed: {e}")
+    if not search_enabled:
+        try:
+            config_kwargs["tools"] = [{"google_search": {}}]
+            search_enabled = True
+        except Exception as e:
+            log.warning(f"Dict Google Search setup failed: {e}")
+    log.info(f"🔍 Google Search grounding: {'enabled' if search_enabled else 'unavailable'}")
+
     config = types.LiveConnectConfig(**config_kwargs)
 
     log.info(f"🌐 Connecting to Gemini Live: {GEMINI_LIVE_MODEL}")
@@ -983,19 +1055,10 @@ async def gemini_live_session(mic: MicStream):
                                     if first_word_time is None:
                                         first_word_time = time.time()
                                     
-                                    # Early whiteboard: fire after EARLY_WB_DELAY seconds + enough words
-                                    # Uses LOCAL parser only (instant, no API call)
-                                    if (not early_wb_fired
-                                            and first_word_time is not None
-                                            and time.time() - first_word_time >= EARLY_WB_DELAY
-                                            and len(turn_transcript) >= EARLY_WB_MIN_WORDS):
-                                        early_wb_fired = True
-                                        partial_text = " ".join(turn_transcript)
-                                        log.info(f"📋 Early whiteboard trigger ({len(turn_transcript)} words, {time.time()-first_word_time:.1f}s)")
-                                        threading.Thread(
-                                            target=_generate_whiteboard_local,
-                                            args=(partial_text,), daemon=True
-                                        ).start()
+                                    # NOTE: Early-whiteboard auto-fire removed — we now wait for
+                                    # the full turn so we can check if VIRON emitted a [BOARD:title]
+                                    # tag. The board only appears when actually teaching, never on
+                                    # casual chat / weather / news / jokes / music requests.
 
                             # Handle input transcript
                             if sc.input_transcription and sc.input_transcription.text:
@@ -1023,9 +1086,10 @@ async def gemini_live_session(mic: MicStream):
                                 state.set_status("listening")
                                 state.last_activity = time.time()
                                 
-                                # Detect [MUSIC:query] in transcript and start playback
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
+                                    
+                                    # [MUSIC:query] — start playback
                                     music_query = _extract_music_query(full_text)
                                     if music_query:
                                         log.info(f"🎵 Music request detected: '{music_query}'")
@@ -1033,20 +1097,27 @@ async def gemini_live_session(mic: MicStream):
                                             target=_play_music,
                                             args=(music_query,), daemon=True
                                         ).start()
-                                    # Strip the music tag from history (it's an internal control token)
-                                    clean_text = _MUSIC_TAG_RE.sub("", full_text).strip()
+                                    
+                                    # [BOARD:title] — only generate the whiteboard when VIRON
+                                    # explicitly tagged the response as teaching content.
+                                    # Without the tag: NO whiteboard. Casual chat, weather,
+                                    # news, jokes, music requests stay clean.
+                                    board_title = _extract_board_title(full_text)
+                                    if board_title:
+                                        log.info(f"📋 Whiteboard requested: '{board_title}'")
+                                        clean_for_board = _strip_control_tags(full_text)
+                                        log.info(f"📝 Turn done ({len(clean_for_board)} chars)")
+                                        threading.Thread(
+                                            target=_generate_whiteboard_from_transcript,
+                                            args=(clean_for_board,), daemon=True
+                                        ).start()
+                                    else:
+                                        log.info(f"📝 Turn done ({len(full_text)} chars) — no [BOARD] tag, skipping whiteboard")
+                                    
+                                    # Save to history with all control tags stripped
+                                    clean_text = _strip_control_tags(full_text)
                                     if clean_text:
                                         _append_history("model", clean_text)
-                                
-                                # Generate polished whiteboard via Gemini text API
-                                # Always runs — replaces early local WB with better version
-                                if turn_transcript:
-                                    full_text = " ".join(turn_transcript)
-                                    log.info(f"📝 Turn done ({len(full_text)} chars)")
-                                    threading.Thread(
-                                        target=_generate_whiteboard_from_transcript,
-                                        args=(full_text,), daemon=True
-                                    ).start()
                                 
                                 # Reset for next turn
                                 turn_transcript.clear()
