@@ -124,6 +124,19 @@ SAFETY — NON-NEGOTIABLE:
 - Never generate sexual, abusive, manipulative, or dangerous content.
 - Never provide harmful real-world instructions.
 - Never be politically manipulative.
+
+MUSIC — You CAN play music! When the student asks for music — by song name, artist, genre, or mood — do BOTH of these:
+1. Say a brief, warm acknowledgment in Greek/English (1 short sentence). Examples: "Φυσικά, ορίστε!" or "Sure, here you go!"
+2. End your response with a [MUSIC:search query] tag. The tag is silent — the student does NOT hear or see it. It tells VIRON what to look up on YouTube.
+
+EXAMPLES:
+- Student: "Παίξε Bohemian Rhapsody" → "Καλή επιλογή! [MUSIC:Bohemian Rhapsody Queen]"
+- Student: "play something happy" → "Sure, something cheerful coming up! [MUSIC:happy upbeat pop music]"
+- Student: "βάλε ελληνική μουσική" → "Έρχεται! [MUSIC:Greek folk music traditional]"
+- Student: "play Despacito" → "Ωραία επιλογή! [MUSIC:Despacito Luis Fonsi]"
+
+When the student wakes you up again ("Hey VIRON"), the music will stop automatically — you don't need to mention it.
+NEVER include the [MUSIC:...] tag in non-music conversations. Only when actually starting music playback.
 """
 
 # ═══════════════════════════════════════════════════════════
@@ -323,6 +336,71 @@ def _finish_aplay():
                 _aplay_proc.kill()
             _aplay_proc = None
     _is_playing.clear()
+
+# ═══════════════════════════════════════════════════════════
+# MUSIC PLAYBACK (mpv + yt-dlp for YouTube streaming)
+# ═══════════════════════════════════════════════════════════
+# Requires:  sudo apt install mpv yt-dlp
+#
+# VIRON emits a [MUSIC:query] tag at end of response to request playback.
+# We parse the tag from output transcript at turn_complete and stream
+# the matching YouTube audio. New wake word stops playback.
+
+import re as _re_music
+
+_music_proc = None
+_music_lock = threading.Lock()
+_music_query = ""
+
+def _stop_music():
+    """Terminate any currently playing music. Safe to call repeatedly."""
+    global _music_proc, _music_query
+    with _music_lock:
+        if _music_proc and _music_proc.poll() is None:
+            log.info("🎵 Stopping music")
+            try:
+                _music_proc.terminate()
+                _music_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                _music_proc.kill()
+            except Exception:
+                pass
+        _music_proc = None
+        _music_query = ""
+
+def _play_music(query: str):
+    """Search YouTube and stream audio. Background, non-blocking."""
+    global _music_proc, _music_query
+    _stop_music()
+    cmd = [
+        "mpv",
+        "--no-video",
+        "--no-terminal",
+        "--audio-display=no",
+        "--really-quiet",
+        f"ytdl://ytsearch1:{query}",
+    ]
+    try:
+        with _music_lock:
+            _music_proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            _music_query = query
+        log.info(f"🎵 Playing: '{query}' (PID {_music_proc.pid})")
+    except FileNotFoundError:
+        log.error("❌ mpv not installed — run: sudo apt install mpv yt-dlp")
+    except Exception as e:
+        log.error(f"🎵 Music playback failed: {e}")
+
+# Pattern: [MUSIC:query] anywhere in transcript. Tolerant to spacing/case.
+_MUSIC_TAG_RE = _re_music.compile(r'\[\s*MUSIC\s*:\s*([^\]]+?)\s*\]', _re_music.IGNORECASE)
+
+def _extract_music_query(transcript: str):
+    """Return the music search query if [MUSIC:...] tag is present, else None."""
+    if not transcript:
+        return None
+    m = _MUSIC_TAG_RE.search(transcript)
+    return m.group(1).strip() if m else None
 
 # ═══════════════════════════════════════════════════════════
 # GEMINI LIVE SESSION (core of the new architecture)
@@ -771,6 +849,17 @@ async def gemini_live_session(mic: MicStream):
                                 state.set_status("listening")
                                 state.last_activity = time.time()
                                 
+                                # Detect [MUSIC:query] in transcript and start playback
+                                if turn_transcript:
+                                    full_text = " ".join(turn_transcript)
+                                    music_query = _extract_music_query(full_text)
+                                    if music_query:
+                                        log.info(f"🎵 Music request detected: '{music_query}'")
+                                        threading.Thread(
+                                            target=_play_music,
+                                            args=(music_query,), daemon=True
+                                        ).start()
+                                
                                 # Generate polished whiteboard via Gemini text API
                                 # Always runs — replaces early local WB with better version
                                 if turn_transcript:
@@ -924,6 +1013,8 @@ def main_loop(mic: MicStream):
 
             # Check wake word
             if check_wake(frame):
+                # Stop any music that's currently playing — student wants attention
+                _stop_music()
                 log.info("🎯 WAKE WORD DETECTED!")
                 state.set_status("listening")
                 push_to_ui(emotion="hopeful")
@@ -1125,6 +1216,7 @@ def main():
     try:
         main_loop(mic)
     finally:
+        _stop_music()
         mic.stop()
         if oww_model is not None:
             try:

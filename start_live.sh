@@ -19,6 +19,7 @@ if [ "$1" = "stop" ]; then
     pkill -f "gateway/main.py" 2>/dev/null
     pkill -f "viron_kiosk.py" 2>/dev/null
     pkill -f "aplay.*plughw" 2>/dev/null
+    pkill -f "mpv.*ytdl" 2>/dev/null
     sleep 2
     echo "✓ Stopped"
     exit 0
