@@ -433,6 +433,14 @@ def _push_music_state(playing: bool, title: str = "", paused: bool = False):
     except Exception as e:
         log.warning(f"Music UI push failed: {e}")
 
+def _duck_music(should_duck: bool):
+    """Lower mpv volume while VIRON is speaking, restore when done.
+    No-op if no music is playing."""
+    if _music_proc is None or _music_proc.poll() is not None:
+        return
+    target_vol = 25 if should_duck else 100
+    _mpv_ipc("set_property", "volume", target_vol)
+
 def _stop_music():
     """Terminate any currently playing music. Safe to call repeatedly."""
     global _music_proc, _music_query, _music_paused
@@ -811,7 +819,7 @@ Spoken explanation:
 {clean[:1200]}"""
 
                 response = _genai_client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash-lite",
                     contents=prompt,
                 )
                 
@@ -1117,6 +1125,7 @@ async def gemini_live_session(mic: MicStream):
                                             state.set_status("speaking")
                                             push_to_ui(emotion="happy")
                                             _start_aplay()
+                                            _duck_music(True)  # lower music while VIRON talks
                                         _write_audio(part.inline_data.data)
 
                             # Handle output transcript — accumulate + early whiteboard
@@ -1148,6 +1157,7 @@ async def gemini_live_session(mic: MicStream):
                                 first_word_time = None
                                 early_wb_fired = False
                                 _stop_aplay()
+                                _duck_music(False)  # restore music volume
                                 state.set_status("listening")
                                 push_to_ui(emotion="surprised", action="close_whiteboard")
 
@@ -1155,6 +1165,7 @@ async def gemini_live_session(mic: MicStream):
                             if sc.turn_complete:
                                 if is_speaking:
                                     await asyncio.to_thread(_finish_aplay)
+                                    _duck_music(False)  # restore music volume
                                 is_speaking = False
                                 state.set_status("listening")
                                 state.last_activity = time.time()
