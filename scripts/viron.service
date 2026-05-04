@@ -1,0 +1,35 @@
+[Unit]
+Description=VIRON AI Companion (pipeline + backend + kiosk)
+Documentation=https://github.com/giannakkas/VIRON
+# Wait for the network and the user's desktop session before launching.
+# graphical-session.target is set when the X server (desktop session) is up,
+# which is what start_live.sh needs to relaunch the kiosk Chromium.
+After=graphical-session.target sound.target network-online.target
+Wants=graphical-session.target network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/VIRON
+# start_live.sh forks pipeline + backend in the background then `tail -f`s
+# the pipeline log, which keeps the script alive in the foreground — perfect
+# for systemd Type=simple. The script also (re)launches the kiosk Chromium
+# pointing at localhost:5000.
+ExecStart=/bin/bash %h/VIRON/start_live.sh
+# Clean shutdown: pkill all the child processes (pipeline, backend, gateway,
+# kiosk, arecord, aplay, mpv). The ExecStart's `tail -f` would otherwise be
+# killed by systemd but its backgrounded children would survive.
+ExecStop=/bin/bash %h/VIRON/start_live.sh stop
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=120
+TimeoutStopSec=20
+# DISPLAY/XAUTHORITY for the kiosk relaunch step inside start_live.sh.
+# %h is the user's home directory.
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+# Don't kill the whole cgroup with SIGKILL on stop — let ExecStop run first.
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target
