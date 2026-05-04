@@ -29,7 +29,7 @@ if [ -f .env ]; then
     set -a; source .env; set +a
     echo "✓ Loaded .env"
 fi
-export GEMINI_API_KEY PICOVOICE_ACCESS_KEY
+export GEMINI_API_KEY
 
 # Kill any existing processes
 echo "🧹 Cleaning up old processes..."
@@ -40,6 +40,12 @@ pkill -f "backend/server.py" 2>/dev/null
 pkill -f "gateway/main.py" 2>/dev/null
 pkill -f "viron_kiosk.py" 2>/dev/null
 pkill -f "aplay.*plughw" 2>/dev/null
+pkill -f "arecord" 2>/dev/null
+# Kill PulseAudio — it grabs the mic exclusively and prevents arecord from working
+echo "   Killing PulseAudio (it masks the mic)..."
+pulseaudio --kill 2>/dev/null
+systemctl --user stop pulseaudio.socket pulseaudio.service 2>/dev/null
+systemctl --user mask pulseaudio.socket pulseaudio.service 2>/dev/null
 sleep 2
 
 echo ""
@@ -50,10 +56,6 @@ echo "   ═══════════════════════�
 # Validate required keys
 if [ -z "$GEMINI_API_KEY" ]; then
     echo "❌ GEMINI_API_KEY not set in .env!"
-    exit 1
-fi
-if [ -z "$PICOVOICE_ACCESS_KEY" ]; then
-    echo "❌ PICOVOICE_ACCESS_KEY not set in .env!"
     exit 1
 fi
 

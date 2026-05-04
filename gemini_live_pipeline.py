@@ -11,11 +11,10 @@ Flow:
   (with barge-in, transcripts, function calling)
 
 Requirements:
-  pip install google-genai pvporcupine numpy flask
+  pip install google-genai openwakeword numpy flask
 
 Environment:
   GEMINI_API_KEY          — required
-  PICOVOICE_ACCESS_KEY    — required for Porcupine wake word
   VIRON_MIC_DEVICE        — ALSA device (default: plughw:0,0)
 """
 
@@ -62,12 +61,13 @@ GEMINI_LIVE_MODEL = os.environ.get("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native
 ALSA_DEVICE = os.environ.get("VIRON_MIC_DEVICE", "plughw:0,0")
 SAMPLE_RATE_IN = 16000   # Gemini Live expects 16kHz PCM mono input
 SAMPLE_RATE_OUT = 24000  # Gemini Live outputs 24kHz PCM mono
-FRAME_LENGTH = 512       # Porcupine requires 512 samples at 16kHz
+FRAME_LENGTH = 1280      # OpenWakeWord requires 1280 samples (80ms) at 16kHz
 
-PORCUPINE_ACCESS_KEY = os.environ.get("PICOVOICE_ACCESS_KEY", "")
+OWW_MODEL_NAME = os.environ.get("VIRON_WAKE_MODEL", "hey_jarvis_v0.1")
+OWW_THRESHOLD = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.5"))
+# Kept for UI/log compatibility:
 PORCUPINE_KEYWORD = os.environ.get("VIRON_WAKE_KEYWORD", "jarvis")
-PORCUPINE_SENSITIVITY = float(os.environ.get("VIRON_WAKE_SENSITIVITY", "0.7"))
-PORCUPINE_CUSTOM_PATH = os.environ.get("VIRON_WAKE_MODEL", "")
+PORCUPINE_SENSITIVITY = OWW_THRESHOLD
 
 IDLE_TIMEOUT = float(os.environ.get("VIRON_IDLE_TIMEOUT", "30.0"))
 DEFAULT_LANGUAGE = os.environ.get("VIRON_DEFAULT_LANGUAGE", "el")
@@ -175,41 +175,37 @@ def push_to_ui(text="", emotion="", subtitle="", action="", **extra):
 # PORCUPINE WAKE WORD (kept from old pipeline)
 # ═══════════════════════════════════════════════════════════
 
-porcupine = None
+oww_model = None
+porcupine = None  # Kept as alias for backward compat in main() shutdown
 
 def init_wake():
-    global porcupine
-    if not PORCUPINE_ACCESS_KEY:
-        log.error("❌ PICOVOICE_ACCESS_KEY not set!")
-        return False
+    """Initialize OpenWakeWord. Returns True on success."""
+    global oww_model, porcupine
     try:
-        import pvporcupine
-        if PORCUPINE_CUSTOM_PATH and os.path.exists(PORCUPINE_CUSTOM_PATH):
-            porcupine = pvporcupine.create(
-                access_key=PORCUPINE_ACCESS_KEY,
-                keyword_paths=[PORCUPINE_CUSTOM_PATH],
-                sensitivities=[PORCUPINE_SENSITIVITY],
-            )
-            log.info(f"✅ Porcupine ready: custom model, sensitivity={PORCUPINE_SENSITIVITY}")
-        else:
-            porcupine = pvporcupine.create(
-                access_key=PORCUPINE_ACCESS_KEY,
-                keywords=[PORCUPINE_KEYWORD],
-                sensitivities=[PORCUPINE_SENSITIVITY],
-            )
-            log.info(f"✅ Porcupine ready: '{PORCUPINE_KEYWORD}', sensitivity={PORCUPINE_SENSITIVITY}")
+        from openwakeword.model import Model
+        oww_model = Model(
+            wakeword_models=[OWW_MODEL_NAME],
+            inference_framework="onnx",
+        )
+        porcupine = oww_model  # alias so cleanup code still works
+        log.info(f"✅ OpenWakeWord ready: '{OWW_MODEL_NAME}', threshold={OWW_THRESHOLD}")
         return True
     except Exception as e:
-        log.error(f"❌ Porcupine init failed: {e}")
+        log.error(f"❌ OpenWakeWord init failed: {e}")
         return False
 
 def check_wake(audio_int16):
     """Check one frame for wake word. Returns True if detected."""
-    if porcupine is None:
+    if oww_model is None:
         return False
     try:
-        result = porcupine.process(audio_int16)
-        return result >= 0
+        scores = oww_model.predict(audio_int16)
+        for name, score in scores.items():
+            if score >= OWW_THRESHOLD:
+                # Reset model state to prevent immediate re-trigger
+                oww_model.reset()
+                return True
+        return False
     except Exception:
         return False
 
@@ -1093,8 +1089,11 @@ def main():
         main_loop(mic)
     finally:
         mic.stop()
-        if porcupine:
-            porcupine.delete()
+        if oww_model is not None:
+            try:
+                oww_model.reset()
+            except Exception:
+                pass
         log.info("Pipeline stopped.")
 
 
