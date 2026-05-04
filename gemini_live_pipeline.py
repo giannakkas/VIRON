@@ -710,14 +710,16 @@ async def gemini_live_session(mic: MicStream):
         # If the SDK doesn't expose HistoryConfig yet, skip it — model still works,
         # just without our explicit greeting trigger.
         HistoryConfig = getattr(types, "HistoryConfig", None)
+        history_config_set = False
         if HistoryConfig is not None:
             try:
                 config_kwargs["history_config"] = HistoryConfig(
                     initial_history_in_client_content=True
                 )
+                history_config_set = True
             except Exception as e:
                 log.warning(f"HistoryConfig setup failed: {e}")
-        log.info("🧠 Using Gemini 3.1 config (no affective_dialog, history_config enabled)")
+        log.info(f"🧠 Using Gemini 3.1 config (no affective_dialog, history_config={'enabled' if history_config_set else 'unavailable'})")
     else:
         # 2.5 native audio supports affective dialog
         config_kwargs["enable_affective_dialog"] = True
@@ -735,14 +737,25 @@ async def gemini_live_session(mic: MicStream):
             _session_active.set()
             state.in_session = True
 
-            # Send "Hey VIRON" as text so Gemini greets the student naturally
-            await session.send_client_content(
-                turns=types.Content(
-                    role="user",
-                    parts=[types.Part(text="Hey VIRON")]
-                ),
-                turn_complete=True,
-            )
+            # Trigger an initial greeting so VIRON speaks first.
+            # 2.5: send_client_content triggers a model turn with the text.
+            # 3.1: send_client_content only SEEDS history — to actually trigger
+            #      a response, we must use send_realtime_input(text=...).
+            try:
+                if is_v31:
+                    await session.send_realtime_input(text="Hey VIRON")
+                    log.info("👋 Sent greeting via send_realtime_input (3.1)")
+                else:
+                    await session.send_client_content(
+                        turns=types.Content(
+                            role="user",
+                            parts=[types.Part(text="Hey VIRON")]
+                        ),
+                        turn_complete=True,
+                    )
+                    log.info("👋 Sent greeting via send_client_content (2.5)")
+            except Exception as e:
+                log.warning(f"Greeting trigger failed: {e} — model will respond when student speaks")
 
             # Task 1: Stream mic audio to Gemini CONTINUOUSLY
             async def send_audio():
