@@ -349,17 +349,46 @@ def _finish_aplay():
 # the matching YouTube audio. New wake word stops playback.
 
 import re as _re_music
+import json as _json_music
+import socket as _socket_music
 
 _music_proc = None
 _music_lock = threading.Lock()
 _music_query = ""
+_music_paused = False
+MPV_IPC_SOCKET = "/tmp/viron-mpv.sock"
+
+def _mpv_ipc(*command_args):
+    """Send a JSON command to mpv via Unix socket. Returns True on success."""
+    if not os.path.exists(MPV_IPC_SOCKET):
+        return False
+    payload = (_json_music.dumps({"command": list(command_args)}) + "\n").encode()
+    try:
+        s = _socket_music.socket(_socket_music.AF_UNIX, _socket_music.SOCK_STREAM)
+        s.settimeout(0.5)
+        s.connect(MPV_IPC_SOCKET)
+        s.sendall(payload)
+        s.close()
+        return True
+    except Exception as e:
+        log.warning(f"mpv IPC failed: {e}")
+        return False
+
+def _push_music_state(playing: bool, title: str = "", paused: bool = False):
+    """Notify the UI about music playback state."""
+    try:
+        push_to_ui(music={"playing": playing, "title": title, "paused": paused})
+    except Exception as e:
+        log.warning(f"Music UI push failed: {e}")
 
 def _stop_music():
     """Terminate any currently playing music. Safe to call repeatedly."""
-    global _music_proc, _music_query
+    global _music_proc, _music_query, _music_paused
+    was_playing = False
     with _music_lock:
         if _music_proc and _music_proc.poll() is None:
             log.info("🎵 Stopping music")
+            was_playing = True
             try:
                 _music_proc.terminate()
                 _music_proc.wait(timeout=2)
@@ -369,10 +398,32 @@ def _stop_music():
                 pass
         _music_proc = None
         _music_query = ""
+        _music_paused = False
+        # Clean up stale socket
+        try:
+            if os.path.exists(MPV_IPC_SOCKET):
+                os.unlink(MPV_IPC_SOCKET)
+        except Exception:
+            pass
+    if was_playing:
+        _push_music_state(False)
+
+def _pause_music() -> bool:
+    """Toggle pause/resume on the running mpv process."""
+    global _music_paused
+    if _music_proc is None or _music_proc.poll() is not None:
+        return False
+    new_state = not _music_paused
+    if _mpv_ipc("set_property", "pause", new_state):
+        _music_paused = new_state
+        log.info(f"🎵 Music {'paused' if _music_paused else 'resumed'}")
+        _push_music_state(True, _music_query, _music_paused)
+        return True
+    return False
 
 def _play_music(query: str):
     """Search YouTube and stream audio. Background, non-blocking."""
-    global _music_proc, _music_query
+    global _music_proc, _music_query, _music_paused
     _stop_music()
     cmd = [
         "mpv",
@@ -380,6 +431,7 @@ def _play_music(query: str):
         "--no-terminal",
         "--audio-display=no",
         "--really-quiet",
+        f"--input-ipc-server={MPV_IPC_SOCKET}",
         f"ytdl://ytsearch1:{query}",
     ]
     try:
@@ -388,7 +440,23 @@ def _play_music(query: str):
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             _music_query = query
-        log.info(f"🎵 Playing: '{query}' (PID {_music_proc.pid})")
+            _music_paused = False
+            this_proc = _music_proc
+        log.info(f"🎵 Playing: '{query}' (PID {this_proc.pid})")
+        _push_music_state(True, query, False)
+
+        # Watch for natural end-of-song to clear the UI bar.
+        def _watch_end():
+            try:
+                this_proc.wait()
+            except Exception:
+                return
+            # Only clear if THIS playback is still the active one
+            with _music_lock:
+                if _music_proc is this_proc:
+                    log.info("🎵 Music ended naturally")
+                    _push_music_state(False)
+        threading.Thread(target=_watch_end, daemon=True).start()
     except FileNotFoundError:
         log.error("❌ mpv not installed — run: sudo apt install mpv yt-dlp")
     except Exception as e:
@@ -1223,6 +1291,12 @@ def pipeline_speak():
     if action == "stop" or action == "interrupt":
         _stop_session.set()
         return jsonify({"ok": True, "action": "stopped"})
+    if action == "stop_music":
+        _stop_music()
+        return jsonify({"ok": True, "action": "music_stopped"})
+    if action == "pause_music":
+        ok = _pause_music()
+        return jsonify({"ok": ok, "action": "music_paused" if ok else "no_music"})
     return jsonify({"ok": True})
 
 @app.route("/pipeline/language", methods=["POST", "GET"])
