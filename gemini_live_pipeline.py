@@ -137,7 +137,9 @@ EXAMPLES:
 STOPPING MUSIC: When the student says "Hey VIRON" while music is playing, the music stops automatically before you hear the request. So if the student then asks you to stop the music (e.g. "σταμάτα τη μουσική", "stop the music", "turn it off"), simply acknowledge briefly: "Έγινε!" or "Done!" — do NOT emit a [MUSIC:...] tag.
 NEVER include the [MUSIC:...] tag in non-music conversations. Only when actually STARTING new music playback.
 
-WHITEBOARD — You CAN show a visual whiteboard for teaching content. Use it ONLY when actually teaching or explaining structured material. End your response with a [BOARD:title] tag — invisible to the student, just a control signal.
+WHITEBOARD — You CAN show a visual whiteboard for teaching content. Use it ONLY when actually teaching or explaining structured material.
+
+For teaching responses, BEGIN your response with a [BOARD:title] tag — write it FIRST, before any other words. The tag is a silent control marker that opens a study sheet panel immediately while you explain. The tag itself is NOT spoken aloud and is invisible to the student. After the tag, deliver your full explanation as normal.
 
 USE the [BOARD:...] tag when:
 - Teaching math, physics, chemistry, or science with formulas/steps
@@ -153,9 +155,9 @@ DO NOT use [BOARD:...] for:
 - Emotional support or personal chat
 - Stories or creative writing
 
-EXAMPLES:
-- Student: "How do I solve 2x + 5 = 11?" → step-by-step explanation, end with [BOARD:Λύση εξίσωσης]
-- Student: "Πες μου για τη φωτοσύνθεση" → explanation in 4-5 stages, end with [BOARD:Φωτοσύνθεση]
+EXAMPLES (notice: [BOARD:title] FIRST, then explanation):
+- Student: "How do I solve 2x + 5 = 11?" → "[BOARD:Λύση εξίσωσης] Λοιπόν, για να λύσουμε αυτή την εξίσωση, ξεκινάμε αφαιρώντας 5 από τις δύο πλευρές..."
+- Student: "Πες μου για τη φωτοσύνθεση" → "[BOARD:Φωτοσύνθεση] Η φωτοσύνθεση είναι η διαδικασία με την οποία τα φυτά..."
 - Student: "Τι καιρός έχει σήμερα;" → answer the weather, NO BOARD
 - Student: "Πες μου ένα αστείο" → tell joke, NO BOARD
 - Student: "Γεια σου" → "Γεια σου!" — NO BOARD
@@ -752,16 +754,11 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
     _last_wb_time = now
     
     # Quick check for educational content
-    text_lower = transcript.lower()
-    edu_words = ["θεώρημα", "φόρμουλα", "εξίσωση", "βήμα", "τετράγωνο", "ρίζα",
-                 "τρίγωνο", "κύκλο", "μαθηματικ", "παράδειγμα", "λύση", "υπολογ",
-                 "theorem", "formula", "step", "calculate", "solve", "equation",
-                 "ορθογώνι", "υποτείνου", "πλευρ", "γωνία", "κλάσμ", "αριθμ"]
-    hits = sum(1 for w in edu_words if w in text_lower)
-    has_math = bool(_re.search(r'\d\s*[\+\-\=\×\÷]\s*\d|τετράγωνο|squared|²|³|\$', text_lower))
-    
-    if hits < 1 and not has_math:
-        return
+    # NOTE: removed the old keyword filter (θεώρημα/εξίσωση/βήμα/etc) — it
+    # only matched math content and silently rejected biology/history/language
+    # lessons even when VIRON had explicitly tagged the response with [BOARD:].
+    # If the function is being called, VIRON already decided this is teaching
+    # material; trust that signal and generate the sheet.
     
     # Avoid duplicate
     content_hash = transcript[:100]
@@ -1104,7 +1101,7 @@ async def gemini_live_session(mic: MicStream):
                 is_speaking = False
                 turn_transcript = []
                 first_word_time = None      # When first transcript word arrived this turn
-                early_wb_fired = False       # Whether we already triggered early whiteboard
+                early_wb_fired = False       # Whether we already pushed the skeleton whiteboard this turn
                 
                 while not _stop_session.is_set():
                     try:
@@ -1128,7 +1125,7 @@ async def gemini_live_session(mic: MicStream):
                                             _duck_music(True)  # lower music while VIRON talks
                                         _write_audio(part.inline_data.data)
 
-                            # Handle output transcript — accumulate + early whiteboard
+                            # Handle output transcript — accumulate + EARLY skeleton-board reveal
                             if sc.output_transcription and sc.output_transcription.text:
                                 word = sc.output_transcription.text.strip()
                                 if word:
@@ -1137,10 +1134,28 @@ async def gemini_live_session(mic: MicStream):
                                     if first_word_time is None:
                                         first_word_time = time.time()
                                     
-                                    # NOTE: Early-whiteboard auto-fire removed — we now wait for
-                                    # the full turn so we can check if VIRON emitted a [BOARD:title]
-                                    # tag. The board only appears when actually teaching, never on
-                                    # casual chat / weather / news / jokes / music requests.
+                                    # As soon as VIRON emits the [BOARD:title] tag (it should appear
+                                    # at the start of teaching responses), open a skeleton board
+                                    # immediately so the student sees the panel WHILE VIRON keeps
+                                    # explaining. The full study sheet is generated at turn_complete
+                                    # and updates the open panel in place.
+                                    if not early_wb_fired:
+                                        partial = " ".join(turn_transcript)
+                                        early_title = _extract_board_title(partial)
+                                        if early_title:
+                                            early_wb_fired = True
+                                            log.info(f"📋 Skeleton whiteboard early reveal: '{early_title}'")
+                                            # Detect language for the loading copy
+                                            is_greek_partial = bool(_re.search(r'[Α-Ωα-ωάέήίόύώϊϋΐΰ]', partial))
+                                            loading_msg = "Ετοιμάζω τις σημειώσεις..." if is_greek_partial else "Preparing study notes..."
+                                            push_to_ui(emotion="thinking", whiteboard={
+                                                "title": early_title,
+                                                "definition": "⏳ " + loading_msg,
+                                                "formula": "",
+                                                "example": None,
+                                                "key_points": [],
+                                                "steps": [{"text": "⏳ " + loading_msg}],
+                                            })
 
                             # Handle input transcript
                             if sc.input_transcription and sc.input_transcription.text:
