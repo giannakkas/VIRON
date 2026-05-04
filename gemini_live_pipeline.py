@@ -301,31 +301,97 @@ class MicStream:
     def __init__(self):
         self.proc = None
         self.running = False
+        # The ReSpeaker XVF3800 is a native-stereo device: channel 0 is the raw
+        # mic feed, channel 1 is the on-board beamformed/AEC-processed output.
+        # ALSA's plug plugin is supposed to downmix stereo->mono when we ask
+        # for `-c 1`, but for THIS device the conversion silently produces a
+        # constant value (audio_max=1088 stuck) — likely because it picks the
+        # wrong channel or hits a format mismatch with the XMOS USB descriptor.
+        # Workaround: record stereo and extract one channel ourselves.
+        self.mic_stereo = os.environ.get("VIRON_MIC_STEREO", "1") == "1"
+        # Which channel to keep when stereo: 0 = raw mic, 1 = beamformed.
+        self.mic_channel = int(os.environ.get("VIRON_MIC_CHANNEL", "1"))
+        self._stereo_buf = b""  # leftover bytes from the previous read
 
     def start(self):
-        cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE",
-               "-r", str(SAMPLE_RATE_IN), "-c", "1", "-t", "raw"]
+        if self.mic_stereo:
+            cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE",
+                   "-r", str(SAMPLE_RATE_IN), "-c", "2", "-t", "raw"]
+            log.info(f"🎤 Mic started: {ALSA_DEVICE} (stereo {SAMPLE_RATE_IN}Hz, "
+                     f"extracting ch{self.mic_channel})")
+        else:
+            cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE",
+                   "-r", str(SAMPLE_RATE_IN), "-c", "1", "-t", "raw"]
+            log.info(f"🎤 Mic started: {ALSA_DEVICE} (mono {SAMPLE_RATE_IN}Hz)")
         # stderr=DEVNULL: arecord writes verbose status messages to stderr that
         # we never read; if it's a PIPE the buffer eventually fills and arecord
         # blocks, causing the mic to feed identical buffers repeatedly.
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.running = True
-        log.info(f"🎤 Mic started: {ALSA_DEVICE} (mono {SAMPLE_RATE_IN}Hz)")
+        self._stereo_buf = b""
+
+    def _extract_mono(self, stereo_bytes: bytes) -> bytes:
+        """Take interleaved S16_LE stereo (LRLRLR...) and return mono bytes
+        for self.mic_channel. Each sample is 2 bytes; one stereo frame is 4
+        bytes. We slice every other 16-bit word starting at the right offset."""
+        # Trim to a whole number of stereo frames (4 bytes each)
+        usable = len(stereo_bytes) - (len(stereo_bytes) % 4)
+        if usable <= 0:
+            return b""
+        arr = np.frombuffer(stereo_bytes[:usable], dtype=np.int16)
+        # arr is [L0, R0, L1, R1, L2, R2, ...]. Take every other starting from
+        # the chosen channel offset.
+        mono = arr[self.mic_channel::2]
+        return mono.tobytes()
 
     def read_frame(self, frame_length=FRAME_LENGTH):
         if not self.proc:
             return None
-        bytes_needed = frame_length * 2  # int16 = 2 bytes
-        raw = self.proc.stdout.read(bytes_needed)
-        if len(raw) < bytes_needed:
-            return None
-        return np.frombuffer(raw, dtype=np.int16)
+        if self.mic_stereo:
+            # We need `frame_length` mono samples, so read 2x the bytes.
+            bytes_needed = frame_length * 2 * 2  # mono samples * 2 bytes/sample * 2 channels
+            raw = self.proc.stdout.read(bytes_needed)
+            if len(raw) < bytes_needed:
+                return None
+            mono_bytes = self._extract_mono(raw)
+            return np.frombuffer(mono_bytes, dtype=np.int16)
+        else:
+            bytes_needed = frame_length * 2
+            raw = self.proc.stdout.read(bytes_needed)
+            if len(raw) < bytes_needed:
+                return None
+            return np.frombuffer(raw, dtype=np.int16)
 
     def read_raw(self, num_bytes):
-        """Read raw bytes from mic (for streaming to Gemini)."""
+        """Read num_bytes of MONO PCM (what Gemini Live expects). When
+        mic_stereo=True we read 2x bytes from the device, downmix, and
+        cache any leftover bytes for the next call so we never desync."""
         if not self.proc:
             return None
-        return self.proc.stdout.read(num_bytes)
+        if not self.mic_stereo:
+            return self.proc.stdout.read(num_bytes)
+
+        # Stereo path: keep reading + downmixing until we have num_bytes
+        # of mono. Stash any half-frame leftover so we don't lose the
+        # right channel of a partial stereo frame across calls.
+        out = bytearray()
+        # We need num_bytes mono → 2*num_bytes stereo, but we may have
+        # leftover stereo bytes from last call.
+        while len(out) < num_bytes:
+            need_mono = num_bytes - len(out)
+            need_stereo = need_mono * 2 - len(self._stereo_buf)
+            if need_stereo > 0:
+                chunk = self.proc.stdout.read(need_stereo)
+                if not chunk:
+                    return None
+                self._stereo_buf += chunk
+            # Convert as much as we can in whole stereo frames
+            usable = len(self._stereo_buf) - (len(self._stereo_buf) % 4)
+            mono = self._extract_mono(self._stereo_buf[:usable])
+            self._stereo_buf = self._stereo_buf[usable:]
+            out += mono
+        # Trim if we overshot (we won't — mono is exactly half of stereo)
+        return bytes(out[:num_bytes])
 
     def stop(self):
         """Terminate arecord and REAP it. Critical: must wait() after kill() or
