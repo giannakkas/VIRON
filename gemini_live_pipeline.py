@@ -200,13 +200,25 @@ def check_wake(audio_int16):
         return False
     try:
         scores = oww_model.predict(audio_int16)
+        max_score = max(scores.values()) if scores else 0.0
+
+        # DEBUG: log audio level and OWW score periodically + on near-hits
+        check_wake._counter = getattr(check_wake, "_counter", 0) + 1
+        try:
+            audio_max = int(abs(audio_int16).max())
+        except Exception:
+            audio_max = 0
+        if check_wake._counter % 60 == 0 or max_score >= 0.2:
+            log.info(f"🎤 audio_max={audio_max} oww_score={max_score:.3f} (threshold={OWW_THRESHOLD})")
+
         for name, score in scores.items():
             if score >= OWW_THRESHOLD:
                 # Reset model state to prevent immediate re-trigger
                 oww_model.reset()
                 return True
         return False
-    except Exception:
+    except Exception as e:
+        log.error(f"check_wake error: {e}")
         return False
 
 # ═══════════════════════════════════════════════════════════
