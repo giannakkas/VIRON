@@ -19,12 +19,16 @@ if [ "$1" = "stop" ]; then
     pkill -f "gateway/main.py" 2>/dev/null
     pkill -f "viron_kiosk.py" 2>/dev/null
     pkill -f "aplay.*plughw" 2>/dev/null
-    pkill -f "arecord" 2>/dev/null
     pkill -f "mpv.*ytdl" 2>/dev/null
+    # Audio holders (mic-stealing fix). Use SEPARATE pkill calls because
+    # pkill -f with shell-escaped \| is interpreted as literal | by the
+    # regex engine and matches nothing. -9 because some children ignore TERM.
+    pkill -9 arecord 2>/dev/null
+    pkill -9 aplay 2>/dev/null
+    pkill -9 mpv 2>/dev/null
     # Chromium kiosk holds the mic via getUserMedia even after viron_kiosk.py dies.
-    # Kill it explicitly or arecord will fail to read on next start.
-    pkill -f "chromium.*kiosk\|chrome.*kiosk" 2>/dev/null
-    pkill -f "chromium-browser\|chromium\|google-chrome" 2>/dev/null
+    pkill -9 -f chromium 2>/dev/null
+    pkill -9 -f "google-chrome" 2>/dev/null
     sleep 2
     echo "✓ Stopped"
     exit 0
@@ -45,8 +49,25 @@ pkill -f "llama-server" 2>/dev/null
 pkill -f "backend/server.py" 2>/dev/null
 pkill -f "gateway/main.py" 2>/dev/null
 pkill -f "viron_kiosk.py" 2>/dev/null
-pkill -f "aplay.*plughw" 2>/dev/null
-pkill -f "arecord" 2>/dev/null
+# Audio holders that survive the python-process pkill above. -9 because a
+# stuck arecord won't always exit on TERM, and a leftover from a Ctrl+Z
+# suspend will hold /dev/snd/pcmC0D0c forcing 'Mic read failed' on next start.
+pkill -9 arecord 2>/dev/null
+pkill -9 aplay 2>/dev/null
+pkill -9 mpv 2>/dev/null
+pkill -9 -f chromium 2>/dev/null
+pkill -9 -f "google-chrome" 2>/dev/null
+# Verify mic device is actually free; warn loudly if not.
+sleep 1
+if command -v fuser >/dev/null 2>&1; then
+    holder=$(fuser /dev/snd/pcmC0D0c 2>/dev/null | tr -d ' ')
+    if [ -n "$holder" ]; then
+        echo "⚠️  /dev/snd/pcmC0D0c still held by PID(s): $holder"
+        echo "   Force-killing..."
+        kill -9 $holder 2>/dev/null
+        sleep 1
+    fi
+fi
 # Kill PulseAudio — it grabs the mic exclusively and prevents arecord from working
 echo "   Killing PulseAudio (it masks the mic)..."
 pulseaudio --kill 2>/dev/null
