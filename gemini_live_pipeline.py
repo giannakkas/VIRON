@@ -768,21 +768,51 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
     if now > _api_backoff_until:
         try:
             if _genai_client:
+                # Detect language to instruct the model in the right tongue
+                is_greek = bool(_re.search(r'[Α-Ωα-ωάέήίόύώϊϋΐΰ]', clean[:400]))
+                lang_instr = "Greek (Ελληνικά)" if is_greek else "the same language as the input"
+
+                prompt = f"""You are a teacher's assistant building a STUDY SHEET for a student.
+The teacher just gave a spoken explanation; the student is listening and ALSO needs a visual reference on a whiteboard.
+
+Your job: extract the KEY CONCEPTS from the spoken explanation and present them as a structured study sheet — NOT a transcript. The student already heard the teacher; the board complements the audio with visual structure.
+
+Respond in: {lang_instr}.
+Output STRICT JSON, no markdown fences, no commentary:
+
+{{
+  "title": "Short topic title (max 40 chars)",
+  "definition": "ONE clear sentence defining the concept (or empty string if N/A)",
+  "formula": "The MAIN formula/equation in clean Unicode (e.g. 'α² + β² = γ²', 'F = m·a'). Empty string if not applicable.",
+  "example": {{
+    "problem": "Concrete worked-example problem with real numbers (e.g. 'a=3, b=4, c=?')",
+    "steps": [
+      {{"label": "Step 1", "math": "3² + 4² = c²"}},
+      {{"label": "Step 2", "math": "9 + 16 = c²"}}
+    ],
+    "result": "Final numeric answer (e.g. 'c = 5')"
+  }},
+  "key_points": [
+    "Short bullet takeaway 1",
+    "Short bullet takeaway 2",
+    "Short bullet takeaway 3"
+  ]
+}}
+
+Rules:
+- DO NOT transcribe the explanation. EXTRACT and STRUCTURE.
+- Use Unicode math only: ² ³ √ π α β γ θ ° → ≈ ≠ ≤ ≥ × ÷. NEVER LaTeX.
+- The "example" block must use ACTUAL numbers a student can verify, not letters or placeholders.
+- 3-5 key_points maximum, each under 12 words.
+- If a field doesn't apply (e.g. no formula for a history lesson), use empty string "" or empty array [].
+- For history/language/social-studies topics: skip "formula" and "example", focus on definition + key_points.
+
+Spoken explanation:
+{clean[:1200]}"""
+
                 response = _genai_client.models.generate_content(
                     model="gemini-2.0-flash",
-                    contents=f"""Μετέτρεψε αυτή την εξήγηση σε whiteboard steps. 
-Απάντησε ΜΟΝΟ σε JSON format χωρίς markdown:
-{{"title": "τίτλος", "steps": [{{"type": "text|math|result", "content": "..."}}]}}
-
-Κανόνες:
-- type "math" για εξισώσεις/αριθμούς (γράψε τα ωραία: α² + β² = γ²)  
-- type "text" για κείμενο
-- type "result" για τελικό αποτέλεσμα
-- Μέγιστο 8 steps
-- Σύντομα, καθαρά, εκπαιδευτικά
-- ΜΗΝ χρησιμοποιείς LaTeX, μόνο Unicode (², ³, √, α, β, γ, π)
-
-Εξήγηση: {clean[:500]}""",
+                    contents=prompt,
                 )
                 
                 resp_text = response.text.strip()
@@ -790,27 +820,70 @@ def _generate_whiteboard_from_transcript(transcript: str, skip_dup_check: bool =
                 resp_text = _re.sub(r'\s*```$', '', resp_text)
                 
                 data = json.loads(resp_text)
-                title = data.get("title", "Εξήγηση")
-                raw_steps = data.get("steps", [])
-                
-                wb_steps = []
-                for s in raw_steps:
-                    stype = s.get("type", "text").lower()
-                    content = _clean_math_text(s.get("content", ""))
-                    if not content:
-                        continue
-                    if stype == "math":
-                        wb_steps.append({"math": content})
-                    elif stype == "result":
-                        wb_steps.append({"result": content})
-                    else:
-                        wb_steps.append({"text": content})
-                
-                if wb_steps:
-                    log.info(f"📋 Whiteboard (Gemini): \"{title}\" ({len(wb_steps)} steps)")
-                    push_to_ui(text="📋", emotion="thinking",
-                               whiteboard={"title": title, "steps": wb_steps[:10]})
+                title = (data.get("title") or "Εξήγηση").strip()
+                definition = (data.get("definition") or "").strip()
+                formula = (data.get("formula") or "").strip()
+                example = data.get("example") or {}
+                key_points = [p.strip() for p in (data.get("key_points") or []) if p and p.strip()]
+
+                # Sanitize example
+                example_clean = None
+                if isinstance(example, dict):
+                    ex_problem = (example.get("problem") or "").strip()
+                    ex_result = (example.get("result") or "").strip()
+                    ex_raw_steps = example.get("steps") or []
+                    ex_steps = []
+                    for s in ex_raw_steps[:6]:
+                        if not isinstance(s, dict):
+                            continue
+                        label = (s.get("label") or "").strip()
+                        math = (s.get("math") or s.get("content") or "").strip()
+                        if math:
+                            ex_steps.append({"label": label, "math": _clean_math_text(math)})
+                    if ex_problem or ex_steps or ex_result:
+                        example_clean = {
+                            "problem": ex_problem,
+                            "steps": ex_steps,
+                            "result": ex_result,
+                        }
+
+                # Build legacy-compatible "steps" array so older frontends still
+                # show something even if they don't know about the new fields.
+                legacy_steps = []
+                if definition:
+                    legacy_steps.append({"text": definition})
+                if formula:
+                    legacy_steps.append({"math": _clean_math_text(formula)})
+                if example_clean:
+                    if example_clean["problem"]:
+                        legacy_steps.append({"label": "Παράδειγμα" if is_greek else "Example",
+                                            "text": example_clean["problem"]})
+                    for st in example_clean["steps"]:
+                        legacy_steps.append({"math": st["math"]})
+                    if example_clean["result"]:
+                        legacy_steps.append({"result": example_clean["result"]})
+                for kp in key_points:
+                    legacy_steps.append({"text": "• " + kp})
+
+                if not legacy_steps:
+                    log.info("📋 Whiteboard skipped — model returned no usable content")
                     return
+
+                log.info(f"📋 Whiteboard (study sheet): \"{title}\" "
+                         f"def={'Y' if definition else 'N'} "
+                         f"formula={'Y' if formula else 'N'} "
+                         f"example={'Y' if example_clean else 'N'} "
+                         f"points={len(key_points)}")
+                push_to_ui(text="📋", emotion="thinking",
+                           whiteboard={
+                               "title": title,
+                               "definition": definition,
+                               "formula": formula,
+                               "example": example_clean,
+                               "key_points": key_points,
+                               "steps": legacy_steps,  # backward compat
+                           })
+                return
         except Exception as e:
             err_msg = str(e)
             log.warning(f"Whiteboard Gemini call failed: {e}")

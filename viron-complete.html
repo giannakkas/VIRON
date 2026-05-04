@@ -126,6 +126,54 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .wb-step .sm{font-size:22px;color:rgba(0,220,255,0.95);font-family:'Courier New',monospace;background:rgba(0,180,255,0.06);padding:12px 16px;border-radius:8px;border-left:3px solid rgba(0,180,255,0.5);margin:8px 0;text-shadow:0 0 8px rgba(0,180,255,0.15)}
 .wb-step .st{font-size:17px;color:rgba(220,230,255,0.9);line-height:1.7}
 .wb-step .sr{font-size:26px;color:rgba(0,255,140,0.95);font-weight:700;text-align:center;padding:16px;background:rgba(0,255,140,0.06);border-radius:12px;border:1px solid rgba(0,255,140,0.2);text-shadow:0 0 12px rgba(0,255,140,0.2)}
+
+/* ===== STUDY SHEET (rich whiteboard layout) ===== */
+.wb-sheet{display:flex;flex-direction:column;gap:18px}
+.wb-sheet-section{opacity:0;transform:translateY(12px);transition:opacity 0.5s ease,transform 0.5s ease}
+.wb-sheet-section.visible{opacity:1;transform:translateY(0)}
+
+/* Hero formula — big centered, glowing */
+.wb-hero-formula{font-family:'Courier New',monospace;font-size:36px;font-weight:700;text-align:center;
+  color:#fff;padding:20px 24px;border-radius:14px;
+  background:linear-gradient(135deg,rgba(0,180,255,0.15),rgba(120,80,255,0.12));
+  border:1px solid rgba(0,200,255,0.35);
+  box-shadow:0 0 30px rgba(0,180,255,0.18),inset 0 0 20px rgba(0,180,255,0.06);
+  text-shadow:0 0 14px rgba(0,200,255,0.4);letter-spacing:1px}
+
+/* Definition card — calm, readable */
+.wb-definition{font-size:18px;line-height:1.65;color:rgba(230,240,255,0.92);
+  padding:16px 20px;border-radius:12px;
+  background:rgba(255,255,255,0.04);border-left:4px solid rgba(255,200,80,0.6)}
+.wb-definition::before{content:"💡 ";font-size:18px}
+
+/* Worked example — bordered box with steps */
+.wb-example{padding:18px 20px;border-radius:12px;
+  background:rgba(0,180,255,0.04);border:1px solid rgba(0,180,255,0.18)}
+.wb-example-title{font-size:12px;letter-spacing:3px;text-transform:uppercase;
+  color:rgba(0,200,255,0.85);font-weight:700;margin-bottom:10px}
+.wb-example-problem{font-size:18px;color:rgba(220,235,255,0.95);
+  font-family:'Courier New',monospace;padding:10px 14px;margin-bottom:14px;
+  background:rgba(0,0,0,0.18);border-radius:8px;border-left:3px solid rgba(0,200,255,0.5)}
+.wb-example-step{display:flex;align-items:center;gap:14px;margin:8px 0;
+  padding:10px 14px;border-radius:8px;background:rgba(255,255,255,0.025)}
+.wb-example-step .step-label{font-size:11px;letter-spacing:2px;text-transform:uppercase;
+  color:rgba(0,200,255,0.7);font-weight:600;min-width:60px}
+.wb-example-step .step-math{font-family:'Courier New',monospace;font-size:19px;
+  color:rgba(0,230,255,0.95);flex:1}
+.wb-example-result{margin-top:14px;font-size:24px;font-weight:700;text-align:center;
+  padding:14px;border-radius:10px;
+  background:rgba(0,255,140,0.08);border:1px solid rgba(0,255,140,0.3);
+  color:rgba(0,255,140,0.95);text-shadow:0 0 12px rgba(0,255,140,0.25)}
+.wb-example-result::before{content:"➜ "}
+
+/* Key points — bullet cards */
+.wb-keypoints{display:flex;flex-direction:column;gap:8px}
+.wb-keypoints-title{font-size:12px;letter-spacing:3px;text-transform:uppercase;
+  color:rgba(180,140,255,0.85);font-weight:700;margin-bottom:4px}
+.wb-keypoint{padding:11px 16px;border-radius:10px;
+  background:rgba(180,140,255,0.05);border-left:3px solid rgba(180,140,255,0.5);
+  font-size:16px;color:rgba(225,230,255,0.92);line-height:1.5}
+.wb-keypoint::before{content:"✦ ";color:rgba(180,140,255,0.9);font-weight:700}
 </style>
 
 <!-- VIRON Weather Overlay & Transition Styles -->
@@ -948,10 +996,10 @@ setInterval(()=>{
         }
       }
       // Handle whiteboard immediately (don't queue — opens alongside audio)
-      if(d.whiteboard&&d.whiteboard.title&&d.whiteboard.steps){
-        D('📋 Pipeline whiteboard: "'+d.whiteboard.title+'" ('+d.whiteboard.steps.length+' steps)');
+      if(d.whiteboard&&d.whiteboard.title){
+        D('📋 Pipeline whiteboard: "'+d.whiteboard.title+'"');
         cE("thinking");
-        openWB(d.whiteboard.title,d.whiteboard.steps);
+        openWB(d.whiteboard.title, d.whiteboard.steps||[], d.whiteboard);
         return; // Don't queue the "📋" text
       }
       if(d.text){
@@ -2602,9 +2650,12 @@ if(em)cE(em);stopAllRecognition();msgs.push({role:"assistant",content:m});say(m)
 // ===== WHITEBOARD =====
 let wbO=false,wbT=null,wbPresenting=false;
 
-function openWB(t,steps){
+function openWB(t,steps,wb){
   const isUpdate = wbO;
-  D('WB openWB: title="'+t+'", steps='+steps.length+(isUpdate?' UPDATE':' NEW'));
+  // wb is the full whiteboard object — may include definition, formula, example, key_points
+  const sheet = wb || {};
+  const hasRich = !!(sheet.formula || sheet.definition || sheet.example || (sheet.key_points && sheet.key_points.length));
+  D('WB openWB: title="'+t+'", steps='+steps.length+', rich='+hasRich+(isUpdate?' UPDATE':' NEW'));
   wbO=true;
   wbPresenting=true;
   
@@ -2613,17 +2664,80 @@ function openWB(t,steps){
   document.getElementById("wbCloseBtn").textContent=isGreekMode()?'✕ Πίσω':'✕ Back';
   const c=document.getElementById("wbc");c.innerHTML="";
   
-  const stepEls=[];
-  steps.forEach((x)=>{
-    const d=document.createElement("div");d.className="wb-step";
-    let h="";
-    if(x.label)h+='<div class="sl">'+x.label+'</div>';
-    if(x.text)h+='<div class="st">'+x.text+'</div>';
-    if(x.math)h+='<div class="sm">'+x.math+'</div>';
-    if(x.result)h+='<div class="sr">'+x.result+'</div>';
-    d.innerHTML=h;c.appendChild(d);
-    stepEls.push(d);
-  });
+  // Helper to escape HTML in user-controlled strings
+  const esc=(s)=>String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  
+  const sectionEls=[];
+
+  if(hasRich){
+    // ===== Rich study-sheet layout =====
+    const sheetRoot=document.createElement("div");
+    sheetRoot.className="wb-sheet";
+
+    // 1. Hero formula (if present) — top, eye-catching
+    if(sheet.formula){
+      const f=document.createElement("div");
+      f.className="wb-sheet-section wb-hero-formula";
+      f.textContent=sheet.formula;
+      sheetRoot.appendChild(f);
+      sectionEls.push(f);
+    }
+
+    // 2. Definition
+    if(sheet.definition){
+      const d=document.createElement("div");
+      d.className="wb-sheet-section wb-definition";
+      d.textContent=sheet.definition;
+      sheetRoot.appendChild(d);
+      sectionEls.push(d);
+    }
+
+    // 3. Worked example
+    if(sheet.example && (sheet.example.problem || (sheet.example.steps && sheet.example.steps.length) || sheet.example.result)){
+      const ex=sheet.example;
+      const exEl=document.createElement("div");
+      exEl.className="wb-sheet-section wb-example";
+      let html='<div class="wb-example-title">'+(isGreekMode()?'Παράδειγμα':'Example')+'</div>';
+      if(ex.problem)html+='<div class="wb-example-problem">'+esc(ex.problem)+'</div>';
+      if(ex.steps && Array.isArray(ex.steps)){
+        ex.steps.forEach(s=>{
+          html+='<div class="wb-example-step">';
+          if(s.label)html+='<div class="step-label">'+esc(s.label)+'</div>';
+          if(s.math)html+='<div class="step-math">'+esc(s.math)+'</div>';
+          html+='</div>';
+        });
+      }
+      if(ex.result)html+='<div class="wb-example-result">'+esc(ex.result)+'</div>';
+      exEl.innerHTML=html;
+      sheetRoot.appendChild(exEl);
+      sectionEls.push(exEl);
+    }
+
+    // 4. Key points
+    if(sheet.key_points && sheet.key_points.length){
+      const kp=document.createElement("div");
+      kp.className="wb-sheet-section wb-keypoints";
+      let html='<div class="wb-keypoints-title">'+(isGreekMode()?'Να θυμάσαι':'Key Points')+'</div>';
+      sheet.key_points.forEach(p=>{ html+='<div class="wb-keypoint">'+esc(p)+'</div>'; });
+      kp.innerHTML=html;
+      sheetRoot.appendChild(kp);
+      sectionEls.push(kp);
+    }
+
+    c.appendChild(sheetRoot);
+  }else{
+    // ===== Legacy fallback: simple step cards =====
+    steps.forEach((x)=>{
+      const d=document.createElement("div");d.className="wb-step";
+      let h="";
+      if(x.label)h+='<div class="sl">'+esc(x.label)+'</div>';
+      if(x.text)h+='<div class="st">'+esc(x.text)+'</div>';
+      if(x.math)h+='<div class="sm">'+esc(x.math)+'</div>';
+      if(x.result)h+='<div class="sr">'+esc(x.result)+'</div>';
+      d.innerHTML=h;c.appendChild(d);
+      sectionEls.push(d);
+    });
+  }
   
   // Face: shrink to corner (visible for mouth animation)
   const _face=document.getElementById("face");
@@ -2636,17 +2750,17 @@ function openWB(t,steps){
     setTimeout(()=>document.getElementById("wb").classList.add("active"),200);
   }
   
-  // Reveal steps + scroll into view (NO rAF loop = saves CPU)
-  const stepDelay = isUpdate ? 200 : 600;
+  // Reveal sections one by one
+  const stepDelay = hasRich ? 350 : (isUpdate ? 200 : 600);
   const startDelay = isUpdate ? 50 : 400;
-  stepEls.forEach((el,i)=>{
+  sectionEls.forEach((el,i)=>{
     setTimeout(()=>{
       el.classList.add("visible");
       el.scrollIntoView({behavior:'smooth',block:'nearest'});
     },startDelay+i*stepDelay);
   });
   
-  const totalTime=startDelay+stepEls.length*stepDelay+800;
+  const totalTime=startDelay+sectionEls.length*stepDelay+800;
   setTimeout(()=>{
     wbPresenting=false;
     cmdRetryCount=0;
