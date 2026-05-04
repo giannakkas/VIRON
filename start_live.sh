@@ -68,11 +68,24 @@ if command -v fuser >/dev/null 2>&1; then
         sleep 1
     fi
 fi
-# Kill PulseAudio — it grabs the mic exclusively and prevents arecord from working
-echo "   Killing PulseAudio (it masks the mic)..."
+# Kill ALL userspace audio servers — they grab the mic exclusively and starve
+# arecord. PulseAudio is masked here; PipeWire (default on Ubuntu 22.04) gets
+# the same treatment because pulseaudio.service being masked doesn't stop it.
+echo "   Killing PulseAudio + PipeWire (they mask the mic)..."
 pulseaudio --kill 2>/dev/null
 systemctl --user stop pulseaudio.socket pulseaudio.service 2>/dev/null
 systemctl --user mask pulseaudio.socket pulseaudio.service 2>/dev/null
+# PipeWire on Ubuntu 22.04+ — needs all four units masked, otherwise socket
+# activation re-spawns it the moment any process opens /dev/snd/*
+systemctl --user stop pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service 2>/dev/null
+systemctl --user mask pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service 2>/dev/null
+# WirePlumber is the session manager that respawns PipeWire — also mask it
+systemctl --user stop wireplumber.service 2>/dev/null
+systemctl --user mask wireplumber.service 2>/dev/null
+# Force-kill any survivors
+pkill -9 pulseaudio 2>/dev/null
+pkill -9 pipewire 2>/dev/null
+pkill -9 wireplumber 2>/dev/null
 sleep 2
 
 echo ""
