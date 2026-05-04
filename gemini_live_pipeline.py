@@ -877,10 +877,17 @@ async def gemini_live_session(mic: MicStream):
                         types.Content(role=role, parts=[types.Part(text=text)])
                         for role, text in history_snapshot
                     ]
-                    # Seed history (this is what history_config enables in 3.1)
+                    # Seed history WITHOUT marking the turn complete: the last
+                    # entry is typically a 'model' turn (VIRON's previous reply),
+                    # and signaling turn_complete=True would push the model to
+                    # immediately generate a follow-up turn on top of its own
+                    # last reply — which Gemini rejects with 1008 policy
+                    # violation. With turn_complete=False this just seeds context;
+                    # the next student utterance (streamed via send_realtime_input)
+                    # naturally triggers the model's response.
                     await session.send_client_content(
                         turns=history_turns,
-                        turn_complete=True,
+                        turn_complete=False,
                     )
                     log.info("📚 History seeded — model knows the context")
                     # No greeting — student will speak first to continue conversation
