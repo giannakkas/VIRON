@@ -135,8 +135,10 @@ EXAMPLES:
 - Student: "βάλε ελληνική μουσική" → "Έρχεται! [MUSIC:Greek folk music traditional]"
 - Student: "play Despacito" → "Ωραία επιλογή! [MUSIC:Despacito Luis Fonsi]"
 
-When the student wakes you up again ("Hey VIRON"), the music will stop automatically — you don't need to mention it.
-NEVER include the [MUSIC:...] tag in non-music conversations. Only when actually starting music playback.
+STOPPING MUSIC: When the student says "Hey VIRON" while music is playing, the music stops automatically before you hear the request. So if the student then asks you to stop the music (e.g. "σταμάτα τη μουσική", "stop the music", "turn it off"), simply acknowledge briefly: "Έγινε!" or "Done!" — do NOT emit a [MUSIC:...] tag.
+NEVER include the [MUSIC:...] tag in non-music conversations. Only when actually STARTING new music playback.
+
+CONVERSATION CONTINUITY: If the conversation has prior history visible above (i.e. you're resuming where you left off — not just starting fresh), do NOT greet the student again or say "Γεια σου". Just continue naturally as if the conversation never paused. Only greet on a truly fresh start (when there's no prior conversation history).
 """
 
 # ═══════════════════════════════════════════════════════════
@@ -408,6 +410,44 @@ def _extract_music_query(transcript: str):
 
 _session_active = threading.Event()
 _stop_session = threading.Event()
+
+# ═══════════════════════════════════════════════════════════
+# CONVERSATION HISTORY (across sessions, 5-min window)
+# ═══════════════════════════════════════════════════════════
+# Keep recent turns so a follow-up "Hey Jarvis" within 5 minutes
+# resumes context instead of restarting from a greeting.
+
+_conv_history = []  # list of (role, text): role = "user" | "model"
+_last_session_end_time = 0.0
+_history_lock = threading.Lock()
+HISTORY_WINDOW_SEC = 300.0   # 5 minutes
+MAX_HISTORY_TURNS = 30        # cap to avoid bloat (~15 exchanges)
+
+def _append_history(role: str, text: str):
+    """Add a turn to conversation history. Thread-safe."""
+    if not text or not text.strip():
+        return
+    with _history_lock:
+        _conv_history.append((role, text.strip()))
+        if len(_conv_history) > MAX_HISTORY_TURNS:
+            del _conv_history[: len(_conv_history) - MAX_HISTORY_TURNS]
+
+def _should_resume_history() -> bool:
+    """True if we have recent history within the resume window."""
+    with _history_lock:
+        if not _conv_history:
+            return False
+        return (time.time() - _last_session_end_time) < HISTORY_WINDOW_SEC
+
+def _mark_session_ended():
+    global _last_session_end_time
+    _last_session_end_time = time.time()
+
+def _clear_history(reason: str = ""):
+    with _history_lock:
+        if _conv_history:
+            log.info(f"🗑️  Cleared {len(_conv_history)} history turns ({reason})")
+            _conv_history.clear()
 
 # Pre-initialize Gemini client at module load (saves 2s on first wake)
 _genai_client = None
@@ -737,25 +777,50 @@ async def gemini_live_session(mic: MicStream):
             _session_active.set()
             state.in_session = True
 
-            # Trigger an initial greeting so VIRON speaks first.
-            # 2.5: send_client_content triggers a model turn with the text.
-            # 3.1: send_client_content only SEEDS history — to actually trigger
-            #      a response, we must use send_realtime_input(text=...).
-            try:
-                if is_v31:
-                    await session.send_realtime_input(text="Hey VIRON")
-                    log.info("👋 Sent greeting via send_realtime_input (3.1)")
-                else:
+            # Decide: resume previous conversation or fresh start with greeting?
+            resume = _should_resume_history()
+            if resume:
+                with _history_lock:
+                    history_snapshot = list(_conv_history)
+                age = int(time.time() - _last_session_end_time)
+                log.info(f"📚 Resuming conversation ({len(history_snapshot)} turns, {age}s since last)")
+                try:
+                    history_turns = [
+                        types.Content(role=role, parts=[types.Part(text=text)])
+                        for role, text in history_snapshot
+                    ]
+                    # Seed history (this is what history_config enables in 3.1)
                     await session.send_client_content(
-                        turns=types.Content(
-                            role="user",
-                            parts=[types.Part(text="Hey VIRON")]
-                        ),
+                        turns=history_turns,
                         turn_complete=True,
                     )
-                    log.info("👋 Sent greeting via send_client_content (2.5)")
-            except Exception as e:
-                log.warning(f"Greeting trigger failed: {e} — model will respond when student speaks")
+                    log.info("📚 History seeded — model knows the context")
+                    # No greeting — student will speak first to continue conversation
+                except Exception as e:
+                    log.warning(f"History resume failed: {e} — falling back to fresh greeting")
+                    resume = False  # fall through to greeting branch below
+
+            if not resume:
+                # Fresh start: trigger greeting
+                # 2.5: send_client_content triggers a model turn with the text.
+                # 3.1: send_client_content only SEEDS history — to actually trigger
+                #      a response, we must use send_realtime_input(text=...).
+                _clear_history("fresh session")
+                try:
+                    if is_v31:
+                        await session.send_realtime_input(text="Hey VIRON")
+                        log.info("👋 Sent greeting via send_realtime_input (3.1)")
+                    else:
+                        await session.send_client_content(
+                            turns=types.Content(
+                                role="user",
+                                parts=[types.Part(text="Hey VIRON")]
+                            ),
+                            turn_complete=True,
+                        )
+                        log.info("👋 Sent greeting via send_client_content (2.5)")
+                except Exception as e:
+                    log.warning(f"Greeting trigger failed: {e} — model will respond when student speaks")
 
             # Task 1: Stream mic audio to Gemini CONTINUOUSLY
             async def send_audio():
@@ -842,6 +907,7 @@ async def gemini_live_session(mic: MicStream):
                                 t = sc.input_transcription.text.strip()
                                 if t:
                                     log.info(f"🎤 Student: \"{t}\"")
+                                    _append_history("user", t)
 
                             # Handle interruption — STOP audio immediately
                             if sc.interrupted:
@@ -872,6 +938,10 @@ async def gemini_live_session(mic: MicStream):
                                             target=_play_music,
                                             args=(music_query,), daemon=True
                                         ).start()
+                                    # Strip the music tag from history (it's an internal control token)
+                                    clean_text = _MUSIC_TAG_RE.sub("", full_text).strip()
+                                    if clean_text:
+                                        _append_history("model", clean_text)
                                 
                                 # Generate polished whiteboard via Gemini text API
                                 # Always runs — replaces early local WB with better version
@@ -957,6 +1027,7 @@ async def gemini_live_session(mic: MicStream):
         state.in_session = False
         state.set_status("idle")
         _stop_aplay()
+        _mark_session_ended()
         log.info("🔌 Gemini Live session ended")
 
 
