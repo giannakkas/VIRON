@@ -2250,6 +2250,41 @@ def camera_snapshot_proxy():
         from flask import Response
         return Response(b"", status=503, headers={"Cache-Control": "no-store"})
 
+@app.route('/camera/stream', methods=['GET'])
+def camera_stream_proxy():
+    """Pipe the pipeline's MJPEG stream to the browser.
+    Uses requests with stream=True so frames are forwarded chunk-by-chunk
+    rather than buffered — preserves the multipart/x-mixed-replace boundary
+    behavior the browser needs for smooth playback."""
+    import requests as _req
+    from flask import Response, stream_with_context
+    try:
+        upstream = _req.get(
+            f'http://127.0.0.1:{OWW_PORT}/camera/stream',
+            stream=True, timeout=(2, None),
+        )
+    except Exception:
+        return Response(b"", status=503)
+
+    content_type = upstream.headers.get('Content-Type',
+                                        'multipart/x-mixed-replace; boundary=vironframe')
+
+    def gen():
+        try:
+            for chunk in upstream.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    return Response(stream_with_context(gen()), mimetype=content_type,
+                    headers={"Cache-Control": "no-store, no-cache, must-revalidate",
+                             "Pragma": "no-cache",
+                             "Connection": "close"})
+
 @app.route('/camera/state', methods=['GET'])
 def camera_state_proxy():
     import urllib.request

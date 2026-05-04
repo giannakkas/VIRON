@@ -359,7 +359,7 @@ CAMERA_ENABLED = os.environ.get("VIRON_CAMERA_ENABLED", "1") == "1"
 CAMERA_DEVICE_ENV = os.environ.get("VIRON_CAMERA_DEVICE", "")  # e.g. "0" or "/dev/video0"
 CAMERA_WIDTH = int(os.environ.get("VIRON_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("VIRON_CAMERA_HEIGHT", "480"))
-CAMERA_FPS = int(os.environ.get("VIRON_CAMERA_FPS", "5"))   # capture rate (preview only)
+CAMERA_FPS = int(os.environ.get("VIRON_CAMERA_FPS", "15"))   # capture rate (preview only)
 CAMERA_JPEG_QUALITY = int(os.environ.get("VIRON_CAMERA_JPEG_QUALITY", "70"))
 
 class CameraStream:
@@ -1727,6 +1727,41 @@ def camera_snapshot():
         "Cache-Control": "no-store",
         "X-Frame-Age": f"{age:.2f}",
     })
+
+@app.route("/camera/stream", methods=["GET"])
+def camera_stream():
+    """MJPEG (multipart/x-mixed-replace) stream for smooth UI preview.
+    The browser <img> stays connected and the kernel pushes frames as
+    they're encoded — no polling overhead, no per-frame flicker."""
+    from flask import Response
+    boundary = b"--vironframe"
+
+    def gen():
+        # Cap stream FPS to the capture FPS — sending faster than we capture
+        # just yields duplicate frames and burns bandwidth.
+        target_fps = max(1, CAMERA_FPS)
+        period = 1.0 / target_fps
+        last_ts = 0.0
+        # Soft idle timeout so a disconnected client doesn't hold the thread
+        deadline = time.time() + 600  # 10 min per stream connection
+        while time.time() < deadline:
+            jpeg, _ = camera.get_jpeg(max_age_sec=2.0)
+            if jpeg:
+                # De-dup: only push if frame timestamp advanced
+                with camera._lock:
+                    ts = camera.latest_ts
+                if ts != last_ts:
+                    last_ts = ts
+                    yield (boundary + b"\r\n"
+                           b"Content-Type: image/jpeg\r\n"
+                           b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                           + jpeg + b"\r\n")
+            time.sleep(period)
+
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=vironframe",
+                    headers={"Cache-Control": "no-store, no-cache, must-revalidate",
+                             "Pragma": "no-cache",
+                             "Connection": "close"})
 
 @app.route("/camera/state", methods=["GET"])
 def camera_state():

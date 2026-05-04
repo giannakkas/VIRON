@@ -257,9 +257,11 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
   letter-spacing:1px;
 }
 
-/* Camera preview corner — tappable mute/unmute */
+/* Camera preview corner — tappable mute/unmute.
+   Positioned to the LEFT of the hamburger (which sits at top:12 right:12,
+   ~40px wide), with a 13px gap, so taps on the hamburger aren't blocked. */
 #camPreview{
-  position:fixed;top:20px;right:20px;
+  position:fixed;top:14px;right:65px;
   width:160px;height:120px;
   border-radius:12px;overflow:hidden;
   background:#000;
@@ -3798,28 +3800,55 @@ function pauseMusic(){
 // ===== CAMERA PREVIEW =====
 let _camAvailable = false;
 let _camMutedUI = false;
-function refreshCamera(){
+let _camStreamMode = false;     // true once the MJPEG stream is connected
+let _camPollTimer = null;       // snapshot-polling fallback handle
+
+function _camStartStream(){
+  // Use MJPEG (multipart/x-mixed-replace) for smooth video. The img tag
+  // stays connected and the server pushes new frames in-place. No polling,
+  // no per-frame flicker.
+  const img = document.getElementById("camImg");
+  const wrap = document.getElementById("camPreview");
+  if(!img || !wrap) return;
+  // Cache-bust the URL once so a previous failed stream doesn't get replayed
+  img.src = '/camera/stream?t=' + Date.now();
+  img.onload = ()=>{
+    if(!_camAvailable){
+      _camAvailable = true;
+      _camStreamMode = true;
+      wrap.classList.add("visible");
+      D('📷 Camera stream connected');
+    }
+  };
+  img.onerror = ()=>{
+    // Stream broken — fall back to snapshot polling so we still show *something*
+    if(_camStreamMode){
+      D('📷 Stream failed, switching to snapshot polling');
+      _camStreamMode = false;
+    }
+    if(!_camPollTimer){
+      _camPollTimer = setInterval(_camPollSnapshot, 500);
+    }
+  };
+}
+
+function _camPollSnapshot(){
+  // Fallback: classic refresh-every-500ms snapshot.jpg approach.
   const wrap = document.getElementById("camPreview");
   const img = document.getElementById("camImg");
   if(!wrap || !img) return;
   const url = '/camera/snapshot.jpg?t=' + Date.now();
-  // Fetch as image to detect 503/error reliably
   const probe = new Image();
   probe.onload = ()=>{
     img.src = probe.src;
-    if(!_camAvailable){
-      _camAvailable = true;
-      wrap.classList.add("visible");
-    }
+    if(!_camAvailable){ _camAvailable = true; wrap.classList.add("visible"); }
   };
   probe.onerror = ()=>{
-    if(_camAvailable){
-      _camAvailable = false;
-      wrap.classList.remove("visible");
-    }
+    if(_camAvailable){ _camAvailable = false; wrap.classList.remove("visible"); }
   };
   probe.src = url;
 }
+
 function refreshCameraState(){
   fetch('/camera/state',{signal:AbortSignal.timeout(1500)})
     .then(r=>r.json())
@@ -3834,9 +3863,14 @@ function refreshCameraState(){
       _camMutedUI = !s.enabled;
       if(_camMutedUI) wrap.classList.add("muted");
       else wrap.classList.remove("muted");
+      // Kick off the stream once we know a camera exists
+      if(!_camStreamMode && !_camPollTimer){
+        _camStartStream();
+      }
     })
     .catch(()=>{});
 }
+
 function toggleCamera(){
   fetch('/camera/toggle',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({})})
@@ -3851,11 +3885,10 @@ function toggleCamera(){
     })
     .catch(()=>{});
 }
-// Poll preview at ~2 fps; check state less often
-setInterval(refreshCamera, 500);
+
+// Boot: check state once, then poll state slowly. Stream takes care of frames.
+setTimeout(refreshCameraState, 800);
 setInterval(refreshCameraState, 5000);
-setTimeout(refreshCameraState, 1000);
-setTimeout(refreshCamera, 800);
 
 // ===== VOLUME CONTROL =====
 const volSlider=document.getElementById('volSlider');
