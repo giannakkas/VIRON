@@ -172,6 +172,22 @@ CURRENT EVENTS & FRESH INFORMATION — You have a Google Search tool available. 
 
 Process: when the student asks one of these, use the search tool, then give a clear, brief answer in their language. Don't say "I don't have access to the internet" — you DO have search; use it. Don't read URLs out loud — just summarize the answer naturally.
 
+CAMERA / VISION — Sometimes you receive a webcam snapshot of the student at the start of a turn. The image is for YOUR awareness only — use it to shape HOW you respond, never to describe what you see.
+
+USE the visual context to:
+- Match your tone to mood: warmer if the student looks tired or sad, more energetic if they look engaged
+- Notice attention: if the student is looking away or distracted, you can gently check in ("Είσαι μαζί μου;" / "Are you still there?")
+- Pick up on confusion or frustration during a lesson — slow down, simplify, encourage
+
+NEVER do any of these — they would be creepy and break trust:
+- Describe the student's appearance ("I see you have...", "you're wearing...", "your hair...")
+- Comment on what they're wearing, their face, their body
+- Mention other people, pets, or objects in the room unprompted
+- Say anything that makes the student feel watched or surveilled
+- Describe surroundings ("I see you're in the kitchen", etc.)
+
+The visual is invisible context. Let it shape WHAT TONE you take, not WHAT you say. If there's no image (camera off, dark room, etc.), just respond normally based on audio.
+
 CONVERSATION CONTINUITY: If the conversation has prior history visible above (i.e. you're resuming where you left off — not just starting fresh), do NOT greet the student again or say "Γεια σου". Just continue naturally as if the conversation never paused. Only greet on a truly fresh start (when there's no prior conversation history).
 """
 
@@ -330,6 +346,159 @@ class MicStream:
                 pass
         except Exception:
             pass
+
+# ═══════════════════════════════════════════════════════════
+# CAMERA CAPTURE (USB webcam via OpenCV)
+# ═══════════════════════════════════════════════════════════
+# Background thread continuously grabs frames at low FPS so a snapshot
+# is always immediately available with no warmup delay. JPEG is encoded
+# once per capture, kept in a single-buffer in-memory store. No frames
+# are ever written to disk.
+
+CAMERA_ENABLED = os.environ.get("VIRON_CAMERA_ENABLED", "1") == "1"
+CAMERA_DEVICE_ENV = os.environ.get("VIRON_CAMERA_DEVICE", "")  # e.g. "0" or "/dev/video0"
+CAMERA_WIDTH = int(os.environ.get("VIRON_CAMERA_WIDTH", "640"))
+CAMERA_HEIGHT = int(os.environ.get("VIRON_CAMERA_HEIGHT", "480"))
+CAMERA_FPS = int(os.environ.get("VIRON_CAMERA_FPS", "5"))   # capture rate (preview only)
+CAMERA_JPEG_QUALITY = int(os.environ.get("VIRON_CAMERA_JPEG_QUALITY", "70"))
+
+class CameraStream:
+    def __init__(self):
+        self.cap = None
+        self.latest_jpeg = None     # bytes, latest encoded frame
+        self.latest_ts = 0.0        # time.time() of latest frame
+        self._lock = threading.Lock()
+        self._thread = None
+        self._running = False
+        self._cv2 = None
+        self._device_used = None
+        self._enabled = CAMERA_ENABLED   # runtime toggle
+
+    def _try_import_cv2(self):
+        if self._cv2 is not None:
+            return True
+        try:
+            import cv2  # type: ignore
+            self._cv2 = cv2
+            return True
+        except ImportError:
+            log.warning("📷 OpenCV (cv2) not installed — camera disabled. "
+                        "Install: sudo apt install -y python3-opencv")
+            return False
+
+    def _autodetect_device(self):
+        """Find the first /dev/videoN that opens AND returns a real frame."""
+        cv2 = self._cv2
+        # If user pinned a device via env, use only that
+        if CAMERA_DEVICE_ENV:
+            try:
+                idx = int(CAMERA_DEVICE_ENV)
+                return [idx]
+            except ValueError:
+                return [CAMERA_DEVICE_ENV]
+        return [0, 1, 2, 3]  # try /dev/video0..3
+
+    def start(self):
+        if not self._enabled:
+            log.info("📷 Camera disabled (VIRON_CAMERA_ENABLED=0)")
+            return False
+        if not self._try_import_cv2():
+            return False
+        cv2 = self._cv2
+        for dev in self._autodetect_device():
+            try:
+                cap = cv2.VideoCapture(dev)
+                if not cap.isOpened():
+                    cap.release()
+                    continue
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                # First frame may be black/empty — grab a few to verify
+                ok = False
+                for _ in range(5):
+                    r, f = cap.read()
+                    if r and f is not None and f.size > 0:
+                        ok = True
+                        break
+                if not ok:
+                    cap.release()
+                    continue
+                self.cap = cap
+                self._device_used = dev
+                break
+            except Exception as e:
+                log.warning(f"📷 Could not probe camera {dev}: {e}")
+        if self.cap is None:
+            log.warning("📷 No working camera found — VIRON will run without vision")
+            return False
+
+        self._running = True
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
+        log.info(f"📷 Camera ready: device={self._device_used}, "
+                 f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}, ~{CAMERA_FPS}fps")
+        return True
+
+    def _capture_loop(self):
+        cv2 = self._cv2
+        period = 1.0 / max(1, CAMERA_FPS)
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), CAMERA_JPEG_QUALITY]
+        while self._running:
+            try:
+                if not self._enabled:
+                    time.sleep(0.5)
+                    continue
+                ret, frame = self.cap.read()
+                if ret and frame is not None and frame.size > 0:
+                    success, buf = cv2.imencode('.jpg', frame, encode_params)
+                    if success:
+                        with self._lock:
+                            self.latest_jpeg = buf.tobytes()
+                            self.latest_ts = time.time()
+                time.sleep(period)
+            except Exception as e:
+                log.warning(f"📷 Capture error: {e}")
+                time.sleep(1)
+
+    def get_jpeg(self, max_age_sec: float = 5.0):
+        """Return (bytes, age_seconds) for the latest frame, or (None, None)
+        if no frame has been captured or it's stale."""
+        with self._lock:
+            if not self.latest_jpeg:
+                return None, None
+            age = time.time() - self.latest_ts
+            if age > max_age_sec:
+                return None, age
+            return self.latest_jpeg, age
+
+    def set_enabled(self, enabled: bool):
+        """Runtime camera mute. Capture loop pauses, latest frame is cleared."""
+        self._enabled = bool(enabled)
+        if not self._enabled:
+            with self._lock:
+                self.latest_jpeg = None
+                self.latest_ts = 0.0
+            log.info("📷 Camera muted (frames cleared)")
+        else:
+            log.info("📷 Camera unmuted")
+
+    def stop(self):
+        self._running = False
+        if self._thread:
+            try:
+                self._thread.join(timeout=2)
+            except Exception:
+                pass
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
+        log.info("📷 Camera stopped")
+
+
+camera = CameraStream()
 
 # ═══════════════════════════════════════════════════════════
 # AUDIO PLAYBACK (streaming via aplay pipe — low latency)
@@ -1051,16 +1220,43 @@ async def gemini_live_session(mic: MicStream):
                 # 3.1: send_client_content only SEEDS history — to actually trigger
                 #      a response, we must use send_realtime_input(text=...).
                 _clear_history("fresh session")
+
+                # Capture a single snapshot so VIRON can read the student's mood
+                # at the start of the conversation. Best-effort — if the camera
+                # is muted, missing, or stale, we just skip the image.
+                snap_jpeg, snap_age = camera.get_jpeg(max_age_sec=3.0)
+                if snap_jpeg:
+                    log.info(f"📷 Snapshot ready ({len(snap_jpeg)} bytes, {snap_age:.1f}s old)")
+                else:
+                    log.info("📷 No snapshot available for this session start")
+
                 try:
                     if is_v31:
+                        # 3.1: realtime_input handles both media (image) and text.
+                        # Send the image first so the model has visual context
+                        # before the trigger word.
+                        if snap_jpeg:
+                            try:
+                                await session.send_realtime_input(
+                                    media=types.Blob(data=snap_jpeg, mime_type="image/jpeg")
+                                )
+                            except Exception as e:
+                                log.warning(f"📷 Snapshot send failed (3.1): {e}")
                         await session.send_realtime_input(text="Hey VIRON")
                         log.info("👋 Sent greeting via send_realtime_input (3.1)")
                     else:
+                        # 2.5: image goes in the same multi-part Content.
+                        parts = []
+                        if snap_jpeg:
+                            try:
+                                parts.append(types.Part(
+                                    inline_data=types.Blob(data=snap_jpeg, mime_type="image/jpeg")
+                                ))
+                            except Exception as e:
+                                log.warning(f"📷 Snapshot Part build failed (2.5): {e}")
+                        parts.append(types.Part(text="Hey VIRON"))
                         await session.send_client_content(
-                            turns=types.Content(
-                                role="user",
-                                parts=[types.Part(text="Hey VIRON")]
-                            ),
+                            turns=types.Content(role="user", parts=parts),
                             turn_complete=True,
                         )
                         log.info("👋 Sent greeting via send_client_content (2.5)")
@@ -1518,6 +1714,38 @@ def pipeline_language():
 def ww_resume():
     return jsonify({"ok": True})
 
+@app.route("/camera/snapshot.jpg", methods=["GET"])
+def camera_snapshot():
+    """Return the latest webcam frame for the UI preview corner.
+    Returns 503 (Service Unavailable) if no frame is available — the
+    frontend treats that as 'hide preview'."""
+    from flask import Response
+    jpeg, age = camera.get_jpeg(max_age_sec=2.0)
+    if not jpeg:
+        return Response(b"", status=503, headers={"Cache-Control": "no-store"})
+    return Response(jpeg, mimetype="image/jpeg", headers={
+        "Cache-Control": "no-store",
+        "X-Frame-Age": f"{age:.2f}",
+    })
+
+@app.route("/camera/state", methods=["GET"])
+def camera_state():
+    return jsonify({
+        "available": camera.cap is not None,
+        "enabled": camera._enabled,
+        "device": camera._device_used,
+    })
+
+@app.route("/camera/toggle", methods=["POST"])
+def camera_toggle():
+    """Mute/unmute the camera. POST {'enabled': true|false}."""
+    data = request.get_json(silent=True) or {}
+    if "enabled" in data:
+        camera.set_enabled(bool(data["enabled"]))
+    else:
+        camera.set_enabled(not camera._enabled)  # toggle
+    return jsonify({"ok": True, "enabled": camera._enabled})
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -1572,6 +1800,12 @@ def main():
     mic.start()
     time.sleep(0.5)
 
+    # Start camera (best-effort — pipeline still works without it)
+    try:
+        camera.start()
+    except Exception as e:
+        log.warning(f"📷 Camera start failed: {e}")
+
     # Visual-only greeting (no text push - don't block UI queue)
     log.info("🤖 VIRON ready!")
     push_to_ui(emotion="happy")
@@ -1580,6 +1814,10 @@ def main():
         main_loop(mic)
     finally:
         _stop_music()
+        try:
+            camera.stop()
+        except Exception:
+            pass
         mic.stop()
         if oww_model is not None:
             try:

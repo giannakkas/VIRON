@@ -2234,6 +2234,45 @@ def pipeline_speak_proxy():
     except:
         return jsonify({"ok": False})
 
+# ─── Camera passthrough (UI preview corner) ──────────────────
+@app.route('/camera/snapshot.jpg', methods=['GET'])
+def camera_snapshot_proxy():
+    """Stream the latest webcam frame from the pipeline. Returns 503
+    when no frame is available so the frontend hides the preview."""
+    import urllib.request
+    try:
+        url = f'http://127.0.0.1:{OWW_PORT}/camera/snapshot.jpg'
+        resp = urllib.request.urlopen(url, timeout=2)
+        from flask import Response
+        return Response(resp.read(), mimetype="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+    except Exception:
+        from flask import Response
+        return Response(b"", status=503, headers={"Cache-Control": "no-store"})
+
+@app.route('/camera/state', methods=['GET'])
+def camera_state_proxy():
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(
+            f'http://127.0.0.1:{OWW_PORT}/camera/state', timeout=2)
+        return jsonify(json.loads(resp.read()))
+    except Exception:
+        return jsonify({"available": False, "enabled": False, "device": None})
+
+@app.route('/camera/toggle', methods=['POST'])
+def camera_toggle_proxy():
+    import urllib.request
+    try:
+        data = json.dumps(request.get_json() or {}).encode()
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{OWW_PORT}/camera/toggle',
+            data=data, headers={'Content-Type': 'application/json'})
+        resp = urllib.request.urlopen(req, timeout=3)
+        return jsonify(json.loads(resp.read()))
+    except Exception:
+        return jsonify({"ok": False})
+
 @app.route('/pipeline/language', methods=['POST', 'GET'])
 def pipeline_language_proxy():
     """Proxy to voice pipeline's language endpoint."""
