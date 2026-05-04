@@ -19,7 +19,12 @@ if [ "$1" = "stop" ]; then
     pkill -f "gateway/main.py" 2>/dev/null
     pkill -f "viron_kiosk.py" 2>/dev/null
     pkill -f "aplay.*plughw" 2>/dev/null
+    pkill -f "arecord" 2>/dev/null
     pkill -f "mpv.*ytdl" 2>/dev/null
+    # Chromium kiosk holds the mic via getUserMedia even after viron_kiosk.py dies.
+    # Kill it explicitly or arecord will fail to read on next start.
+    pkill -f "chromium.*kiosk\|chrome.*kiosk" 2>/dev/null
+    pkill -f "chromium-browser\|chromium\|google-chrome" 2>/dev/null
     sleep 2
     echo "✓ Stopped"
     exit 0
