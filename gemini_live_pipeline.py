@@ -248,7 +248,10 @@ class MicStream:
     def start(self):
         cmd = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE",
                "-r", str(SAMPLE_RATE_IN), "-c", "1", "-t", "raw"]
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # stderr=DEVNULL: arecord writes verbose status messages to stderr that
+        # we never read; if it's a PIPE the buffer eventually fills and arecord
+        # blocks, causing the mic to feed identical buffers repeatedly.
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.running = True
         log.info(f"🎤 Mic started: {ALSA_DEVICE} (mono {SAMPLE_RATE_IN}Hz)")
 
@@ -268,14 +271,31 @@ class MicStream:
         return self.proc.stdout.read(num_bytes)
 
     def stop(self):
+        """Terminate arecord and REAP it. Critical: must wait() after kill() or
+        we leak a zombie that holds /dev/snd/pcmC0D0c forever."""
         self.running = False
-        if self.proc:
-            self.proc.terminate()
+        proc = self.proc
+        self.proc = None
+        if not proc:
+            return
+        # Close stdout pipe to unblock any pending read
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
+        # Try graceful then forceful termination — always wait() at the end
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
             try:
-                self.proc.wait(timeout=2)
-            except:
-                self.proc.kill()
-            self.proc = None
+                proc.kill()
+                proc.wait(timeout=1)  # ← this reap is what was missing
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════
 # AUDIO PLAYBACK (streaming via aplay pipe — low latency)
