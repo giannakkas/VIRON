@@ -71,7 +71,12 @@ svg{width:min(100vw,1400px);height:auto;min-height:65vh;-webkit-tap-highlight-co
 .eng-dot{width:8px;height:8px;border-radius:50%;transition:background 0.5s}
 .eng-label{color:rgba(255,255,255,0.5)}
 /* Hamburger + Settings */
-.hamburger{position:fixed;top:12px;right:12px;width:40px;height:40px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;z-index:100;transition:all 0.2s}
+.hamburger{position:fixed;top:12px;right:12px;width:40px;height:40px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;z-index:100;transition:all 0.25s ease}
+/* When the camera preview is showing, shift the hamburger LEFT so it doesn't
+   overlap. Preview occupies right:14+width:160=174px from right edge; +14px
+   gap = hamburger sits at right:188. The body class is toggled by the camera
+   JS — see refreshCameraState / _camStartStream. */
+body.cam-active .hamburger{right:188px}
 .hamburger:hover{background:rgba(255,255,255,0.12)}
 .hamburger span{display:block;width:20px;height:2px;background:rgba(255,255,255,0.6);border-radius:2px;transition:all 0.3s}
 .hamburger.open span:nth-child(1){transform:rotate(45deg) translate(4px,4px)}
@@ -258,10 +263,10 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 }
 
 /* Camera preview corner — tappable mute/unmute.
-   Positioned to the LEFT of the hamburger (which sits at top:12 right:12,
-   ~40px wide), with a 13px gap, so taps on the hamburger aren't blocked. */
+   Stays in the top-right corner; the hamburger sits to its LEFT
+   (.hamburger override below shifts it). */
 #camPreview{
-  position:fixed;top:14px;right:65px;
+  position:fixed;top:14px;right:14px;
   width:160px;height:120px;
   border-radius:12px;overflow:hidden;
   background:#000;
@@ -3817,6 +3822,7 @@ function _camStartStream(){
       _camAvailable = true;
       _camStreamMode = true;
       wrap.classList.add("visible");
+      document.body.classList.add("cam-active");  // shifts hamburger left
       D('📷 Camera stream connected');
     }
   };
@@ -3841,10 +3847,18 @@ function _camPollSnapshot(){
   const probe = new Image();
   probe.onload = ()=>{
     img.src = probe.src;
-    if(!_camAvailable){ _camAvailable = true; wrap.classList.add("visible"); }
+    if(!_camAvailable){
+      _camAvailable = true;
+      wrap.classList.add("visible");
+      document.body.classList.add("cam-active");
+    }
   };
   probe.onerror = ()=>{
-    if(_camAvailable){ _camAvailable = false; wrap.classList.remove("visible"); }
+    if(_camAvailable){
+      _camAvailable = false;
+      wrap.classList.remove("visible");
+      document.body.classList.remove("cam-active");
+    }
   };
   probe.src = url;
 }
@@ -3857,6 +3871,7 @@ function refreshCameraState(){
       if(!wrap) return;
       if(!s.available){
         wrap.classList.remove("visible","muted");
+        document.body.classList.remove("cam-active");
         _camAvailable = false;
         return;
       }
