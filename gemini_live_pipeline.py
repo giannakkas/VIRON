@@ -609,18 +609,43 @@ async def gemini_live_session(mic: MicStream):
     client = _genai_client
     types = _genai_types
 
-    config = types.LiveConnectConfig(
+    # Gemini 3.1 has breaking changes vs 2.5:
+    #   - Does NOT support enable_affective_dialog
+    #   - Requires history_config.initial_history_in_client_content=True
+    #     to allow the initial "Hey VIRON" seed via send_client_content
+    is_v31 = "3.1" in GEMINI_LIVE_MODEL or "3-1" in GEMINI_LIVE_MODEL
+
+    config_kwargs = dict(
         response_modalities=["AUDIO"],
         system_instruction=VIRON_SYSTEM_INSTRUCTION,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        enable_affective_dialog=True,
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
             )
         ),
     )
+
+    if is_v31:
+        # Allow initial-seed send_client_content for the wake greeting trigger.
+        # If the SDK doesn't expose HistoryConfig yet, skip it — model still works,
+        # just without our explicit greeting trigger.
+        HistoryConfig = getattr(types, "HistoryConfig", None)
+        if HistoryConfig is not None:
+            try:
+                config_kwargs["history_config"] = HistoryConfig(
+                    initial_history_in_client_content=True
+                )
+            except Exception as e:
+                log.warning(f"HistoryConfig setup failed: {e}")
+        log.info("🧠 Using Gemini 3.1 config (no affective_dialog, history_config enabled)")
+    else:
+        # 2.5 native audio supports affective dialog
+        config_kwargs["enable_affective_dialog"] = True
+        log.info("🧠 Using Gemini 2.5 config (affective_dialog enabled)")
+
+    config = types.LiveConnectConfig(**config_kwargs)
 
     log.info(f"🌐 Connecting to Gemini Live: {GEMINI_LIVE_MODEL}")
     state.set_status("listening")
