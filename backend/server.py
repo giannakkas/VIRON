@@ -2271,7 +2271,10 @@ def camera_stream_proxy():
 
     def gen():
         try:
-            for chunk in upstream.iter_content(chunk_size=8192):
+            # Small chunks so the multipart frame boundary reaches the browser
+            # the moment it's written upstream — bigger chunks (8KB+) introduce
+            # visible per-frame buffering latency.
+            for chunk in upstream.iter_content(chunk_size=1024):
                 if chunk:
                     yield chunk
         finally:

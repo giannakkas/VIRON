@@ -359,7 +359,7 @@ CAMERA_ENABLED = os.environ.get("VIRON_CAMERA_ENABLED", "1") == "1"
 CAMERA_DEVICE_ENV = os.environ.get("VIRON_CAMERA_DEVICE", "")  # e.g. "0" or "/dev/video0"
 CAMERA_WIDTH = int(os.environ.get("VIRON_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("VIRON_CAMERA_HEIGHT", "480"))
-CAMERA_FPS = int(os.environ.get("VIRON_CAMERA_FPS", "15"))   # capture rate (preview only)
+CAMERA_FPS = int(os.environ.get("VIRON_CAMERA_FPS", "24"))   # capture rate (preview only)
 CAMERA_JPEG_QUALITY = int(os.environ.get("VIRON_CAMERA_JPEG_QUALITY", "70"))
 
 class CameraStream:
@@ -411,8 +411,29 @@ class CameraStream:
                 if not cap.isOpened():
                     cap.release()
                     continue
+                # CRITICAL for the Brio (and most modern UVC webcams):
+                # Force MJPG codec. The OpenCV default on Linux is YUYV
+                # (uncompressed) which crushes USB bandwidth — at 1280x720
+                # YUYV the cam will only do ~10fps because the bus is full.
+                # Brio outputs MJPG natively at much higher framerates;
+                # OpenCV decodes it on the fly.
+                try:
+                    fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
+                    cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+                except Exception:
+                    pass
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
+                # CRITICAL: keep only the latest frame in the driver buffer.
+                # Without this, the V4L2 backend buffers ~5 frames and read()
+                # walks through them oldest-first — preview lags behind reality
+                # by hundreds of ms and updates feel choppy because we're
+                # always working through a backlog.
+                try:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
                 # First frame may be black/empty — grab a few to verify
                 ok = False
                 for _ in range(5):
@@ -425,6 +446,11 @@ class CameraStream:
                     continue
                 self.cap = cap
                 self._device_used = dev
+                # Log what the driver actually negotiated (might differ from request)
+                actual_fps = cap.get(cv2.CAP_PROP_FPS) or CAMERA_FPS
+                aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or CAMERA_WIDTH)
+                ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or CAMERA_HEIGHT)
+                log.info(f"📷 Camera negotiated: {aw}x{ah} @ {actual_fps:.0f}fps (requested {CAMERA_FPS}fps)")
                 break
             except Exception as e:
                 log.warning(f"📷 Could not probe camera {dev}: {e}")
@@ -441,24 +467,28 @@ class CameraStream:
 
     def _capture_loop(self):
         cv2 = self._cv2
-        period = 1.0 / max(1, CAMERA_FPS)
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), CAMERA_JPEG_QUALITY]
+        # NOTE: no time.sleep() throttle here. cap.read() blocks until the
+        # camera delivers the next frame, which is paced by the driver at
+        # the negotiated FPS. Adding our own sleep just stacks on top of
+        # that and means we're always one cycle behind reality.
         while self._running:
             try:
                 if not self._enabled:
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                     continue
                 ret, frame = self.cap.read()
-                if ret and frame is not None and frame.size > 0:
-                    success, buf = cv2.imencode('.jpg', frame, encode_params)
-                    if success:
-                        with self._lock:
-                            self.latest_jpeg = buf.tobytes()
-                            self.latest_ts = time.time()
-                time.sleep(period)
+                if not ret or frame is None or frame.size == 0:
+                    time.sleep(0.05)
+                    continue
+                success, buf = cv2.imencode('.jpg', frame, encode_params)
+                if success:
+                    with self._lock:
+                        self.latest_jpeg = buf.tobytes()
+                        self.latest_ts = time.time()
             except Exception as e:
                 log.warning(f"📷 Capture error: {e}")
-                time.sleep(1)
+                time.sleep(0.5)
 
     def get_jpeg(self, max_age_sec: float = 5.0):
         """Return (bytes, age_seconds) for the latest frame, or (None, None)
@@ -1737,26 +1767,23 @@ def camera_stream():
     boundary = b"--vironframe"
 
     def gen():
-        # Cap stream FPS to the capture FPS — sending faster than we capture
-        # just yields duplicate frames and burns bandwidth.
-        target_fps = max(1, CAMERA_FPS)
-        period = 1.0 / target_fps
         last_ts = 0.0
-        # Soft idle timeout so a disconnected client doesn't hold the thread
         deadline = time.time() + 600  # 10 min per stream connection
+        # Tight loop: as soon as the capture thread updates latest_ts,
+        # forward the frame. Sleep is tiny (5ms) so we stay responsive
+        # without spinning the CPU when the camera stalls.
         while time.time() < deadline:
-            jpeg, _ = camera.get_jpeg(max_age_sec=2.0)
+            with camera._lock:
+                ts = camera.latest_ts
+                jpeg = camera.latest_jpeg if ts != last_ts else None
             if jpeg:
-                # De-dup: only push if frame timestamp advanced
-                with camera._lock:
-                    ts = camera.latest_ts
-                if ts != last_ts:
-                    last_ts = ts
-                    yield (boundary + b"\r\n"
-                           b"Content-Type: image/jpeg\r\n"
-                           b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
-                           + jpeg + b"\r\n")
-            time.sleep(period)
+                last_ts = ts
+                yield (boundary + b"\r\n"
+                       b"Content-Type: image/jpeg\r\n"
+                       b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                       + jpeg + b"\r\n")
+            else:
+                time.sleep(0.005)  # 5ms yield — wakes within 1 frame at 60fps
 
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=vironframe",
                     headers={"Cache-Control": "no-store, no-cache, must-revalidate",
