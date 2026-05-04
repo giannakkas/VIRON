@@ -385,7 +385,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 <canvas id="audioWaveform" width="500" height="40"></canvas>
 <div class="listen-indicator wake" id="listenInd">
   <div class="listen-bars"><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div><div class="bar" style="height:4px"></div></div>
-  <span class="listen-text" id="listenText">Say "Hey VIRON" or press Space</span>
+  <span class="listen-text" id="listenText">Say "Hey Jarvis" or press Space</span>
 </div>
 <div class="subtitle" id="subtitle"></div>
 <div id="musicBar">
@@ -492,7 +492,7 @@ function updateListenUI(){
   }
   else if(voiceState===VOICE_IDLE){
     ind.className="listen-indicator wake";
-    txt.textContent='Say "Hey VIRON" or press Space';
+    txt.textContent='Say "Hey Jarvis" or press Space';
   }
   else if(voiceState===VOICE_ACTIVATED){ind.className="listen-indicator active";txt.textContent="Listening...";if(typeof wfMode!=='undefined')wfMode='listening'}
   else if(voiceState===VOICE_PROCESSING){ind.className="listen-indicator active";txt.textContent="Thinking...";if(typeof wfMode!=='undefined')wfMode='thinking'}
@@ -999,44 +999,59 @@ setInterval(()=>{
     const txt=document.getElementById("listenText");
     let newState='idle';
     
-    if(s.music){
+    // s.music is truthy even as {playing:false} — must check the .playing flag
+    if(s.music && s.music.playing){
       newState='music';
+    }else if(s.audio_playing){
+      newState='talking';
+    }else if(s.processing||s.speaking){
+      newState='thinking';
+    }else if(s.listening){
+      newState='listening';
+    }else if(s.in_conversation){
+      newState='in_conv';
+    }else{
+      newState='idle';
+    }
+
+    // Skip DOM writes when state hasn't changed. Without this guard the 200ms
+    // poll rewrites className every tick, restarting the CSS keyframes — which
+    // looks like a 5Hz flash on the wake-pulse animation. Also avoids fighting
+    // with the client-side updateListenUI() that runs on its own schedule.
+    if(newState === _lastPipelineState) return;
+    _lastPipelineState = newState;
+
+    if(newState==='music'){
       ind.className="listen-indicator speaking";
       txt.textContent="🎵 Playing...";
       txt.style.color="rgba(0,200,255,0.9)";
       wfMode='speaking';
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
       if(!_pipelineDancing){_pipelineDancing=true;startDance()}
-    }else if(s.audio_playing){
-      // Mouth ONLY moves when ffplay is actually playing audio
-      newState='talking';
+    }else if(newState==='talking'){
       ind.className="listen-indicator speaking";
       txt.textContent="🔊 Speaking...";
       txt.style.color="rgba(255,80,80,0.9)";
       wfMode='speaking';
       if(_pipelineDancing){_pipelineDancing=false;stopDance()}
       if(!_pipelineTalking){_pipelineTalking=true;startT();cE("happy")}
-    }else if(s.processing||s.speaking){
-      // Thinking face while processing OR waiting for TTS audio
-      newState='thinking';
+    }else if(newState==='thinking'){
       ind.className="listen-indicator active";
       txt.textContent="🧠 Thinking...";
       txt.style.color="rgba(255,200,50,0.9)";
       wfMode='thinking';
-      if(_lastPipelineState!=='thinking')cE("thinking");
+      cE("thinking");
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
       if(_pipelineDancing){_pipelineDancing=false;stopDance()}
-    }else if(s.listening){
-      newState='listening';
+    }else if(newState==='listening'){
       ind.className="listen-indicator active";
       txt.textContent="🎤 Listening...";
       txt.style.color="rgba(255,80,80,0.9)";
       wfMode='listening';
-      if(_lastPipelineState!=='listening')cE("focused");
+      cE("focused");
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
       if(_pipelineDancing){_pipelineDancing=false;stopDance()}
-    }else if(s.in_conversation){
-      newState='listening';
+    }else if(newState==='in_conv'){
       ind.className="listen-indicator active";
       txt.textContent="💬 Listening...";
       txt.style.color="rgba(100,255,100,0.9)";
@@ -1044,15 +1059,15 @@ setInterval(()=>{
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
       if(_pipelineDancing){_pipelineDancing=false;stopDance()}
     }else{
-      newState='idle';
+      // idle — match the wake-prompt text used elsewhere in the UI to prevent
+      // the client-side updateListenUI() from fighting this poller
       ind.className="listen-indicator wake";
-      txt.textContent='Say "Hey Jarvis"';
+      txt.textContent='Say "Hey Jarvis" or press Space';
       txt.style.color="";
       wfMode='idle';
       if(_pipelineTalking){_pipelineTalking=false;stopT()}
       if(_pipelineDancing){_pipelineDancing=false;stopDance()}
     }
-    _lastPipelineState=newState;
   })
   .catch(()=>{});
 },200); // Poll faster (200ms) for better mouth sync
@@ -1159,7 +1174,7 @@ function startOWWPolling(){
   if(owwPolling)return;
   owwPolling=true;
   D('  🎯 Starting openWakeWord polling (server-side mic)');
-  document.getElementById("listenText").textContent='Say "Hey VIRON" or press Space';
+  document.getElementById("listenText").textContent='Say "Hey Jarvis" or press Space';
   voiceState=VOICE_IDLE;updateListenUI();
   
   // Resume detection on service side
@@ -1244,7 +1259,7 @@ function startAlwaysListening(){
   alwaysRec.onstart=()=>{
     alwaysListening=true;
     wakeDetectedInSession=false;
-    document.getElementById("listenText").textContent='Say "Hey VIRON" or press Space';
+    document.getElementById("listenText").textContent='Say "Hey Jarvis" or press Space';
   };
   
   alwaysRec.onresult=(e)=>{

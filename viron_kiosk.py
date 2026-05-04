@@ -56,6 +56,32 @@ def find_chrome():
             continue
     return "chromium-browser"
 
+
+def wait_for_flask(url=URL, timeout_sec=60, poll_interval=0.5):
+    """Block until the face server is actually serving requests, or until
+    timeout_sec elapses. Without this, Chromium loads while Flask is still
+    starting and shows 'site can't be reached', which only refreshes if
+    the user manually reloads."""
+    import urllib.request
+    deadline = time.time() + timeout_sec
+    last_err = None
+    attempt = 0
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                if resp.status < 500:
+                    print(f"✅ Flask ready ({attempt + 1} attempts)")
+                    return True
+        except Exception as e:
+            last_err = e
+        attempt += 1
+        if attempt % 10 == 0:
+            print(f"   ...still waiting for Flask ({attempt * poll_interval:.0f}s elapsed)")
+        time.sleep(poll_interval)
+    print(f"⚠️  Flask did not respond after {timeout_sec}s (last error: {last_err}). Launching anyway.")
+    return False
+
+
 def main():
     os.environ["DISPLAY"] = DISPLAY
     
@@ -77,6 +103,10 @@ def main():
         except:
             pass
     
+    # Block until Flask is up so Chromium doesn't get a "site can't be reached"
+    print(f"⏳ Waiting for Flask at {URL}...")
+    wait_for_flask()
+    
     chrome = find_chrome()
     cmd = [chrome] + CHROME_FLAGS + [URL]
     print(f"🖥️  Launching: {chrome} → {URL}")
@@ -88,6 +118,7 @@ def main():
         proc.wait()
     except KeyboardInterrupt:
         proc.terminate()
+
 
 if __name__ == "__main__":
     main()
