@@ -407,7 +407,20 @@ class CameraStream:
         cv2 = self._cv2
         for dev in self._autodetect_device():
             try:
-                cap = cv2.VideoCapture(dev)
+                # Explicitly request V4L2 backend. JetPack-shipped OpenCV
+                # builds include the OBSensor (Orbbec) backend, which gets
+                # picked first by VideoCapture(idx) and then fails with
+                # "Camera index out of range" because the Brio is a UVC
+                # webcam, not a depth camera. cv2.CAP_V4L2 = 200.
+                cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+                if not cap.isOpened():
+                    # Fall back to default backend in case V4L2 isn't built
+                    # into THIS opencv (rare but cheap to try)
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    cap = cv2.VideoCapture(dev)
                 if not cap.isOpened():
                     cap.release()
                     continue
