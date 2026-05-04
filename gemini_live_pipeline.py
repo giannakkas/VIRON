@@ -1275,15 +1275,23 @@ def pipeline_response():
                         break
                 return jsonify(item)
         
-        # Otherwise return next item, merging consecutive emotion-only items
+        # Otherwise return next item, merging consecutive emotion-only items.
+        # CRITICAL: when merging, preserve any rich payload (music, quiz, weather,
+        # news, action) from items we're collapsing. The previous version only
+        # carried over `emotion`, so a music event sandwiched between two emotion
+        # pushes was silently discarded — UI never saw it.
         msg = _response_queue.pop(0)
-        # If this is emotion-only (no text), grab the LATEST emotion and skip rest
         if not msg.get("text"):
             latest_emotion = msg.get("emotion", "")
+            preserve_keys = ("music", "quiz", "weather", "news", "action", "subtitle")
             while _response_queue and not _response_queue[0].get("text") and "whiteboard" not in _response_queue[0]:
                 popped = _response_queue.pop(0)
                 if popped.get("emotion"):
                     latest_emotion = popped["emotion"]
+                # Carry forward any rich payloads this message had
+                for k in preserve_keys:
+                    if k in popped and k not in msg:
+                        msg[k] = popped[k]
             msg["emotion"] = latest_emotion
         
         msg["has_response"] = True
