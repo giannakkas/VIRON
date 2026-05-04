@@ -22,6 +22,11 @@ CHROME_FLAGS = [
     "--disable-features=TranslateUI",
     "--autoplay-policy=no-user-gesture-required",
     "--use-fake-ui-for-media-stream",
+    # Critical: feed a synthetic silent audio stream instead of grabbing the real mic.
+    # The voice pipeline owns the mic via arecord; the face UI must not touch it.
+    "--use-fake-device-for-media-stream",
+    # Belt and suspenders: deny the page mic permission entirely
+    "--deny-permission-prompts",
     "--disable-pinch",
     "--overscroll-history-navigation=0",
     "--disable-session-crashed-bubble",
