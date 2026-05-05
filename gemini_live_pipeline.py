@@ -1409,7 +1409,7 @@ async def gemini_live_session(mic: MicStream):
                         if snap_jpeg:
                             try:
                                 await session.send_realtime_input(
-                                    media=types.Blob(data=snap_jpeg, mime_type="image/jpeg")
+                                    video=types.Blob(data=snap_jpeg, mime_type="image/jpeg")
                                 )
                             except Exception as e:
                                 log.warning(f"📷 Snapshot send failed (3.1): {e}")
