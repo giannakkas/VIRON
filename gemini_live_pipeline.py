@@ -127,12 +127,14 @@ If anyone asks who made you, who created you, or who built you, always credit th
 IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
 IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step explanations with numbered steps and worked examples using actual numbers. The student has a display that can show a whiteboard with your steps when you ask for one (see WHITEBOARD section below). Be thorough — include formulas, calculations, and results.
 
-HANDLING UNCLEAR / GARBLED INPUT:
-The microphone occasionally picks up background sounds and the speech-to-text can produce nonsense from those. Use judgment:
-- If the transcript is OBVIOUSLY gibberish (random syllables that don't form words in any language, e.g. "Navalysto Navalys en un dragón", or 1-3 disconnected fragments), treat it as a transcription error and respond ONLY with a brief clarification ask: "Δεν σε κατάλαβα, μπορείς να το πεις ξανά;" / "I didn't catch that, can you say it again?"
-- If the transcript is recognizable Greek or English words that form a plausible sentence — even if the wording is a little odd or includes a typo — TRUST IT and respond normally. Don't second-guess every input.
-- IGNORE clearly off-topic background speech (TV news in Spanish, someone else's conversation across the room).
-- The goal is to refuse only the obvious failure modes, not to be paranoid. When in doubt, lean toward responding helpfully rather than asking for repetition — being too cautious is worse than the occasional misheard reply.
+HANDLING UNCLEAR / GARBLED INPUT — STRICT:
+The microphone occasionally picks up background sounds and the speech-to-text can produce nonsense from those. This family ONLY speaks GREEK or ENGLISH with you. Apply this rule strictly:
+
+- If the transcript is NOT in Greek or English — even if it forms a perfectly grammatical sentence in Spanish, Portuguese, German, Italian, French, etc. — TREAT IT AS A TRANSCRIPTION ERROR. Do not translate it. Do not respond to its meaning. Respond ONLY with: "Δεν σε κατάλαβα, μπορείς να το πεις ξανά;"
+- If the transcript is gibberish in any language (random syllables, fragments, unrecognizable strings like "Angelvis" or "Navalysto"), respond ONLY with the same clarification ask.
+- If the transcript IS in Greek or English and forms a plausible question or request, trust it and respond normally even if the wording is a bit odd.
+- DO NOT start music, stop music, open the whiteboard, or change topic based on input that fails the above checks. The phantom 'Tá mandando musiquinha?' that previously made you stop music is exactly what this rule prevents.
+- IGNORE clearly off-topic background speech (TV news, someone else's conversation across the room).
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
 If the student speaks English, you may switch to English naturally.
@@ -184,8 +186,20 @@ EXAMPLES of UNCLEAR / SUSPECT input (do NOT play music — ask for clarification
 - Student: "Cliste music" → "Συγγνώμη, τι θέλεις να κάνω με τη μουσική;" (ambiguous — could be start, stop, or something else)
 - Student: "song dragon happy" → "Δεν είμαι σίγουρος τι ακριβώς θέλεις — μπορείς να μου πεις πιο καθαρά;" (fragmented — not a complete request)
 
-STOPPING MUSIC: When the student says "Hey VIRON" while music is playing, the music stops automatically before you hear the request. So if the student then asks you to stop the music EXPLICITLY (e.g. "σταμάτα τη μουσική", "stop the music", "turn it off", "κλείσε τη μουσική"), simply acknowledge briefly: "Έγινε!" or "Done!" — do NOT emit a [MUSIC:...] tag. If the input is unclear, do NOT assume it was a stop request — ask for clarification.
-NEVER include the [MUSIC:...] tag in non-music conversations. Only when actually STARTING new music playback.
+STOPPING MUSIC — IMPORTANT: There are TWO ways music can stop, and you must use the right mechanism in each case:
+
+(a) When the student says "Hey VIRON" / "Hey Jarvis" while music is playing, the pipeline automatically stops music BEFORE you receive the request. By the time you hear them, music is already off and you don't need to do anything special.
+
+(b) When the student EXPLICITLY asks to stop music DURING an open conversation (no fresh wake-word, you are already mid-session) — examples: "σταμάτα τη μουσική", "stop the music", "κλείσε τη", "turn it off" — you MUST emit the silent control tag [MUSIC:STOP] in your response. Without that tag, music keeps playing even though you say "Done" — the tag is the actual command. Pattern: a brief acknowledgment + [MUSIC:STOP].
+
+EXAMPLES (case b, mid-session stop):
+- Student: "σταμάτα τη μουσική" → "Έγινε! [MUSIC:STOP]"
+- Student: "stop the music please" → "Done. [MUSIC:STOP]"
+- Student: "κλείσε τη μουσική" → "Σταμάτησα. [MUSIC:STOP]"
+
+Do NOT emit [MUSIC:STOP] unless the student EXPLICITLY asked to stop music in clear Greek or English. Do NOT emit it in response to gibberish, foreign-language phantoms, or unclear input — those should get a clarification ask, not a music-stop.
+
+NEVER include any [MUSIC:...] tag in non-music conversations.
 
 WHITEBOARD — You CAN show a visual whiteboard for teaching content. Use it ONLY when actually teaching or explaining structured material.
 
@@ -907,12 +921,49 @@ _MUSIC_TAG_RE = _re_music.compile(r'\[\s*MUSIC\s*:\s*([^\]]+?)\s*\]', _re_music.
 # When this tag is present we generate a whiteboard; when absent, no board.
 _BOARD_TAG_RE = _re_music.compile(r'\[\s*BOARD\s*:\s*([^\]]+?)\s*\]', _re_music.IGNORECASE)
 
-def _extract_music_query(transcript: str):
-    """Return the music search query if [MUSIC:...] tag is present, else None."""
+def _extract_music_action(transcript: str):
+    """Parse a [MUSIC:...] tag from VIRON's transcript and classify it.
+
+    Returns one of:
+      ('stop', None)        — explicit stop request
+      ('play', query_str)   — start music with the given search query
+      None                  — no [MUSIC:...] tag in the transcript
+
+    The pipeline architecture only auto-stops music when the wake-word
+    fires (which dumps mpv before the new Gemini session opens). That
+    leaves no way to stop music mid-conversation if the model is already
+    in a session — VIRON can SAY 'done, I stopped it' but the mpv
+    process keeps running, which is exactly the bug Chris reported.
+
+    With this stop tag, VIRON can emit [MUSIC:STOP] (or STOP/OFF/etc.)
+    inside its response and the pipeline programmatically calls
+    _stop_music(). The prompt teaches VIRON to use it. Stop keywords
+    are matched case-insensitively in Greek and English; treating
+    anything in this small allow-list as a stop avoids accidentally
+    searching YouTube for the literal word 'stop'."""
     if not transcript:
         return None
     m = _MUSIC_TAG_RE.search(transcript)
-    return m.group(1).strip() if m else None
+    if not m:
+        return None
+    q = m.group(1).strip()
+    stop_words = {
+        "STOP", "OFF", "STOP MUSIC", "STOP_MUSIC",
+        "ΣΤΟΠ", "ΣΤΑΜΑΤΑ", "ΚΛΕΙΣΕ", "ΣΤΑΜΑΤΗΣΕ",
+    }
+    if q.upper() in stop_words:
+        return ("stop", None)
+    return ("play", q)
+
+
+def _extract_music_query(transcript: str):
+    """Backward-compat shim: return the search query for a 'play' tag,
+    None for stop or no tag. Existing call sites that only care about
+    play-queries can continue using this without change."""
+    action = _extract_music_action(transcript)
+    if action and action[0] == "play":
+        return action[1]
+    return None
 
 def _extract_board_title(transcript: str):
     """Return the whiteboard title if [BOARD:...] tag is present, else None."""
@@ -1685,9 +1736,18 @@ async def gemini_live_session(mic: MicStream):
                                 if turn_transcript:
                                     full_text = " ".join(turn_transcript)
                                     
-                                    # [MUSIC:query] — start playback
-                                    music_query = _extract_music_query(full_text)
-                                    if music_query:
+                                    # [MUSIC:...] — either start playback or
+                                    # stop existing playback. Mid-conversation
+                                    # stops are the only way to halt music
+                                    # while VIRON is in an open Gemini Live
+                                    # session — wake-word stop only fires when
+                                    # opening a NEW session.
+                                    music_action = _extract_music_action(full_text)
+                                    if music_action and music_action[0] == "stop":
+                                        log.info("🎵 Music STOP request detected from VIRON tag")
+                                        _stop_music("VIRON [MUSIC:STOP] tag mid-session")
+                                    elif music_action and music_action[0] == "play":
+                                        music_query = music_action[1]
                                         log.info(f"🎵 Music request detected: '{music_query}'")
                                         threading.Thread(
                                             target=_play_music,
