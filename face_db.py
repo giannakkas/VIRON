@@ -70,16 +70,29 @@ class FaceDB:
 
     def add_face(self, name: str, role: str, encoding: np.ndarray,
                  thumbnail_jpeg: Optional[bytes] = None) -> int:
-        """Insert a new face. Returns the new row's id."""
+        """Insert a face. Any prior rows with the same name (case-insensitive)
+        are deleted first so a person always has exactly one canonical
+        encoding+role pair. Returns the new row's id.
+
+        This dedup is what makes re-enrollment with a different role actually
+        change behavior: without it, the matcher could keep picking the older
+        row (e.g. an earlier 'student' enrollment) over the new one (e.g.
+        'father') and the system prompt would carry the wrong role
+        indefinitely."""
         if encoding.shape != (ENCODING_DIM,):
             raise ValueError(f"encoding must be ({ENCODING_DIM},), got {encoding.shape}")
         enc_bytes = encoding.astype(ENCODING_DTYPE).tobytes()
         now = time.time()
+        clean_name = name.strip()
         with self._lock, self._conn() as c:
+            # Drop any prior rows for the same name. SQLite LOWER() handles
+            # ASCII fine; Greek/non-ASCII names would need NOCASE collation
+            # but for safety we also do an exact-match cleanup.
+            c.execute("DELETE FROM faces WHERE LOWER(name) = LOWER(?)", (clean_name,))
             cur = c.execute("""
                 INSERT INTO faces (name, role, encoding, thumbnail, created_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (name.strip(), role or "other", enc_bytes, thumbnail_jpeg, now))
+            """, (clean_name, role or "other", enc_bytes, thumbnail_jpeg, now))
             return cur.lastrowid
 
     def update_encoding(self, face_id: int, new_encoding: np.ndarray,

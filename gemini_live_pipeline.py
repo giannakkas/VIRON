@@ -1308,11 +1308,17 @@ async def gemini_live_session(mic: MicStream):
             recognized_faces = face_engine.detect_and_identify(pre_snap_jpeg)
             if recognized_faces:
                 names = ", ".join(
-                    f"{r['name']}({r['confidence']})" if r['face_id'] else "Unknown"
+                    f"{r['name']}[{r['role'] or 'no-role'}]({r['confidence']})"
+                    if r['face_id'] else "Unknown"
                     for r in recognized_faces
                 )
                 log.info(f"📸 Faces in frame: {names}")
             vision_context = face_engine.vision_context_for_prompt(recognized_faces)
+            if vision_context:
+                # Single-line preview of the prompt addition so we can spot
+                # role/behavior bugs without grepping the whole prompt.
+                preview = vision_context.replace("\n", " | ")[:240]
+                log.info(f"🧠 Vision context: {preview}")
         except Exception as e:
             log.warning(f"📸 Face recognition failed (non-fatal): {e}")
 
