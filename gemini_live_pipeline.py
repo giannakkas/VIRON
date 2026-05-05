@@ -88,6 +88,16 @@ MIC_GAIN = float(os.environ.get("VIRON_MIC_GAIN", "0.4"))
 # own output.
 MIC_BOOST = float(os.environ.get("VIRON_MIC_BOOST", "1.0"))
 
+# Noise gate threshold (RMS, int16 scale). Audio chunks whose RMS is below
+# this threshold are replaced with literal zeros before being sent to
+# Gemini. This prevents the multilingual ASR from confabulating Spanish/
+# German/English transcripts out of the AGC-normalized noise floor — the
+# XMOS DSP boosts even silence to a moderate level, and streaming ASR
+# models will hallucinate text from any low-energy signal that isn't
+# strictly zero. Default 0 = disabled. Tune up if you see phantom
+# transcripts during silence; tune down if quiet speech gets clipped.
+NOISE_GATE_RMS = float(os.environ.get("VIRON_NOISE_GATE_RMS", "0"))
+
 # Early whiteboard: trigger after this many seconds of transcript accumulation
 EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "4.0"))
 EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "15"))
@@ -1479,6 +1489,16 @@ async def gemini_live_session(mic: MicStream):
                             samples *= MIC_GAIN
                             np.clip(samples, -32768, 32767, out=samples)
                             raw = samples.astype(np.int16).tobytes()
+                        # Noise gate — replace below-threshold chunks with
+                        # literal zeros so Gemini's ASR sees true silence
+                        # rather than the AGC-normalized noise floor it
+                        # would otherwise hallucinate transcripts from.
+                        if NOISE_GATE_RMS > 0:
+                            ng_samples = np.frombuffer(raw, dtype=np.int16)
+                            if ng_samples.size > 0:
+                                ng_rms = float((ng_samples.astype(np.float32) ** 2).mean() ** 0.5)
+                                if ng_rms < NOISE_GATE_RMS:
+                                    raw = np.zeros(ng_samples.size, dtype=np.int16).tobytes()
                         try:
                             await session.send_realtime_input(
                                 audio=types.Blob(data=raw, mime_type="audio/pcm;rate=16000")
@@ -1722,6 +1742,7 @@ def main_loop(mic: MicStream):
     log.info(f"   Mic: {ALSA_DEVICE}")
     log.info(f"   Mic gain: {MIC_GAIN:.0%}")
     log.info(f"   Mic boost: {MIC_BOOST:.1f}x")
+    log.info(f"   Noise gate RMS: {NOISE_GATE_RMS:.0f} ({'enabled' if NOISE_GATE_RMS > 0 else 'disabled'})")
     log.info(f"   Early whiteboard: {EARLY_WB_DELAY}s / {EARLY_WB_MIN_WORDS} words")
     log.info(f"   Idle timeout: {IDLE_TIMEOUT}s")
     log.info("=" * 50)
