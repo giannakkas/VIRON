@@ -2376,16 +2376,32 @@ def faces_list():
 @app.route("/faces/enroll", methods=["POST"])
 def faces_enroll():
     """Enroll a new face from the CURRENT camera frame.
-    POST { 'name': 'Andreas', 'role': 'student'|'parent'|'sibling'|'other' }"""
+    POST { 'name': 'Andreas', 'role': 'student'|'mother'|'father'|... }
+
+    Valid roles are the keys of face_engine.ROLE_BEHAVIOR (currently 14
+    entries: student, mother, father, parent, sister, brother, sibling,
+    grandmother, grandfather, aunt, uncle, cousin, friend, teacher,
+    other). We pull the set live so when a role is added to ROLE_BEHAVIOR
+    no parallel whitelist needs touching — the previous version of this
+    endpoint had a stale 4-role check ('student', 'parent', 'sibling',
+    'other') that silently downgraded any newer role (like 'father') to
+    'other', which is exactly how a user enrolled as 'father' could end
+    up stored as 'other' in the DB."""
     if not face_engine.is_available():
         return jsonify({"success": False,
                         "error": "face_recognition not installed on this device"}), 400
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
-    role = (data.get("role") or "other").strip()
+    role = (data.get("role") or "other").strip().lower()
     if not name:
         return jsonify({"success": False, "error": "Name is required"}), 400
-    if role not in ("student", "parent", "sibling", "other"):
+    from face_engine import ROLE_BEHAVIOR as _ROLE_BEHAVIOR
+    valid_roles = set(_ROLE_BEHAVIOR.keys())
+    if role not in valid_roles:
+        log.warning(
+            f"Enroll: rejected unknown role={role!r} for name={name!r} "
+            f"(valid: {sorted(valid_roles)}); falling back to 'other'"
+        )
         role = "other"
     snap_jpeg, _ = camera.get_jpeg(max_age_sec=3.0)
     if not snap_jpeg:
