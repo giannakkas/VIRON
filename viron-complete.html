@@ -479,6 +479,13 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
 .voice-dot.done{background:rgba(0,255,136,0.2);border-color:#00ff88;color:#00ff88}
 .voice-dot.recording{background:rgba(255,68,68,0.3);border-color:#ff4444;color:#ff4444;animation:voicePulse 0.5s ease infinite alternate}
 @keyframes voicePulse{from{transform:scale(1);box-shadow:0 0 0 rgba(255,68,68,0)}to{transform:scale(1.1);box-shadow:0 0 12px rgba(255,68,68,0.4)}}
+/* Chromium-on-Linux paints <option> elements with the system theme by
+   default, ignoring inline <select> styles. On a light system theme the
+   dropdown list ends up white-on-white. Force a dark background + light
+   text on every option globally. !important is needed because the
+   browser default specificity beats simple rules. */
+select option{background:#0e1a2a !important;color:#e0f0ff !important}
+select option:checked,select option:hover{background:#16314d !important;color:#fff !important}
 </style>
 <div class="engagement-bar" id="engBar"><div class="eng-dot" id="engDot"></div><span class="eng-label" id="engLabel"></span></div>
 <div id="personName" style="position:fixed;top:40px;left:12px;font-size:14px;font-weight:bold;color:#00ff88;z-index:50;text-shadow:0 0 8px rgba(0,255,136,0.5)"></div>
