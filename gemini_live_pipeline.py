@@ -75,6 +75,13 @@ DEFAULT_LANGUAGE = os.environ.get("VIRON_DEFAULT_LANGUAGE", "el")
 # Mic software gain (0.0–1.0). Default 0.4 = reduce to 40% to avoid clipping/noise.
 MIC_GAIN = float(os.environ.get("VIRON_MIC_GAIN", "0.4"))
 
+# Mic software BOOST applied right after capture (before wake detection and
+# Gemini send). Default 1.0 = no change. Use values > 1.0 to compensate for
+# the XMOS XVF3800 DSP's internal AGC keeping the beamformed channel (ch1)
+# below useful levels — that AGC is firmware-side and not controllable via
+# ALSA mixer. Values are multiplied with int16-range clipping protection.
+MIC_BOOST = float(os.environ.get("VIRON_MIC_BOOST", "1.0"))
+
 # Early whiteboard: trigger after this many seconds of transcript accumulation
 EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "4.0"))
 EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "15"))
@@ -333,7 +340,13 @@ class MicStream:
     def _extract_mono(self, stereo_bytes: bytes) -> bytes:
         """Take interleaved S16_LE stereo (LRLRLR...) and return mono bytes
         for self.mic_channel. Each sample is 2 bytes; one stereo frame is 4
-        bytes. We slice every other 16-bit word starting at the right offset."""
+        bytes. We slice every other 16-bit word starting at the right offset.
+
+        Optionally applies MIC_BOOST multiplier with int16-range clipping
+        protection — used to compensate for the XMOS DSP's internal AGC
+        keeping the beamformed channel artificially low. The boost runs
+        in float32 then clips back to int16 so loud transients are clamped
+        rather than wrapping around."""
         # Trim to a whole number of stereo frames (4 bytes each)
         usable = len(stereo_bytes) - (len(stereo_bytes) % 4)
         if usable <= 0:
@@ -342,6 +355,10 @@ class MicStream:
         # arr is [L0, R0, L1, R1, L2, R2, ...]. Take every other starting from
         # the chosen channel offset.
         mono = arr[self.mic_channel::2]
+        if MIC_BOOST != 1.0:
+            boosted = mono.astype(np.float32) * MIC_BOOST
+            np.clip(boosted, -32768, 32767, out=boosted)
+            return boosted.astype(np.int16).tobytes()
         return mono.tobytes()
 
     def read_frame(self, frame_length=FRAME_LENGTH):
@@ -1689,6 +1706,7 @@ def main_loop(mic: MicStream):
     log.info(f"   Language: {DEFAULT_LANGUAGE}")
     log.info(f"   Mic: {ALSA_DEVICE}")
     log.info(f"   Mic gain: {MIC_GAIN:.0%}")
+    log.info(f"   Mic boost: {MIC_BOOST:.1f}x")
     log.info(f"   Early whiteboard: {EARLY_WB_DELAY}s / {EARLY_WB_MIN_WORDS} words")
     log.info(f"   Idle timeout: {IDLE_TIMEOUT}s")
     log.info("=" * 50)

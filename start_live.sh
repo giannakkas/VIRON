@@ -100,12 +100,18 @@ if [ -z "$GEMINI_API_KEY" ]; then
 fi
 
 # ─── Configure microphone ───
+# The ReSpeaker XVF3800 exposes its capture controls as 'Headset',0
+# (Front Left/Right) and 'Headset',1 (Mono). The previous 'Capture' /
+# 'Mic' / 'Auto Gain Control' controls don't exist on this device, so
+# those amixer calls silently failed (|| true) and 'Headset',1 was
+# left at its default 67% / -20dB. Setting both to 100% recovers ~20dB
+# of usable signal. AGC is firmware-side on the XMOS DSP; we compensate
+# for its over-attenuation of ch1 in software via VIRON_MIC_BOOST.
 echo ""
 echo "🎤 Configuring microphone..."
-amixer -c 0 sset 'Capture' 60% 2>/dev/null || true
-amixer -c 0 sset 'Mic' 60% 2>/dev/null || true
-amixer -c 0 sset 'Auto Gain Control' on 2>/dev/null || true
-echo "   ✅ Mic configured (60% gain, AGC on, software gain=${VIRON_MIC_GAIN:-0.4})"
+amixer -c 0 sset 'Headset',0 100% 2>/dev/null || true
+amixer -c 0 sset 'Headset',1 100% 2>/dev/null || true
+echo "   ✅ Mic configured (Headset 0+1 → 100% / 0dB, software gain=${VIRON_MIC_GAIN:-0.4}, boost=${VIRON_MIC_BOOST:-1.0}x)"
 
 # ─── 1. Start Flask Backend (port 5000) — serves face UI ───
 echo ""
