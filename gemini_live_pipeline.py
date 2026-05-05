@@ -1761,12 +1761,29 @@ async def gemini_live_session(mic: MicStream):
                 turn_transcript = []
                 first_word_time = None      # When first transcript word arrived this turn
                 early_wb_fired = False       # Whether we already pushed the skeleton whiteboard this turn
-                # Phantom-suppression: set True when input_transcription
-                # for THIS turn is detected as a non-Greek/non-English
-                # phantom. While True, we drop model audio output, skip
-                # state transitions to "speaking", and drop the turn's
-                # transcript at turn_complete (no music/board side-effects).
-                turn_is_phantom = False
+                # Phantom-suppression flags. We use TWO independent signals
+                # because the input transcript and the output transcript
+                # can disagree about language:
+                #
+                #  turn_input_is_phantom  — set when Gemini's ASR returned
+                #     foreign-language text for the user's mic input.
+                #     Used ONLY to skip turn-end side effects (music
+                #     start/stop, whiteboard, history append). It does
+                #     NOT mute audio, because with language_code='el-GR'
+                #     the model usually answers in sensible Greek even
+                #     when the input was misheard. Muting that response
+                #     leaves the user staring at a UI that shows VIRON
+                #     speaking but produces no sound.
+                #
+                #  turn_output_is_phantom — set when the FIRST few words
+                #     of the model's own output transcription contain
+                #     non-Greek/non-English diacritics. This is the
+                #     case where Gemini decided to actually speak in
+                #     Italian/Spanish/etc — those frames we DO mute,
+                #     and we cut anything already started.
+                turn_input_is_phantom = False
+                turn_output_is_phantom = False
+                output_lang_checked = False  # one-shot guard for the output check
                 
                 while not _stop_session.is_set():
                     try:
@@ -1782,14 +1799,13 @@ async def gemini_live_session(mic: MicStream):
                             if sc.model_turn and sc.model_turn.parts:
                                 for part in sc.model_turn.parts:
                                     if part.inline_data and part.inline_data.data:
-                                        if turn_is_phantom:
-                                            # Drop the audio frame on the floor.
-                                            # We do NOT transition state to speaking,
-                                            # do NOT start aplay, do NOT duck music.
-                                            # The model is mid-response to a phantom
-                                            # input — silently discarding gives the
-                                            # user the same experience as if Gemini
-                                            # had heard nothing at all.
+                                        if turn_output_is_phantom:
+                                            # The model's own output is in a
+                                            # foreign language — drop the audio
+                                            # frame. We do NOT touch is_speaking
+                                            # here because the cut-over already
+                                            # happened in the output_transcription
+                                            # branch below where we detected it.
                                             continue
                                         if not is_speaking:
                                             is_speaking = True
@@ -1807,7 +1823,30 @@ async def gemini_live_session(mic: MicStream):
                                     turn_transcript.append(word)
                                     if first_word_time is None:
                                         first_word_time = time.time()
-                                    
+
+                                    # Output-language detection (one-shot per turn).
+                                    # We wait for ~3 transcript chunks worth of text
+                                    # so we have enough to classify, then run the
+                                    # same phantom check on it. If the model itself
+                                    # decided to speak in Italian/Spanish/etc, mute
+                                    # the rest of the audio for this turn and cut
+                                    # what's already playing. Most turns clear this
+                                    # check as soon as the first Greek letter
+                                    # appears — the detector returns False on any
+                                    # Greek-script content.
+                                    if not output_lang_checked and len(turn_transcript) >= 3:
+                                        accumulated = " ".join(turn_transcript)
+                                        output_lang_checked = True
+                                        if _is_phantom_transcript(accumulated):
+                                            log.info(f"🚫 Output in non-GR/EN — muting audio: \"{accumulated[:80]}\"")
+                                            turn_output_is_phantom = True
+                                            if is_speaking:
+                                                _stop_aplay()
+                                                _duck_music(False)
+                                                is_speaking = False
+                                                state.set_status("listening")
+                                                push_to_ui(emotion="neutral")
+
                                     # As soon as VIRON emits the [BOARD:title] tag (it should appear
                                     # at the start of teaching responses), open a skeleton board
                                     # immediately so the student sees the panel WHILE VIRON keeps
@@ -1836,23 +1875,21 @@ async def gemini_live_session(mic: MicStream):
                                 t = sc.input_transcription.text.strip()
                                 if t:
                                     if _is_phantom_transcript(t):
-                                        # First time we flag the turn this round —
-                                        # log it once, kill anything we might already
-                                        # have started playing, hand control back to
-                                        # listening state cleanly. Subsequent partial
-                                        # transcript fragments for the same turn just
-                                        # stay suppressed via turn_is_phantom.
-                                        if not turn_is_phantom:
-                                            log.info(f"🚫 Phantom (non-GR/EN) suppressed: \"{t}\"")
-                                            turn_is_phantom = True
-                                            if is_speaking:
-                                                # Audio already started before the
-                                                # phantom transcript arrived — cut it.
-                                                _stop_aplay()
-                                                _duck_music(False)
-                                                is_speaking = False
-                                                state.set_status("listening")
-                                                push_to_ui(emotion="neutral")
+                                        # Foreign-language ASR result. Flag the
+                                        # turn so we skip its side effects at
+                                        # turn_complete (no music, no whiteboard,
+                                        # no history). DO NOT mute audio here —
+                                        # with language_code='el-GR' the model
+                                        # almost always replies in sensible
+                                        # Greek, and we want the user to hear
+                                        # that. If the model also decides to
+                                        # SPEAK in Italian (rare with the el-GR
+                                        # bias), the output-language check in
+                                        # the output_transcription branch will
+                                        # mute it instead.
+                                        if not turn_input_is_phantom:
+                                            log.info(f"🚫 Input phantom (non-GR/EN) — skipping side-effects: \"{t}\"")
+                                            turn_input_is_phantom = True
                                     else:
                                         log.info(f"🎤 Student: \"{t}\"")
                                         _append_history("user", t)
@@ -1864,7 +1901,9 @@ async def gemini_live_session(mic: MicStream):
                                 turn_transcript.clear()
                                 first_word_time = None
                                 early_wb_fired = False
-                                turn_is_phantom = False
+                                turn_input_is_phantom = False
+                                turn_output_is_phantom = False
+                                output_lang_checked = False
                                 _stop_aplay()
                                 _duck_music(False)  # restore music volume
                                 state.set_status("listening")
@@ -1879,19 +1918,25 @@ async def gemini_live_session(mic: MicStream):
                                 state.set_status("listening")
                                 state.last_activity = time.time()
 
-                                if turn_is_phantom:
-                                    # Phantom turn: skip ALL side-effects
-                                    # (no music start/stop, no whiteboard,
-                                    # no history append). Drop the model's
-                                    # transcript on the floor — it was
-                                    # generated in response to noise the
-                                    # user never actually said.
-                                    log.info("🚫 Phantom turn complete — discarding model output")
-                                    turn_transcript.clear()
-                                    first_word_time = None
-                                    early_wb_fired = False
-                                    turn_is_phantom = False
-                                    log.info("✅ Turn complete — ready for next question")
+                                # Two distinct phantom states. Either one means
+                                # we should NOT execute side effects on the
+                                # response transcript:
+                                #   - turn_input_is_phantom : user audio was
+                                #     foreign-language; the model may have
+                                #     answered sensibly anyway, but we still
+                                #     don't want to act on inferred intent
+                                #     (no music start/stop, no whiteboard,
+                                #     no history) since the request itself
+                                #     was an ASR artifact.
+                                #   - turn_output_is_phantom : the model's own
+                                #     reply was foreign — definitely garbage,
+                                #     drop everything.
+                                phantom_turn = turn_input_is_phantom or turn_output_is_phantom
+                                if phantom_turn:
+                                    reason = []
+                                    if turn_input_is_phantom: reason.append("input")
+                                    if turn_output_is_phantom: reason.append("output")
+                                    log.info(f"🚫 Phantom turn complete ({'+'.join(reason)}) — skipping side-effects")
                                 elif turn_transcript:
                                     full_text = " ".join(turn_transcript)
                                     
@@ -1938,7 +1983,9 @@ async def gemini_live_session(mic: MicStream):
                                 turn_transcript.clear()
                                 first_word_time = None
                                 early_wb_fired = False
-                                turn_is_phantom = False
+                                turn_input_is_phantom = False
+                                turn_output_is_phantom = False
+                                output_lang_checked = False
                                 
                                 log.info("✅ Turn complete — ready for next question")
 
