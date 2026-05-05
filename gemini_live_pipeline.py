@@ -983,6 +983,56 @@ def _strip_control_tags(transcript: str) -> str:
     cleaned = _BOARD_TAG_RE.sub("", cleaned)
     return cleaned.strip()
 
+
+# Diacritics that appear in Spanish, Portuguese, Italian, French,
+# German, Polish, Czech, Turkish, etc. — but NOT in Greek (which uses
+# its own script range) or standard English. Presence of any of these
+# in an ASR transcript is a high-precision signal that Gemini's
+# native-audio model heard the phantom as a non-Greek, non-English
+# language. Greek diacritics (άέήίόύώϊϋΐΰ) are intentionally excluded
+# from this set so legitimate Greek text passes through untouched.
+_NON_GR_EN_DIACRITICS_RE = _re_music.compile(
+    r'[ñçÑÇàáâãäåèéêëìíîïòóôõöøùúûüýÿßÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖØÙÚÛÜÝŸ¿¡]'
+)
+# Greek script range — used to whitelist genuine Greek before the
+# diacritic check. If even one Greek letter is present we trust the
+# transcript regardless of any Latin-1 supplement chars that may
+# also appear (rare but possible in code-switched speech).
+_GREEK_SCRIPT_RE = _re_music.compile(r'[Α-Ωα-ωάέήίόύώϊϋΐΰΆΈΉΊΌΎΏ]')
+
+
+def _is_phantom_transcript(text: str) -> bool:
+    """Return True iff the ASR transcript looks like a non-Greek,
+    non-English phantom and should suppress the model's reply.
+
+    Detection is intentionally narrow — high precision over recall —
+    to avoid suppressing legitimate Greek or English speech:
+
+      1. Empty / whitespace-only → phantom.
+      2. Contains any Greek letter → NOT phantom (keep).
+      3. Contains a diacritic from the Spanish/Portuguese/Italian/
+         French/German set → phantom. Real-world examples that
+         triggered this rule in past logs: 'pequeño musiquín',
+         'Tá mandando musiquinha?', 'Façamos o seguinte', 'E già
+         visto', 'Tengo asma, tío.'
+      4. Otherwise → NOT phantom (likely English or short fragment;
+         the prompt's strict-language clause handles those).
+
+    Note this WILL still let through ASCII-only foreign fragments
+    such as 'Poi manco' or 'Challo now we' — those have no diacritic
+    to flag. Catching them belongs to the prompt-level fragment
+    refusal, not this detector."""
+    if not text:
+        return True
+    t = text.strip()
+    if not t:
+        return True
+    if _GREEK_SCRIPT_RE.search(t):
+        return False
+    if _NON_GR_EN_DIACRITICS_RE.search(t):
+        return True
+    return False
+
 # ═══════════════════════════════════════════════════════════
 # GEMINI LIVE SESSION (core of the new architecture)
 # ═══════════════════════════════════════════════════════════
@@ -1420,17 +1470,34 @@ async def gemini_live_session(mic: MicStream):
             + "\nGreet the recognized person(s) by name in your first reply."
         )
 
+    # Build the speech_config defensively — some SDK versions / model
+    # previews reject `language_code` on SpeechConfig, in which case
+    # the rest of the config still works without that hint.
+    try:
+        speech_config = types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
+            ),
+            language_code="el-GR",
+        )
+        speech_config_lang_set = True
+    except Exception as e:
+        log.warning(f"SpeechConfig language_code='el-GR' not accepted by SDK ({e}); falling back to default")
+        speech_config = types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
+            ),
+        )
+        speech_config_lang_set = False
+
     config_kwargs = dict(
         response_modalities=["AUDIO"],
         system_instruction=session_system_instruction,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
-            )
-        ),
+        speech_config=speech_config,
     )
+    log.info(f"🗣️ Speech language hint (TTS): {'el-GR' if speech_config_lang_set else 'default'}")
 
     if is_v31:
         # Allow initial-seed send_client_content for the wake greeting trigger.
@@ -1694,6 +1761,12 @@ async def gemini_live_session(mic: MicStream):
                 turn_transcript = []
                 first_word_time = None      # When first transcript word arrived this turn
                 early_wb_fired = False       # Whether we already pushed the skeleton whiteboard this turn
+                # Phantom-suppression: set True when input_transcription
+                # for THIS turn is detected as a non-Greek/non-English
+                # phantom. While True, we drop model audio output, skip
+                # state transitions to "speaking", and drop the turn's
+                # transcript at turn_complete (no music/board side-effects).
+                turn_is_phantom = False
                 
                 while not _stop_session.is_set():
                     try:
@@ -1709,6 +1782,15 @@ async def gemini_live_session(mic: MicStream):
                             if sc.model_turn and sc.model_turn.parts:
                                 for part in sc.model_turn.parts:
                                     if part.inline_data and part.inline_data.data:
+                                        if turn_is_phantom:
+                                            # Drop the audio frame on the floor.
+                                            # We do NOT transition state to speaking,
+                                            # do NOT start aplay, do NOT duck music.
+                                            # The model is mid-response to a phantom
+                                            # input — silently discarding gives the
+                                            # user the same experience as if Gemini
+                                            # had heard nothing at all.
+                                            continue
                                         if not is_speaking:
                                             is_speaking = True
                                             state.set_status("speaking")
@@ -1753,8 +1835,27 @@ async def gemini_live_session(mic: MicStream):
                             if sc.input_transcription and sc.input_transcription.text:
                                 t = sc.input_transcription.text.strip()
                                 if t:
-                                    log.info(f"🎤 Student: \"{t}\"")
-                                    _append_history("user", t)
+                                    if _is_phantom_transcript(t):
+                                        # First time we flag the turn this round —
+                                        # log it once, kill anything we might already
+                                        # have started playing, hand control back to
+                                        # listening state cleanly. Subsequent partial
+                                        # transcript fragments for the same turn just
+                                        # stay suppressed via turn_is_phantom.
+                                        if not turn_is_phantom:
+                                            log.info(f"🚫 Phantom (non-GR/EN) suppressed: \"{t}\"")
+                                            turn_is_phantom = True
+                                            if is_speaking:
+                                                # Audio already started before the
+                                                # phantom transcript arrived — cut it.
+                                                _stop_aplay()
+                                                _duck_music(False)
+                                                is_speaking = False
+                                                state.set_status("listening")
+                                                push_to_ui(emotion="neutral")
+                                    else:
+                                        log.info(f"🎤 Student: \"{t}\"")
+                                        _append_history("user", t)
 
                             # Handle interruption — STOP audio immediately
                             if sc.interrupted:
@@ -1763,6 +1864,7 @@ async def gemini_live_session(mic: MicStream):
                                 turn_transcript.clear()
                                 first_word_time = None
                                 early_wb_fired = False
+                                turn_is_phantom = False
                                 _stop_aplay()
                                 _duck_music(False)  # restore music volume
                                 state.set_status("listening")
@@ -1776,8 +1878,21 @@ async def gemini_live_session(mic: MicStream):
                                 is_speaking = False
                                 state.set_status("listening")
                                 state.last_activity = time.time()
-                                
-                                if turn_transcript:
+
+                                if turn_is_phantom:
+                                    # Phantom turn: skip ALL side-effects
+                                    # (no music start/stop, no whiteboard,
+                                    # no history append). Drop the model's
+                                    # transcript on the floor — it was
+                                    # generated in response to noise the
+                                    # user never actually said.
+                                    log.info("🚫 Phantom turn complete — discarding model output")
+                                    turn_transcript.clear()
+                                    first_word_time = None
+                                    early_wb_fired = False
+                                    turn_is_phantom = False
+                                    log.info("✅ Turn complete — ready for next question")
+                                elif turn_transcript:
                                     full_text = " ".join(turn_transcript)
                                     
                                     # [MUSIC:...] — either start playback or
@@ -1823,6 +1938,7 @@ async def gemini_live_session(mic: MicStream):
                                 turn_transcript.clear()
                                 first_word_time = None
                                 early_wb_fired = False
+                                turn_is_phantom = False
                                 
                                 log.info("✅ Turn complete — ready for next question")
 
