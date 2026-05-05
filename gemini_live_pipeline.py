@@ -75,11 +75,17 @@ DEFAULT_LANGUAGE = os.environ.get("VIRON_DEFAULT_LANGUAGE", "el")
 # Mic software gain (0.0–1.0). Default 0.4 = reduce to 40% to avoid clipping/noise.
 MIC_GAIN = float(os.environ.get("VIRON_MIC_GAIN", "0.4"))
 
-# Mic software BOOST applied right after capture (before wake detection and
-# Gemini send). Default 1.0 = no change. Use values > 1.0 to compensate for
-# the XMOS XVF3800 DSP's internal AGC keeping the beamformed channel (ch1)
-# below useful levels — that AGC is firmware-side and not controllable via
+# Mic software BOOST applied to the WAKE-WORD DETECTION path only
+# (inside read_frame, AFTER stereo->mono extraction). Default 1.0 = no
+# change. Use values > 1.0 to compensate for the XMOS XVF3800 DSP's
+# internal AGC keeping the beamformed channel (ch1) below useful levels
+# for OpenWakeWord — that AGC is firmware-side and not controllable via
 # ALSA mixer. Values are multiplied with int16-range clipping protection.
+#
+# IMPORTANT: this boost does NOT affect audio sent to Gemini. Gemini
+# receives the natural AEC-cleaned ch1 via read_raw so its barge-in
+# detector and ASR aren't fooled by amplified speaker echo of VIRON's
+# own output.
 MIC_BOOST = float(os.environ.get("VIRON_MIC_BOOST", "1.0"))
 
 # Early whiteboard: trigger after this many seconds of transcript accumulation
@@ -342,11 +348,11 @@ class MicStream:
         for self.mic_channel. Each sample is 2 bytes; one stereo frame is 4
         bytes. We slice every other 16-bit word starting at the right offset.
 
-        Optionally applies MIC_BOOST multiplier with int16-range clipping
-        protection — used to compensate for the XMOS DSP's internal AGC
-        keeping the beamformed channel artificially low. The boost runs
-        in float32 then clips back to int16 so loud transients are clamped
-        rather than wrapping around."""
+        NO software boost is applied here. Both wake-detect (read_frame)
+        and Gemini-send (read_raw) call this for stereo->mono conversion,
+        but only read_frame applies MIC_BOOST afterwards. Gemini receives
+        natural-level AEC-cleaned audio so its barge-in detector and ASR
+        aren't fooled by amplified speaker echo."""
         # Trim to a whole number of stereo frames (4 bytes each)
         usable = len(stereo_bytes) - (len(stereo_bytes) % 4)
         if usable <= 0:
@@ -355,13 +361,17 @@ class MicStream:
         # arr is [L0, R0, L1, R1, L2, R2, ...]. Take every other starting from
         # the chosen channel offset.
         mono = arr[self.mic_channel::2]
-        if MIC_BOOST != 1.0:
-            boosted = mono.astype(np.float32) * MIC_BOOST
-            np.clip(boosted, -32768, 32767, out=boosted)
-            return boosted.astype(np.int16).tobytes()
         return mono.tobytes()
 
     def read_frame(self, frame_length=FRAME_LENGTH):
+        """Read one frame of mono int16 samples for WAKE WORD DETECTION.
+
+        Applies MIC_BOOST so the local OpenWakeWord model can pick up
+        quiet 'Hey Jarvis' utterances even though the XMOS DSP's internal
+        AGC keeps the beamformed channel naturally quiet. Audio sent to
+        Gemini goes through read_raw and is intentionally NOT boosted —
+        otherwise the boosted echo of VIRON's own speaker output would
+        false-trigger Gemini's barge-in detector and corrupt ASR."""
         if not self.proc:
             return None
         if self.mic_stereo:
@@ -371,13 +381,18 @@ class MicStream:
             if len(raw) < bytes_needed:
                 return None
             mono_bytes = self._extract_mono(raw)
-            return np.frombuffer(mono_bytes, dtype=np.int16)
+            samples = np.frombuffer(mono_bytes, dtype=np.int16)
         else:
             bytes_needed = frame_length * 2
             raw = self.proc.stdout.read(bytes_needed)
             if len(raw) < bytes_needed:
                 return None
-            return np.frombuffer(raw, dtype=np.int16)
+            samples = np.frombuffer(raw, dtype=np.int16)
+        if MIC_BOOST != 1.0:
+            boosted = samples.astype(np.float32) * MIC_BOOST
+            np.clip(boosted, -32768, 32767, out=boosted)
+            samples = boosted.astype(np.int16)
+        return samples
 
     def read_raw(self, num_bytes):
         """Read num_bytes of MONO PCM (what Gemini Live expects). When
