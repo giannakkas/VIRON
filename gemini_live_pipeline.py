@@ -98,6 +98,22 @@ MIC_BOOST = float(os.environ.get("VIRON_MIC_BOOST", "1.0"))
 # transcripts during silence; tune down if quiet speech gets clipped.
 NOISE_GATE_RMS = float(os.environ.get("VIRON_NOISE_GATE_RMS", "0"))
 
+# Hard-mute the audio sent to Gemini while VIRON itself is speaking.
+# Even with AEC and a noise gate, the speaker's own output bleeds into
+# ch1 enough that residual energy can sit just above the gate threshold,
+# at which point Gemini's multilingual ASR confabulates phrases (Spanish,
+# Portuguese, German…) and the model then 'responds' to those phantom
+# inputs — random topic switches, music commands, story tags. Replacing
+# every chunk with zeros while state.status == 'speaking' eliminates
+# that loop entirely.
+#
+# Trade-off: this disables Gemini's server-side barge-in for the
+# duration of the model's turn. To regain interrupt capability, the
+# user can say 'Hey Jarvis' again — the wake word is detected locally
+# and re-enters the session. Set this to 0 to fall back to the noise
+# gate alone (not recommended for noisy / live-speaker setups).
+MUTE_WHILE_SPEAKING = os.environ.get("VIRON_MUTE_WHILE_SPEAKING", "1") == "1"
+
 # Early whiteboard: trigger after this many seconds of transcript accumulation
 EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "4.0"))
 EARLY_WB_MIN_WORDS = int(os.environ.get("VIRON_EARLY_WB_MIN_WORDS", "15"))
@@ -1489,22 +1505,33 @@ async def gemini_live_session(mic: MicStream):
                 while not _stop_session.is_set():
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
-                        # Software gain reduction to avoid clipping/noise
-                        if MIC_GAIN < 1.0:
-                            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-                            samples *= MIC_GAIN
-                            np.clip(samples, -32768, 32767, out=samples)
-                            raw = samples.astype(np.int16).tobytes()
-                        # Noise gate — replace below-threshold chunks with
-                        # literal zeros so Gemini's ASR sees true silence
-                        # rather than the AGC-normalized noise floor it
-                        # would otherwise hallucinate transcripts from.
-                        if NOISE_GATE_RMS > 0:
-                            ng_samples = np.frombuffer(raw, dtype=np.int16)
-                            if ng_samples.size > 0:
-                                ng_rms = float((ng_samples.astype(np.float32) ** 2).mean() ** 0.5)
-                                if ng_rms < NOISE_GATE_RMS:
-                                    raw = np.zeros(ng_samples.size, dtype=np.int16).tobytes()
+                        # Hard-mute outgoing audio while VIRON is speaking.
+                        # Whatever the mic picks up during model speech is
+                        # 99%+ speaker echo — sending it just feeds Gemini's
+                        # ASR junk to hallucinate from. Replace with zeros
+                        # so the stream timing stays intact but ASR sees
+                        # actual silence. Skips MIC_GAIN and noise gate
+                        # below since they're irrelevant to all-zeros.
+                        if MUTE_WHILE_SPEAKING and state.status == "speaking":
+                            n_samples = len(raw) // 2  # int16 = 2 bytes/sample
+                            raw = np.zeros(n_samples, dtype=np.int16).tobytes()
+                        else:
+                            # Software gain reduction to avoid clipping/noise
+                            if MIC_GAIN < 1.0:
+                                samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                                samples *= MIC_GAIN
+                                np.clip(samples, -32768, 32767, out=samples)
+                                raw = samples.astype(np.int16).tobytes()
+                            # Noise gate — replace below-threshold chunks with
+                            # literal zeros so Gemini's ASR sees true silence
+                            # rather than the AGC-normalized noise floor it
+                            # would otherwise hallucinate transcripts from.
+                            if NOISE_GATE_RMS > 0:
+                                ng_samples = np.frombuffer(raw, dtype=np.int16)
+                                if ng_samples.size > 0:
+                                    ng_rms = float((ng_samples.astype(np.float32) ** 2).mean() ** 0.5)
+                                    if ng_rms < NOISE_GATE_RMS:
+                                        raw = np.zeros(ng_samples.size, dtype=np.int16).tobytes()
                         try:
                             await session.send_realtime_input(
                                 audio=types.Blob(data=raw, mime_type="audio/pcm;rate=16000")
@@ -1749,6 +1776,7 @@ def main_loop(mic: MicStream):
     log.info(f"   Mic gain: {MIC_GAIN:.0%}")
     log.info(f"   Mic boost: {MIC_BOOST:.1f}x")
     log.info(f"   Noise gate RMS: {NOISE_GATE_RMS:.0f} ({'enabled' if NOISE_GATE_RMS > 0 else 'disabled'})")
+    log.info(f"   Mute while speaking: {'on' if MUTE_WHILE_SPEAKING else 'off'}")
     log.info(f"   Early whiteboard: {EARLY_WB_DELAY}s / {EARLY_WB_MIN_WORDS} words")
     log.info(f"   Idle timeout: {IDLE_TIMEOUT}s")
     log.info("=" * 50)
