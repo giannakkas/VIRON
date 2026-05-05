@@ -1580,6 +1580,30 @@ async def gemini_live_session(mic: MicStream):
                 rms_min = float("inf")
                 rms_max = 0.0
                 rms_sum = 0.0
+                # ── Hysteresis VAD-lite ─────────────────────────────────
+                # The flat "RMS > threshold ⇒ pass" gate lets single-chunk
+                # transients through — exactly the noise pattern that
+                # produced the Italian/Spanish phantoms ("E già visto",
+                # "Poi manco", "pescala") seen in real-room logs and
+                # triggered Gemini's server-side barge-in repeatedly.
+                # Real speech sustains energy across many chunks; spikes
+                # from TV pops, door clicks, or speaker echo blips are
+                # usually 1-2 chunks. So:
+                #   - Gate OPENS only after OPEN_AFTER consecutive loud chunks.
+                #   - Gate CLOSES only after CLOSE_AFTER consecutive quiet chunks
+                #     (hangover, so brief silences mid-word don't close it).
+                # While the gate is closed, we still send the chunk to
+                # Gemini as zeros — keeps the stream continuous (Live API
+                # expects a steady audio rate). With CHUNK_BYTES=4096 and
+                # 16 kHz mono int16, each chunk is ~128 ms, so OPEN_AFTER=2
+                # clips the first ~256 ms of speech (negligible for ASR
+                # of full sentences) and CLOSE_AFTER=6 gives ~768 ms of
+                # post-speech audio before re-gating.
+                gate_open = False
+                loud_streak = 0
+                quiet_streak = 0
+                OPEN_AFTER = 2
+                CLOSE_AFTER = 6
                 while not _stop_session.is_set():
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
@@ -1610,7 +1634,24 @@ async def gemini_live_session(mic: MicStream):
                         rms_sum += ng_rms
                         rms_min = min(rms_min, ng_rms)
                         rms_max = max(rms_max, ng_rms)
-                        if threshold > 0 and ng_rms < threshold:
+
+                        # Hysteresis state machine. threshold==0 means
+                        # gating disabled, so always pass.
+                        if threshold <= 0:
+                            gate_open = True
+                        else:
+                            if ng_rms >= threshold:
+                                loud_streak += 1
+                                quiet_streak = 0
+                                if loud_streak >= OPEN_AFTER:
+                                    gate_open = True
+                            else:
+                                quiet_streak += 1
+                                loud_streak = 0
+                                if quiet_streak >= CLOSE_AFTER:
+                                    gate_open = False
+
+                        if not gate_open:
                             raw = np.zeros(ng_samples.size, dtype=np.int16).tobytes()
                             chunks_gated += 1
                         else:
@@ -1626,7 +1667,8 @@ async def gemini_live_session(mic: MicStream):
                                 f"🎚️ Gate stats (last {chunks_sent} chunks): "
                                 f"passed={chunks_passed} gated={chunks_gated} "
                                 f"rms min={rms_min:.0f} avg={avg:.0f} max={rms_max:.0f} "
-                                f"state={state.status} threshold={threshold:.0f}"
+                                f"state={state.status} threshold={threshold:.0f} "
+                                f"open={gate_open}"
                             )
                             chunks_sent = chunks_passed = chunks_gated = 0
                             rms_min = float("inf"); rms_max = 0.0; rms_sum = 0.0
