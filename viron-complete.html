@@ -516,8 +516,17 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;hei
       <select id="faceRoleSelect"
               style="background:rgba(255,255,255,0.08);color:#e0f0ff;border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:7px 12px;font-size:13px;width:100%">
         <option value="student">🎓 Student (primary tutee)</option>
-        <option value="parent">👨‍👩 Parent</option>
-        <option value="sibling">🧒 Sibling</option>
+        <option value="mother">👩 Mother</option>
+        <option value="father">👨 Father</option>
+        <option value="sister">🧒 Sister</option>
+        <option value="brother">🧒 Brother</option>
+        <option value="grandmother">👵 Grandmother</option>
+        <option value="grandfather">👴 Grandfather</option>
+        <option value="aunt">👩‍🦰 Aunt</option>
+        <option value="uncle">👨‍🦱 Uncle</option>
+        <option value="cousin">🧑 Cousin</option>
+        <option value="friend">🤝 Friend</option>
+        <option value="teacher">🧑‍🏫 Teacher</option>
         <option value="other">👤 Other</option>
       </select>
       <button class="sbtn" onclick="enrollFace()" id="enrollBtn"
@@ -2986,7 +2995,19 @@ function loadFacesList(){
       const countLabel = faces.length === 1 ? '1 person enrolled' : faces.length + ' people enrolled';
       statusEl.innerHTML = '<span style="color:#00ff88">✅ ' + countLabel + '</span>';
 
-      const roleEmoji = {student:'🎓', parent:'👨‍👩', sibling:'🧒', other:'👤'};
+      const roleEmoji = {
+        student: '🎓',
+        mother: '👩', father: '👨',
+        parent: '👨‍👩',
+        sister: '🧒', brother: '🧒',
+        sibling: '🧒',
+        grandmother: '👵', grandfather: '👴',
+        aunt: '👩‍🦰', uncle: '👨‍🦱',
+        cousin: '🧑',
+        friend: '🤝',
+        teacher: '🧑‍🏫',
+        other: '👤'
+      };
       listEl.innerHTML = faces.map(f => {
         const emoji = roleEmoji[f.role] || '👤';
         const lastSeen = f.last_seen ? new Date(f.last_seen * 1000).toLocaleDateString() : 'never';

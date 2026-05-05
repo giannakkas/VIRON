@@ -6,7 +6,7 @@ Schema (SQLite):
     faces
       id INTEGER PRIMARY KEY
       name TEXT NOT NULL                 -- "Andreas", "Mom", etc.
-      role TEXT                          -- "student" | "parent" | "sibling" | "other"
+      role TEXT                          -- "student" | "mother" | "father" | "sister" | "brother" | "grandmother" | "grandfather" | "aunt" | "uncle" | "cousin" | "friend" | "teacher" | "other" (legacy: "parent", "sibling")
       encoding BLOB NOT NULL             -- numpy float64 (128,) tobytes()
       thumbnail BLOB                     -- small JPG (~256x256) of the cropped face
       created_at REAL                    -- unix timestamp

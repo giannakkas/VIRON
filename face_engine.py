@@ -36,6 +36,80 @@ THR_CONFIDENT   = 0.55
 THR_TENTATIVE   = 0.60
 
 
+# Role-specific behavior guidance — appended to the system prompt whenever
+# a recognized person is visible. Keep entries concise so the snippet
+# stays small even when several family members are in frame. The legacy
+# 'parent' and 'sibling' roles are kept so older DB entries still resolve
+# to sensible behavior; new enrollments should pick the more specific
+# mother/father/sister/brother variants for better gendered language.
+ROLE_BEHAVIOR = {
+    "student":
+        "{name} is the student you are tutoring. Be warm, encouraging "
+        "and age-appropriate. Treat them as a friend who is also your "
+        "primary focus.",
+    "mother":
+        "{name} is the student's mother. Be warm and respectful. She is "
+        "an authority figure — if she gives instructions about the "
+        "lesson, schedule, or behavior, follow them. When mentioning her "
+        "to the student in Greek, say 'η μαμά σου'.",
+    "father":
+        "{name} is the student's father. Be warm and respectful. He is "
+        "an authority figure — if he gives instructions about the "
+        "lesson, schedule, or behavior, follow them. When mentioning him "
+        "to the student in Greek, say 'ο μπαμπάς σου'.",
+    "parent":
+        "{name} is one of the student's parents. Be warm and respectful. "
+        "They are an authority figure and can give instructions that "
+        "override default behavior.",
+    "sister":
+        "{name} is the student's sister. Friendly, peer-level. If she "
+        "joins, include her in the conversation but keep the student as "
+        "the primary focus.",
+    "brother":
+        "{name} is the student's brother. Friendly, peer-level. If he "
+        "joins, include him in the conversation but keep the student as "
+        "the primary focus.",
+    "sibling":
+        "{name} is one of the student's siblings. Friendly, peer-level. "
+        "Keep the student as the primary focus.",
+    "grandmother":
+        "{name} is the student's grandmother (γιαγιά). Be especially "
+        "warm and respectful. When addressing her directly in Greek use "
+        "the formal πληθυντικός ευγενείας ('εσείς' rather than 'εσύ').",
+    "grandfather":
+        "{name} is the student's grandfather (παππούς). Be especially "
+        "warm and respectful. When addressing him directly in Greek use "
+        "the formal πληθυντικός ευγενείας ('εσείς' rather than 'εσύ').",
+    "aunt":
+        "{name} is the student's aunt (θεία). Polite and slightly "
+        "formal. She is family but does not have authority over the "
+        "lesson plan.",
+    "uncle":
+        "{name} is the student's uncle (θείος). Polite and slightly "
+        "formal. He is family but does not have authority over the "
+        "lesson plan.",
+    "cousin":
+        "{name} is the student's cousin. Friendly, casual peer-level "
+        "interaction.",
+    "friend":
+        "{name} is one of the student's friends. Friendly tone — but if "
+        "the conversation drifts toward socializing, gently steer back "
+        "to whatever you were studying.",
+    "teacher":
+        "{name} is the student's teacher. Be respectful and "
+        "professional. Teachers have authority — follow their "
+        "instructions and answer questions about the student's progress "
+        "honestly.",
+    "other":
+        "{name} is a known person.",
+}
+
+# Roles permitted to give instructions that override the default lesson
+# plan / VIRON behavior. Used to add an explicit NOTE in the prompt so
+# the model knows whose instructions to defer to when present.
+AUTHORITY_ROLES = {"mother", "father", "parent", "teacher"}
+
+
 class FaceEngine:
     def __init__(self, db: FaceDB):
         self.db = db
@@ -276,8 +350,9 @@ class FaceEngine:
     # ─── prompt helper ───────────────────────────────────────
 
     def vision_context_for_prompt(self, recognitions: list[dict]) -> str:
-        """Build a short text snippet for the system prompt that tells the
-        model who is in the camera right now. Returns '' if no useful info."""
+        """Build a text snippet for the system prompt that tells the model
+        who is in the camera right now AND how to interact with each role.
+        Returns '' if no useful info."""
         if not recognitions:
             return ""
         lines = []
@@ -292,9 +367,29 @@ class FaceEngine:
             )
             lines.append(f"Visible in camera right now: {people}.")
             # Identify primary student if exactly one student is present
-            students = [r for r in known if r["role"] == "student"]
+            students = [r for r in known if (r["role"] or "") == "student"]
             if len(students) == 1:
                 lines.append(f"You are tutoring {students[0]['name']}.")
+            # Per-person role behavior — one bullet per visible recognized
+            # person. Falls back to the 'other' template for unknown roles
+            # so a corrupted DB row doesn't drop someone from the prompt.
+            guidance = []
+            for r in known:
+                role = (r["role"] or "other").lower()
+                template = ROLE_BEHAVIOR.get(role, ROLE_BEHAVIOR["other"])
+                guidance.append("- " + template.format(name=r["name"]))
+            if guidance:
+                lines.append("People context:")
+                lines.extend(guidance)
+            # Authority-figure heads-up so the model knows whose
+            # instructions to follow if they give any
+            authorities = [r for r in known if (r["role"] or "").lower() in AUTHORITY_ROLES]
+            if authorities:
+                names = ", ".join(r["name"] for r in authorities)
+                lines.append(
+                    f"NOTE: {names} can give you instructions that "
+                    f"override the default lesson plan — follow them."
+                )
         if unknown_count:
             lines.append(f"There {'is' if unknown_count == 1 else 'are'} also "
                          f"{unknown_count} unrecognized "
@@ -302,4 +397,4 @@ class FaceEngine:
         if not known and unknown_count:
             lines.append("No registered family member is visible right now — "
                          "be polite and a little more guarded than usual.")
-        return " ".join(lines)
+        return "\n".join(lines)
