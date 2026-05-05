@@ -1470,25 +1470,37 @@ async def gemini_live_session(mic: MicStream):
             + "\nGreet the recognized person(s) by name in your first reply."
         )
 
-    # Build the speech_config defensively — some SDK versions / model
-    # previews reject `language_code` on SpeechConfig, in which case
-    # the rest of the config still works without that hint.
-    try:
-        speech_config = types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
-            ),
-            language_code="el-GR",
+    # Build the speech_config. The `language_code` hint (e.g. "el-GR")
+    # is gated behind an env var because the gemini-3.1-flash-live-preview
+    # endpoint silently closes sessions a few seconds after the first
+    # turn when it is set — sessions connect, receive the user audio,
+    # log the input transcription, then close without the model ever
+    # producing a response. With the hint OFF, sessions stay open and
+    # the post-transcript phantom filter still catches foreign-language
+    # ASR results (which is the actual defense we want). Set
+    # VIRON_TTS_LANGUAGE_CODE=el-GR to opt back in once the upstream
+    # behaviour is fixed; leave unset / empty to disable.
+    tts_lang_code = os.environ.get("VIRON_TTS_LANGUAGE_CODE", "").strip()
+    speech_config_kwargs = {
+        "voice_config": types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
         )
-        speech_config_lang_set = True
-    except Exception as e:
-        log.warning(f"SpeechConfig language_code='el-GR' not accepted by SDK ({e}); falling back to default")
-        speech_config = types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
-            ),
-        )
-        speech_config_lang_set = False
+    }
+    speech_config_lang_set = False
+    if tts_lang_code:
+        try:
+            speech_config = types.SpeechConfig(
+                **speech_config_kwargs, language_code=tts_lang_code
+            )
+            speech_config_lang_set = True
+        except Exception as e:
+            log.warning(
+                f"SpeechConfig language_code={tts_lang_code!r} not accepted "
+                f"by SDK ({e}); falling back to default"
+            )
+            speech_config = types.SpeechConfig(**speech_config_kwargs)
+    else:
+        speech_config = types.SpeechConfig(**speech_config_kwargs)
 
     config_kwargs = dict(
         response_modalities=["AUDIO"],
@@ -1497,7 +1509,10 @@ async def gemini_live_session(mic: MicStream):
         output_audio_transcription=types.AudioTranscriptionConfig(),
         speech_config=speech_config,
     )
-    log.info(f"🗣️ Speech language hint (TTS): {'el-GR' if speech_config_lang_set else 'default'}")
+    log.info(
+        f"🗣️ Speech language hint (TTS): "
+        f"{tts_lang_code if speech_config_lang_set else 'default (env VIRON_TTS_LANGUAGE_CODE unset)'}"
+    )
 
     if is_v31:
         # Allow initial-seed send_client_content for the wake greeting trigger.
