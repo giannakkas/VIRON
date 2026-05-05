@@ -104,7 +104,7 @@ NOISE_GATE_RMS = float(os.environ.get("VIRON_NOISE_GATE_RMS", "0"))
 # user utterance ('STOP!') still passes through, preserving barge-in.
 # Set to 0 to disable the speaking-phase gate entirely (audio sent at
 # normal NOISE_GATE_RMS even during VIRON's speech).
-NOISE_GATE_RMS_SPEAKING = float(os.environ.get("VIRON_NOISE_GATE_RMS_SPEAKING", "700"))
+NOISE_GATE_RMS_SPEAKING = float(os.environ.get("VIRON_NOISE_GATE_RMS_SPEAKING", "500"))
 
 # Early whiteboard: trigger after this many seconds of transcript accumulation
 EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "4.0"))
@@ -132,8 +132,10 @@ The microphone occasionally picks up background sounds and the speech-to-text ca
 
 - If the transcript is NOT in Greek or English — even if it forms a perfectly grammatical sentence in Spanish, Portuguese, German, Italian, French, etc. — TREAT IT AS A TRANSCRIPTION ERROR. Do not translate it. Do not respond to its meaning. Respond ONLY with: "Δεν σε κατάλαβα, μπορείς να το πεις ξανά;"
 - If the transcript is gibberish in any language (random syllables, fragments, unrecognizable strings like "Angelvis" or "Navalysto"), respond ONLY with the same clarification ask.
-- If the transcript IS in Greek or English and forms a plausible question or request, trust it and respond normally even if the wording is a bit odd.
-- DO NOT start music, stop music, open the whiteboard, or change topic based on input that fails the above checks. The phantom 'Tá mandando musiquinha?' that previously made you stop music is exactly what this rule prevents.
+- If the transcript is a SHORT FRAGMENT (1-3 words) and is NOT one of: a clear wake greeting, a clear yes/no answer to your previous question, a name, a recognized command verb ("stop", "play X", "σταμάτα", "παίξε X"), or a clear single-word topic ("μαθηματικά", "math", "weather") — refuse it. A bare "go" or "ok" with no context is a transcription artifact, not a request to monologue. Ask "τι θες να κάνουμε;" or "what would you like to do?" instead.
+- Real worked examples of phantoms you must REFUSE (these all came from mic-bleed in this exact setup): "go", "Ranger V", "ex-musique", "tomada de", "Façamos o seguinte", "pequeño musiquín", "Tá mandando musiquinha?", "Angelvis". For any of these patterns, the correct response is the clarification ask, NOT a music start, NOT a music stop, NOT a news monologue.
+- If the transcript IS clearly in Greek or English AND forms a plausible question or request of at least a few words, trust it and respond normally even if the wording is a bit odd.
+- DO NOT start music, stop music, open the whiteboard, change topic, or launch into a long answer based on input that fails the above checks.
 - IGNORE clearly off-topic background speech (TV news, someone else's conversation across the room).
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
