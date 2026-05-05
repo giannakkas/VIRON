@@ -98,21 +98,13 @@ MIC_BOOST = float(os.environ.get("VIRON_MIC_BOOST", "1.0"))
 # transcripts during silence; tune down if quiet speech gets clipped.
 NOISE_GATE_RMS = float(os.environ.get("VIRON_NOISE_GATE_RMS", "0"))
 
-# Hard-mute the audio sent to Gemini while VIRON itself is speaking.
-# Even with AEC and a noise gate, the speaker's own output bleeds into
-# ch1 enough that residual energy can sit just above the gate threshold,
-# at which point Gemini's multilingual ASR confabulates phrases (Spanish,
-# Portuguese, German…) and the model then 'responds' to those phantom
-# inputs — random topic switches, music commands, story tags. Replacing
-# every chunk with zeros while state.status == 'speaking' eliminates
-# that loop entirely.
-#
-# Trade-off: this disables Gemini's server-side barge-in for the
-# duration of the model's turn. To regain interrupt capability, the
-# user can say 'Hey Jarvis' again — the wake word is detected locally
-# and re-enters the session. Set this to 0 to fall back to the noise
-# gate alone (not recommended for noisy / live-speaker setups).
-MUTE_WHILE_SPEAKING = os.environ.get("VIRON_MUTE_WHILE_SPEAKING", "1") == "1"
+# A separate, STRICTER noise gate that applies only while VIRON is speaking.
+# Default 700 — high enough to suppress speaker echo + ambient room noise
+# (which hover well below this in practice) but low enough that a loud
+# user utterance ('STOP!') still passes through, preserving barge-in.
+# Set to 0 to disable the speaking-phase gate entirely (audio sent at
+# normal NOISE_GATE_RMS even during VIRON's speech).
+NOISE_GATE_RMS_SPEAKING = float(os.environ.get("VIRON_NOISE_GATE_RMS_SPEAKING", "700"))
 
 # Early whiteboard: trigger after this many seconds of transcript accumulation
 EARLY_WB_DELAY = float(os.environ.get("VIRON_EARLY_WB_DELAY", "4.0"))
@@ -135,14 +127,12 @@ If anyone asks who made you, who created you, or who built you, always credit th
 IMPORTANT: When the student says "Hey VIRON" or greets you, respond with a short warm Greek greeting like "Γεια σου! Τι κάνεις;" or "Ορίστε, εδώ είμαι!" — keep it under 2 sentences. Then wait for their question.
 IMPORTANT: When explaining concepts like math, science, or history, give DETAILED step-by-step explanations with numbered steps and worked examples using actual numbers. The student has a display that can show a whiteboard with your steps when you ask for one (see WHITEBOARD section below). Be thorough — include formulas, calculations, and results.
 
-HANDLING UNCLEAR / GARBLED INPUT — CRITICAL:
-The microphone sometimes picks up background sounds (TV, music in another room, fans, distant talking, your own speaker echo) and the speech-to-text can produce garbled or hallucinated text from those sounds. When you receive a transcript, FIRST evaluate whether it is plausibly something the student actually said:
-- IGNORE background noise from TV, music, or other people talking — only respond to speech clearly directed at you.
-- If the transcript is gibberish, in a language you would not expect (e.g. Spanish or Portuguese phrases when you only ever speak Greek/English with this family), random short syllables, or makes no sense as a real question, TREAT IT AS A TRANSCRIPTION ERROR.
-- For transcription errors, respond ONLY with a brief clarification ask: "Δεν σε κατάλαβα, μπορείς να το πεις ξανά;" or "I didn't catch that, can you say it again?" — and STOP.
-- DO NOT guess meaning. DO NOT start music, open the whiteboard, switch topics, or take any action based on unclear input.
-- DO NOT acknowledge ambiguous text as if it were a real request ("Sure, here you go!" / "Έγινε!"). Acknowledging a phantom request is the failure mode we are preventing.
-- Only respond substantively to speech that is BOTH clearly directed at you AND unambiguously understandable.
+HANDLING UNCLEAR / GARBLED INPUT:
+The microphone occasionally picks up background sounds and the speech-to-text can produce nonsense from those. Use judgment:
+- If the transcript is OBVIOUSLY gibberish (random syllables that don't form words in any language, e.g. "Navalysto Navalys en un dragón", or 1-3 disconnected fragments), treat it as a transcription error and respond ONLY with a brief clarification ask: "Δεν σε κατάλαβα, μπορείς να το πεις ξανά;" / "I didn't catch that, can you say it again?"
+- If the transcript is recognizable Greek or English words that form a plausible sentence — even if the wording is a little odd or includes a typo — TRUST IT and respond normally. Don't second-guess every input.
+- IGNORE clearly off-topic background speech (TV news in Spanish, someone else's conversation across the room).
+- The goal is to refuse only the obvious failure modes, not to be paranoid. When in doubt, lean toward responding helpfully rather than asking for repetition — being too cautious is worse than the occasional misheard reply.
 
 LANGUAGE: Speak Greek by default using natural spoken Greek appropriate for children and teenagers.
 If the student speaks English, you may switch to English naturally.
@@ -825,13 +815,18 @@ def _duck_music(should_duck: bool):
     target_vol = 25 if should_duck else 100
     _mpv_ipc("set_property", "volume", target_vol)
 
-def _stop_music():
-    """Terminate any currently playing music. Safe to call repeatedly."""
+def _stop_music(reason: str = "unspecified"):
+    """Terminate any currently playing music. Safe to call repeatedly.
+
+    The `reason` argument is logged so we can see in the log exactly
+    what triggered each stop (wake-word, MUSIC tag rewrite, session end,
+    explicit user command, etc.) — invaluable for diagnosing 'why didn't
+    music stop when I asked' issues."""
     global _music_proc, _music_query, _music_paused
     was_playing = False
     with _music_lock:
         if _music_proc and _music_proc.poll() is None:
-            log.info("🎵 Stopping music")
+            log.info(f"🎵 Stopping music — reason: {reason}")
             was_playing = True
             try:
                 _music_proc.terminate()
@@ -868,7 +863,7 @@ def _pause_music() -> bool:
 def _play_music(query: str):
     """Search YouTube and stream audio. Background, non-blocking."""
     global _music_proc, _music_query, _music_paused
-    _stop_music()
+    _stop_music("starting new track")
     cmd = [
         "mpv",
         "--no-video",
@@ -1523,36 +1518,65 @@ async def gemini_live_session(mic: MicStream):
             async def send_audio():
                 CHUNK_BYTES = 4096
                 errors = 0
+                # Stats for periodic visibility into what the gate is doing.
+                # Logged every STATS_INTERVAL chunks (~10s at 25 chunks/s).
+                STATS_INTERVAL = 250
+                chunks_sent = 0
+                chunks_passed = 0
+                chunks_gated = 0
+                rms_min = float("inf")
+                rms_max = 0.0
+                rms_sum = 0.0
                 while not _stop_session.is_set():
                     raw = await asyncio.to_thread(mic.read_raw, CHUNK_BYTES)
                     if raw and len(raw) > 0:
-                        # Hard-mute outgoing audio while VIRON is speaking.
-                        # Whatever the mic picks up during model speech is
-                        # 99%+ speaker echo — sending it just feeds Gemini's
-                        # ASR junk to hallucinate from. Replace with zeros
-                        # so the stream timing stays intact but ASR sees
-                        # actual silence. Skips MIC_GAIN and noise gate
-                        # below since they're irrelevant to all-zeros.
-                        if MUTE_WHILE_SPEAKING and state.status == "speaking":
-                            n_samples = len(raw) // 2  # int16 = 2 bytes/sample
-                            raw = np.zeros(n_samples, dtype=np.int16).tobytes()
+                        # Apply MIC_GAIN attenuation first — same in every state
+                        if MIC_GAIN < 1.0:
+                            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                            samples *= MIC_GAIN
+                            np.clip(samples, -32768, 32767, out=samples)
+                            raw = samples.astype(np.int16).tobytes()
+
+                        # Pick the right gate threshold for the current state.
+                        # During VIRON's own speech we use the stricter
+                        # NOISE_GATE_RMS_SPEAKING because most incoming energy
+                        # in that window is speaker echo. Setting it 0 means
+                        # 'no extra gating during speaking' — audio still goes
+                        # through the listening-phase gate.
+                        if state.status == "speaking" and NOISE_GATE_RMS_SPEAKING > 0:
+                            threshold = NOISE_GATE_RMS_SPEAKING
                         else:
-                            # Software gain reduction to avoid clipping/noise
-                            if MIC_GAIN < 1.0:
-                                samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-                                samples *= MIC_GAIN
-                                np.clip(samples, -32768, 32767, out=samples)
-                                raw = samples.astype(np.int16).tobytes()
-                            # Noise gate — replace below-threshold chunks with
-                            # literal zeros so Gemini's ASR sees true silence
-                            # rather than the AGC-normalized noise floor it
-                            # would otherwise hallucinate transcripts from.
-                            if NOISE_GATE_RMS > 0:
-                                ng_samples = np.frombuffer(raw, dtype=np.int16)
-                                if ng_samples.size > 0:
-                                    ng_rms = float((ng_samples.astype(np.float32) ** 2).mean() ** 0.5)
-                                    if ng_rms < NOISE_GATE_RMS:
-                                        raw = np.zeros(ng_samples.size, dtype=np.int16).tobytes()
+                            threshold = NOISE_GATE_RMS
+
+                        # Compute RMS once and reuse for both gating and
+                        # stats — avoids walking the buffer twice per chunk.
+                        ng_samples = np.frombuffer(raw, dtype=np.int16)
+                        ng_rms = 0.0
+                        if ng_samples.size > 0:
+                            ng_rms = float((ng_samples.astype(np.float32) ** 2).mean() ** 0.5)
+                        rms_sum += ng_rms
+                        rms_min = min(rms_min, ng_rms)
+                        rms_max = max(rms_max, ng_rms)
+                        if threshold > 0 and ng_rms < threshold:
+                            raw = np.zeros(ng_samples.size, dtype=np.int16).tobytes()
+                            chunks_gated += 1
+                        else:
+                            chunks_passed += 1
+                        chunks_sent += 1
+
+                        # Periodic stats so we can see at a glance whether
+                        # the gate is doing its job, and tune thresholds
+                        # without rebuilding intuition each time.
+                        if chunks_sent % STATS_INTERVAL == 0:
+                            avg = rms_sum / max(chunks_sent, 1)
+                            log.info(
+                                f"🎚️ Gate stats (last {chunks_sent} chunks): "
+                                f"passed={chunks_passed} gated={chunks_gated} "
+                                f"rms min={rms_min:.0f} avg={avg:.0f} max={rms_max:.0f} "
+                                f"state={state.status} threshold={threshold:.0f}"
+                            )
+                            chunks_sent = chunks_passed = chunks_gated = 0
+                            rms_min = float("inf"); rms_max = 0.0; rms_sum = 0.0
                         try:
                             await session.send_realtime_input(
                                 audio=types.Blob(data=raw, mime_type="audio/pcm;rate=16000")
@@ -1797,7 +1821,7 @@ def main_loop(mic: MicStream):
     log.info(f"   Mic gain: {MIC_GAIN:.0%}")
     log.info(f"   Mic boost: {MIC_BOOST:.1f}x")
     log.info(f"   Noise gate RMS: {NOISE_GATE_RMS:.0f} ({'enabled' if NOISE_GATE_RMS > 0 else 'disabled'})")
-    log.info(f"   Mute while speaking: {'on' if MUTE_WHILE_SPEAKING else 'off'}")
+    log.info(f"   Noise gate RMS (speaking): {NOISE_GATE_RMS_SPEAKING:.0f} ({'enabled' if NOISE_GATE_RMS_SPEAKING > 0 else 'disabled'})")
     log.info(f"   Early whiteboard: {EARLY_WB_DELAY}s / {EARLY_WB_MIN_WORDS} words")
     log.info(f"   Idle timeout: {IDLE_TIMEOUT}s")
     log.info("=" * 50)
@@ -1839,7 +1863,7 @@ def main_loop(mic: MicStream):
             # Check wake word
             if check_wake(frame):
                 # Stop any music that's currently playing — student wants attention
-                _stop_music()
+                _stop_music("wake-word fired")
                 log.info("🎯 WAKE WORD DETECTED!")
                 state.set_status("listening")
                 push_to_ui(emotion="hopeful")
@@ -1973,7 +1997,7 @@ def pipeline_speak():
         _stop_session.set()
         return jsonify({"ok": True, "action": "stopped"})
     if action == "stop_music":
-        _stop_music()
+        _stop_music("explicit stop_music API")
         return jsonify({"ok": True, "action": "music_stopped"})
     if action == "pause_music":
         ok = _pause_music()
@@ -2187,7 +2211,7 @@ def main():
     try:
         main_loop(mic)
     finally:
-        _stop_music()
+        _stop_music("pipeline shutdown")
         try:
             camera.stop()
         except Exception:
